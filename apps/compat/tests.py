@@ -1,12 +1,10 @@
 import json
 
-from django.conf import settings
-
-import redisutils
-import test_utils
 from nose.tools import eq_
+from pyquery import PyQuery as pq
 
 import amo
+import amo.tests
 from amo.urlresolvers import reverse
 from addons.models import Addon
 from compat.models import CompatReport
@@ -26,7 +24,32 @@ incoming_data = {
 }
 
 
-class TestIncoming(test_utils.TestCase):
+class TestCompatReportModel(amo.tests.TestCase):
+
+    def test_none(self):
+        eq_(CompatReport.get_counts('xxx'), {'success': 0, 'failure': 0})
+
+    def test_some(self):
+        guid = '{2fa4ed95-0317-4c6a-a74c-5f3e3912c1f9}'
+        CompatReport.objects.create(guid=guid, works_properly=True)
+        CompatReport.objects.create(guid=guid, works_properly=True)
+        CompatReport.objects.create(guid=guid, works_properly=False)
+        CompatReport.objects.create(guid='ballin', works_properly=True)
+        CompatReport.objects.create(guid='ballin', works_properly=False)
+        eq_(CompatReport.get_counts(guid), {'success': 2, 'failure': 1})
+
+
+class TestIndex(amo.tests.TestCase):
+
+    # TODO: Test valid version processing here.
+
+    def test_no_version_redirect(self):
+        res = self.client.get(reverse('compat.index'))
+        self.assert3xx(res, reverse('compat.index',
+                                    args=[amo.COMPAT[0]['main']]))
+
+
+class TestIncoming(amo.tests.TestCase):
 
     def setUp(self):
         self.url = reverse('compat.incoming')
@@ -64,7 +87,7 @@ class TestIncoming(test_utils.TestCase):
         eq_(r.status_code, 400)
 
 
-class TestReporter(test_utils.TestCase):
+class TestReporter(amo.tests.TestCase):
     fixtures = ['base/addon_3615']
 
     def test_success(self):
@@ -78,10 +101,132 @@ class TestReporter(test_utils.TestCase):
         expected = reverse('compat.reporter_detail', args=[addon.guid])
 
         self.assertRedirects(self.client.get(url + '?guid=%s' % addon.id),
-                                             expected)
+                             expected)
         self.assertRedirects(self.client.get(url + '?guid=%s' % addon.slug),
-                                             expected)
+                             expected)
         self.assertRedirects(self.client.get(url + '?guid=%s' % addon.guid),
-                                             expected)
-        self.assertRedirects(self.client.get(url + '?guid=%s' % addon.guid[:5]),
-                                             expected)
+                             expected)
+        self.assertRedirects(
+            self.client.get(url + '?guid=%s' % addon.guid[:5]), expected)
+
+
+class TestReporterDetail(amo.tests.TestCase):
+    fixtures = ['base/addon_3615']
+
+    def setUp(self):
+        self.addon = Addon.objects.get(id=3615)
+        self.url = reverse('compat.reporter_detail', args=[self.addon.guid])
+        self.reports = []
+
+    def _generate(self):
+        apps = [
+            (amo.FIREFOX.guid, '10.0.1', True),      # 0
+            (amo.FIREFOX.guid, '10.0a1', True),      # 1
+            (amo.FIREFOX.guid, '10.0', False),       # 2
+            (amo.FIREFOX.guid, '6.0.1', False),      # 3
+
+            (amo.THUNDERBIRD.guid, '10.0', True),    # 4
+            (amo.THUNDERBIRD.guid, '6.6.3', False),  # 5
+            (amo.THUNDERBIRD.guid, '6.0.1', False),  # 6
+
+            (amo.SEAMONKEY.guid, '2.3.0', False),    # 7
+            (amo.SEAMONKEY.guid, '2.3a1', False),    # 8
+            (amo.SEAMONKEY.guid, '2.3', False),      # 9
+        ]
+        for app_guid, app_version, works_properly in apps:
+            report = CompatReport.objects.create(guid=self.addon.guid,
+                                                 app_guid=app_guid,
+                                                 app_version=app_version,
+                                                 works_properly=works_properly)
+            self.reports.append(report.pk)
+
+    def check_table(self, data={}, good=0, bad=0, appver=None, report_pks=[]):
+        r = self.client.get(self.url, data)
+        eq_(r.status_code, 200)
+
+        # Check that we got the correct reports.
+        eq_(sorted(r.id for r in r.context['reports'].object_list),
+            sorted(self.reports[pk] for pk in report_pks))
+
+        doc = pq(r.content)
+        eq_(doc('.compat-info tbody tr').length, good + bad)
+
+        reports = doc('#reports')
+        if good == 0 and bad == 0:
+            eq_(reports.find('.good, .bad').length, 0)
+            eq_(doc('.no-results').length, 1)
+        else:
+            # Check "X success reports" and "X failure reports" buttons.
+            eq_(reports.find('.good').text().split()[0], str(good))
+            eq_(reports.find('.bad').text().split()[0], str(bad))
+
+            # Check "Filter by Application" field.
+            eq_(doc('#compat-form select[name=appver] option[selected]').val(),
+                appver)
+
+        return r
+
+    def test_appver_all(self):
+        self._generate()
+        self.check_table(good=3, bad=7, appver='',
+            report_pks=[idx for idx, val in enumerate(self.reports)])
+
+    def test_firefox_single(self):
+        self._generate()
+        appver = '%s-%s' % (amo.FIREFOX.id, '6.0')
+        self.check_table(data={'appver': appver}, good=0, bad=1, appver=appver,
+                         report_pks=[3])
+
+    def test_firefox_multiple(self):
+        self._generate()
+        appver = '%s-%s' % (amo.FIREFOX.id, '10.0')
+        self.check_table(data={'appver': appver}, good=2, bad=1, appver=appver,
+                         report_pks=[0, 1, 2])
+
+    def test_firefox_empty(self):
+        self._generate()
+        appver = '%s-%s' % (amo.FIREFOX.id,
+                            amo.COMPAT[0]['main'])  # Firefox 11.
+        self.check_table(data={'appver': appver}, good=0, bad=0, appver=appver,
+                         report_pks=[])
+
+    def test_firefox_unknown(self):
+        self._generate()
+        # If we have a bad app/version combination, we don't apply any filters.
+        appver = '%s-%s' % (amo.FIREFOX.id, '0.9999')
+        self.check_table(data={'appver': appver}, good=3, bad=7,
+            report_pks=[idx for idx, val in enumerate(self.reports)])
+
+    def test_thunderbird_multiple(self):
+        self._generate()
+        appver = '%s-%s' % (amo.THUNDERBIRD.id, '6.0')
+        self.check_table(data={'appver': appver}, good=0, bad=2, appver=appver,
+                         report_pks=[5, 6])
+
+    def test_thunderbird_unknown(self):
+        self._generate()
+        appver = '%s-%s' % (amo.THUNDERBIRD.id, '0.9999')
+        self.check_table(data={'appver': appver}, good=3, bad=7,
+            report_pks=[idx for idx, val in enumerate(self.reports)])
+
+    def test_seamonkey_multiple(self):
+        self._generate()
+        appver = '%s-%s' % (amo.SEAMONKEY.id, '2.3')
+        self.check_table(data={'appver': appver}, good=0, bad=3, appver=appver,
+                         report_pks=[7, 8, 9])
+
+    def test_seamonkey_unknown(self):
+        self._generate()
+        appver = '%s-%s' % (amo.SEAMONKEY.id, '0.9999')
+        self.check_table(data={'appver': appver}, good=3, bad=7,
+            report_pks=[idx for idx, val in enumerate(self.reports)])
+
+    def test_app_unknown(self):
+        # Testing for some unknown application such as 'Conkeror'.
+        app_guid = '{a79fe89b-6662-4ff4-8e88-09950ad4dfde}'
+        report = CompatReport.objects.create(guid=self.addon.guid,
+            app_guid=app_guid, app_version='0.9.3', works_properly=True)
+        self.reports.append(report.pk)
+        r = self.check_table(good=1, bad=0, appver='', report_pks=[0])
+        msg = 'Unknown (%s)' % app_guid
+        assert msg in r.content, 'Expected %s in body' % msg

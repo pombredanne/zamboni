@@ -1,14 +1,14 @@
-{% extends 'base.html' %}
+{% extends 'developers/base_impala.html' if settings.MARKETPLACE else 'base.html' %}
 
 {% block title %}Mozilla Add-ons Site Status{% endblock title %}
 
 {% macro status(b) %}
-  {% if b %}info{% else %}error{% endif %}
+  {% if b.state %}info{% else %}error{% endif %}
 {% endmacro %}
 
 {% block main_content %}
 <div class="notification-box {{ status(status_summary.memcache) }}">
-  <h2>[Memcache] Connection Tests</h2>
+  <h2>[Memcache] Connection Tests ({{ memcache_timer }}ms)</h2>
   <ul>
   {% for ip, port, result in memcache_results %}
     <li>{{ ip }}:{{ port }}
@@ -26,7 +26,7 @@
 </div>
 
 <div class="notification-box {{ status(status_summary.libraries) }}">
-  <h2>[libs] Libraries and Versions</h2>
+  <h2>[libs] Libraries and Versions ({{ libraries_timer }}ms)</h2>
   <dl>
   {% for lib, result, msg in libraries_results %}
     <dt>{{ lib }}</dt>
@@ -40,10 +40,10 @@
   {% endfor %}
   </dl>
 </div>
-<div class="notification-box {{ status(status_summary.filepaths) }}">
-  <h2>[Paths] Paths and Permissions</h2>
+<div class="notification-box {{ status(status_summary.path) }}">
+  <h2>[Paths] Paths and Permissions ({{ path_timer }}ms)</h2>
   <dl>
-  {% for path, exists, permissions, extra in filepath_results %}
+  {% for path, exists, permissions, extra in path_results %}
     <dt>{{ path }}</dt>
     <dd>
     {% if exists %}
@@ -66,8 +66,11 @@
 </div>
 
 <div class="notification-box {{ status(status_summary.redis) }}">
-  <h2>[Redis] Redis Info</h2>
-  {% with info, error = redis_results %}
+  <h2>[Redis] Redis Info ({{ redis_timer }}ms)</h2>
+  <dl>
+  {% for alias, info in redis_results.iteritems() %}
+  <dt>{{ alias }}</dt>
+  <dd>
     {% if info %}
       <ul>
         {% for k, v in info|dictsort %}
@@ -78,32 +81,16 @@
       <strong>Error!</strong>
       <code>{{ error }}</code>
     {% endif %}
-  {% endwith %}
-</div>
-
-<div class="notification-box {{ status(status_summary.hera) }}">
-  <h2>[Zeus] Connection Tests (Hera)</h2>
-  <ul>
-  {% for result in hera_results %}
-    <li>{{ result.location }}:
-    {% if result.result %}
-      Success
-    {% else %}
-      <strong>Failed</strong>
-    {% endif %}
-    </li>
-  {% else %}
-    <li>Hera isn't configured!</li>
+  </dd>
   {% endfor %}
-  </ul>
+  </dl>
 </div>
 
-{% if settings.USE_ELASTIC %}
 <div class="notification-box {{ status(status_summary.elastic) }}">
-  <h2>[Elastic Search] Health Check</h2>
+  <h2>[Elastic Search] Health Check ({{ elastic_timer }}ms)</h2>
   <ul>
-    <li>
-    {{ settings.ES_HOSTS }}/{{ settings.ES_INDEX }}
+    <li><code>{{ settings.ES_URLS|pprint }}</code></li>
+    <li><code>{{ settings.ES_INDEXES|pprint }}</code></li>
     {% if status_summary.elastic %}
       {% for k, v in elastic_results|dictsort %}
         <li><code>{{ k }}: {{ v }}</code></li>
@@ -111,9 +98,21 @@
     {% else %}
       <strong>Failed</strong><br><pre>{{ elastic_results }}</pre>
     {% endif %}
-    </li>
   </ul>
 </div>
-{% endif %}
+
+{% macro section(text, summary, timer, results) %}
+  <div class="notification-box {{ status(summary) }}">
+    <h2>{{ text }} ({{ timer }}ms)</h2>
+    <ul>
+      <li>{{ results }}</li>
+    </ul>
+  </div>
+{% endmacro %}
+
+{{ section("[Receipt Signer] Connection Test", status_summary.receipt_signer, receipt_signer_timer, receipt_signer_results) }}
+{{ section("[Package Signer] Connection Test", status_summary.package_signer, package_signer_timer, package_signer_results) }}
+{{ section("[Settings] Required Keys", status_summary.settings_check, settings_check_timer,  settings_check_results) }}
+{{ section("[Solitude] Connection Test", status_summary.solitude, solitude_timer, solitude_results) }}
 
 {% endblock main_content %}

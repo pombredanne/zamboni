@@ -19,21 +19,14 @@ import sys, os
 sys.path.append(os.path.abspath('.'))
 sys.path.append(os.path.abspath('..'))
 
-# Import manage.py so we get the sitedirs that are added there.
-from manage import settings
-
-# Store the settings module so we don't get errors when Sphinx runs imports.
-filename = os.path.splitext(os.path.basename(settings.__file__))[0]
-os.environ['DJANGO_SETTINGS_MODULE'] = filename
-
-
 # -- General configuration -----------------------------------------------------
 
 # Add any Sphinx extension module names here, as strings. They can be extensions
 # coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
 extensions = ['sphinx.ext.autodoc', 'sphinx.ext.doctest',
               'sphinx.ext.intersphinx', 'sphinx.ext.todo',
-              'sphinx.ext.coverage', 'extensions.src_role']
+              'sphinx.ext.coverage', 'extensions.src_role',
+              'sphinxcontrib.httpdomain']
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -49,7 +42,7 @@ master_doc = 'index'
 
 # General information about the project.
 project = u'zamboni'
-copyright = u'2009, The Zamboni Collective'
+copyright = u'2013, The Marketplace API Crew'
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -102,7 +95,8 @@ pygments_style = 'sphinx'
 
 # The theme to use for HTML and HTML Help pages.  Major themes that come with
 # Sphinx are currently 'default' and 'sphinxdoc'.
-html_theme = 'default'
+html_theme_path = ['_themes']
+html_theme = 'mozilla'
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
@@ -217,4 +211,9 @@ for key, val in intersphinx_mapping.items():
     intersphinx_mapping[key] = '_intersphinx/' + val
 
 # Root url where source files can be browsed online.
-src_base_url = 'http://github.com/jbalogh/zamboni/tree/master/'
+src_base_url = 'http://github.com/mozilla/zamboni/tree/master/'
+
+import mdn_theme
+
+html_theme_path = [mdn_theme.get_theme_dir()]
+html_theme = 'mdn'

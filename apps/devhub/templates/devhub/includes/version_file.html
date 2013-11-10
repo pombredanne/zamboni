@@ -1,10 +1,10 @@
 {% with file = form.instance %}
   <tr>
     <td>
-      <a href="{{ file.get_url_path(amo.FIREFOX, 'devhub') }}">
+      <a href="{{ file.get_url_path('devhub') }}">
         {{ file.pretty_filename() }}</a>
     </td>
-    <td>{{ (file.size * 1024)|filesizeformat }}</td>
+    <td>{{ file.size|filesizeformat }}</td>
     <td>{{ form.platform }}</td>
     <td>{{ status_choices(addon)[file.status] }}</td>
     <td>

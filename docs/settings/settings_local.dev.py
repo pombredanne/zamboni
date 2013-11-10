@@ -1,4 +1,4 @@
-from settings import *
+from default.settings import *
 
 DEBUG = True
 TEMPLATE_DEBUG = DEBUG
@@ -15,19 +15,27 @@ INSTALLED_APPS += (
 # You want one of the caching backends.  Dummy won't do any caching, locmem is
 # cleared every time you restart the server, and memcached is what we run in
 # production.
-# CACHE_BACKEND = 'caching.backends.memcached://localhost:11211?timeout=500'
-CACHE_BACKEND = 'caching.backends.locmem://'
-# Some cache is required for CSRF to work. Dummy will allow some functionality,
-# but won't allow you to login.
-# CACHE_BACKEND = 'dummy://'
+#CACHES = {
+#    'default': {
+#        'BACKEND': 'django.core.cache.backends.memcached.Memcached',
+#        'LOCATION': 'localhost:11211',
+#    }
+#}
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'zamboni',
+    }
+}
+# Caching is required for CSRF to work, please do not use the dummy cache.
 
 DATABASES = {
     'default': {
         'NAME': 'zamboni',
         'ENGINE': 'django.db.backends.mysql',
-        'USER': 'jbalogh',
-        'PASSWORD': 'xxx',
-        'OPTIONS':  {'init_command': 'SET storage_engine=InnoDB'},
+        'USER': 'root',
+        'PASSWORD': '',
+        'OPTIONS': {'init_command': 'SET storage_engine=InnoDB'},
         'TEST_CHARSET': 'utf8',
         'TEST_COLLATION': 'utf8_general_ci',
     },
@@ -58,9 +66,31 @@ CELERY_ALWAYS_EAGER = True
 # Disables custom routing in settings.py so that tasks actually run.
 CELERY_ROUTES = {}
 
-# paths for images, not necessary for dev
-STATIC_URL = ''
+# Disable timeout code during development because it uses the signal module
+# which can only run in the main thread. Celery uses threads in dev.
+VALIDATOR_TIMEOUT = -1
 
 # The user id to use when logging in tasks. You should set this to a user that
 # exists in your site.
 # TASK_USER_ID = 1
+
+WEBAPPS_RECEIPT_KEY = os.path.join(ROOT, 'mkt/webapps/tests/sample.key')
+
+# If you want to allow self-reviews for add-ons/apps, then enable this.
+# In production we do not want to allow this.
+ALLOW_SELF_REVIEWS = True
+
+# For Marketplace payments.
+APP_PURCHASE_KEY = 'localhost'
+APP_PURCHASE_AUD = 'localhost'
+APP_PURCHASE_TYP = 'mozilla-local/payments/pay/v1'
+APP_PURCHASE_SECRET = 'This secret must match your webpay SECRET'
+
+# Assuming you did `npm install` (and not `-g`) like you were supposed to,
+# this will be the path to the `stylus` and `lessc` executables.
+STYLUS_BIN = path('node_modules/stylus/bin/stylus')
+LESS_BIN = path('node_modules/less/bin/lessc')
+
+# Locally we typically don't run more than 1 elasticsearch node. So we set
+# replicas to zero.
+ES_DEFAULT_NUM_REPLICAS = 0

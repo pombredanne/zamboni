@@ -4,26 +4,41 @@
     <ul>
       <li>{{ barometer(c) }}</li>
       <li class="followers">
-        {% if show_weekly %}
+        {% if field == 'weekly' %}
+          {# L10n: People "follow" collections to get notified of updates.
+                   Like Twitter followers. #}
           {% trans cnt=c.weekly_subscribers, num=c.weekly_subscribers|numberfmt %}
-            <span>{{ num }}</span> new follower
+            {{ num }} weekly follower
           {% pluralize %}
-            <span>{{ num }}</span> new followers
+            {{ num }} weekly followers
+          {% endtrans %}
+        {% elif field == 'monthly' %}
+          {# L10n: People "follow" collections to get notified of updates.
+                   Like Twitter followers. #}
+          {% trans cnt=c.monthly_subscribers, num=c.monthly_subscribers|numberfmt %}
+            {{ num }} monthly follower
+          {% pluralize %}
+            {{ num }} monthly followers
           {% endtrans %}
         {% else %}
           {# L10n: People "follow" collections to get notified of updates.
                    Like Twitter followers. #}
           {% trans cnt=c.subscribers, num=c.subscribers|numberfmt %}
-            <span>{{ num }}</span> follower
+            {{ num }} follower
           {% pluralize %}
-            <span>{{ num }}</span> followers
+            {{ num }} followers
           {% endtrans %}
         {% endif %}
       </li>
-      {% if show_date in ['created', 'newest'] %}
+      {% if field in ('created', 'updated') %}
         <li class="modified">
-          {# L10n: {0} is a date. #}
-          {{ _('Added {0}')|f(c.created|datetime) }}
+          {% if field == 'created' %}
+            {# L10n: {0} is a date. #}
+            {{ _('Added {0}')|f(c.created|datetime) }}
+          {% elif field == 'updated' %}
+            {# L10n: {0} is a date. #}
+            {{ _('Updated {0}')|f(c.modified|datetime) }}
+          {% endif %}
         </li>
       {% endif %}
     </ul>
@@ -34,7 +49,13 @@
       <img class="icon" src="{{ c.icon_url }}">
       {{ c.name }}
     </a>
-    <span>{{ _('by {0}')|f(c.author|user_link)|safe }}</span>
+    <span>
+      {% if c.type == amo.ADDON_PERSONA %}
+        {{ users_list(c.persona.listed_authors) or c.persona.display_username }}
+      {% else %}
+        {{ _('by {0}')|f(c.author|user_link)|safe }}
+      {% endif %}
+    </span>
   </h3>
   <blockquote>{{ c.description }}</blockquote>
 </div>

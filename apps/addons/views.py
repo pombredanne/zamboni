@@ -10,8 +10,8 @@ from django.conf import settings
 from django.db.models import Q
 from django.shortcuts import get_list_or_404, get_object_or_404, redirect
 from django.utils.translation import trans_real as translation
-from django.utils import http as urllib
-from django.views.decorators.cache import cache_page, cache_control
+from django.views.decorators.cache import cache_control
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.vary import vary_on_headers
 
 import caching.base as caching
@@ -20,32 +20,37 @@ import jinja2
 import commonware.log
 import session_csrf
 from tower import ugettext as _, ugettext_lazy as _lazy
+import waffle
 from mobility.decorators import mobilized, mobile_template
 
 import amo
 from amo import messages
+from amo.decorators import post_required
 from amo.forms import AbuseForm
-from amo.utils import sorted_groupby, randslice, send_abuse_report
-from amo.helpers import absolutify
+from amo.utils import randslice, sorted_groupby
 from amo.models import manual_order
 from amo import urlresolvers
 from amo.urlresolvers import reverse
+from abuse.models import send_abuse_report
 from bandwagon.models import Collection, CollectionFeature, CollectionPromo
 import paypal
 from reviews.forms import ReviewForm
 from reviews.models import Review, GroupedRating
+from session_csrf import anonymous_csrf_exempt
 from sharing.views import share as share_redirect
-from stats.models import GlobalStat, Contribution
+from stats.models import Contribution
 from translations.query import order_by_translation
-from translations.helpers import truncate
 from versions.models import Version
-from .models import Addon, MiniAddon, Persona
+from .forms import ContributionForm
+from .models import Addon, Persona, FrozenAddon
 from .decorators import addon_view_factory
 
 log = commonware.log.getLogger('z.addons')
 paypal_log = commonware.log.getLogger('z.paypal')
 addon_view = addon_view_factory(qs=Addon.objects.valid)
-addon_disabled_view = addon_view_factory(qs=Addon.objects.valid_and_disabled)
+addon_unreviewed_view = addon_view_factory(qs=Addon.objects.unreviewed)
+addon_valid_disabled_pending_view = addon_view_factory(
+    qs=Addon.objects.valid_and_disabled_and_pending)
 
 
 def author_addon_clicked(f):
@@ -64,13 +69,18 @@ def author_addon_clicked(f):
     return decorated
 
 
-@author_addon_clicked
-@addon_disabled_view
+@addon_valid_disabled_pending_view
 def addon_detail(request, addon):
     """Add-ons details page dispatcher."""
-    if addon.disabled_by_user or addon.status == amo.STATUS_DISABLED:
-        return jingo.render(request, 'addons/disabled.html',
+    if addon.is_deleted or (addon.is_pending() and not addon.is_persona()):
+        # Allow pending themes to be listed.
+        raise http.Http404
+    if addon.is_disabled:
+        return jingo.render(request, 'addons/impala/disabled.html',
                             {'addon': addon}, status=404)
+    if addon.is_webapp():
+        # Apps don't deserve AMO detail pages.
+        raise http.Http404
 
     # addon needs to have a version and be valid for this app.
     if addon.type in request.APP.types:
@@ -95,87 +105,8 @@ def addon_detail(request, addon):
                 'addons.detail', args=[addon.slug]))
 
 
-@author_addon_clicked
-@addon_view
-def impala_addon_detail(request, addon):
-    """Add-ons details page dispatcher."""
-    # addon needs to have a version and be valid for this app.
-    if addon.type in request.APP.types:
-        if addon.type == amo.ADDON_PERSONA:
-            return persona_detail(request, addon)
-        else:
-            if not addon.current_version:
-                raise http.Http404
-
-            return impala_extension_detail(request, addon)
-    else:
-        # Redirect to an app that supports this type.
-        try:
-            new_app = [a for a in amo.APP_USAGE if addon.type
-                       in a.types][0]
-        except IndexError:
-            raise http.Http404
-        else:
-            prefixer = urlresolvers.get_url_prefix()
-            prefixer.app = new_app.short
-            return http.HttpResponsePermanentRedirect(reverse(
-                'addons.i_detail', args=[addon.slug]))
-
-
-def extension_detail(request, addon):
-    """Extensions details page."""
-
-    # if current version is incompatible with this app, redirect
-    comp_apps = addon.compatible_apps
-    if comp_apps and request.APP not in comp_apps:
-        prefixer = urlresolvers.get_url_prefix()
-        prefixer.app = comp_apps.keys()[0].short
-        return http.HttpResponsePermanentRedirect(reverse(
-            'addons.detail', args=[addon.slug]))
-
-    # source tracking
-    src = request.GET.get('src', 'addon-detail')
-
-    # get satisfaction only supports en-US
-    lang = translation.to_locale(translation.get_language())
-    addon.has_satisfaction = (lang == 'en_US' and
-                              addon.get_satisfaction_company)
-
-    # other add-ons from the same author(s)
-    author_addons = order_by_translation(addon.authors_other_addons, 'name')
-
-    # tags
-    tags = addon.tags.not_blacklisted()
-
-    # addon recommendations
-    recommended = MiniAddon.objects.valid().filter(
-        recommended_for__addon=addon)[:5]
-
-    # popular collections this addon is part of
-    collections = Collection.objects.listed().filter(
-        addons=addon, application__id=request.APP.id)
-
-    data = {
-        'addon': addon,
-        'author_addons': author_addons,
-
-        'src': src,
-        'tags': tags,
-
-        'recommendations': recommended,
-        'review_form': ReviewForm(),
-        'reviews': Review.objects.latest().filter(addon=addon),
-        'get_replies': Review.get_replies,
-
-        'collections': collections.order_by('-subscribers')[:3],
-        'abuse_form': AbuseForm(request=request),
-    }
-
-    return jingo.render(request, 'addons/details.html', data)
-
-
 @vary_on_headers('X-Requested-With')
-def impala_extension_detail(request, addon):
+def extension_detail(request, addon):
     """Extensions details page."""
     # If current version is incompatible with this app, redirect.
     comp_apps = addon.compatible_apps
@@ -184,18 +115,8 @@ def impala_extension_detail(request, addon):
         prefixer.app = comp_apps.keys()[0].short
         return redirect('addons.detail', addon.slug, permanent=True)
 
-    # get satisfaction only supports en-US.
-    lang = translation.to_locale(translation.get_language())
-    addon.has_satisfaction = (lang == 'en_US' and
-                              addon.get_satisfaction_company)
-
-    # Other add-ons from the same author(s).
-    author_addons = (Addon.objects.valid().exclude(id=addon.id)
-                     .filter(addonuser__listed=True,
-                             authors__in=addon.listed_authors))[:6]
-
     # Addon recommendations.
-    recommended = Addon.objects.valid().filter(
+    recommended = Addon.objects.listed(request.APP).filter(
         recommended_for__addon=addon)[:6]
 
     # Popular collections this addon is part of.
@@ -204,13 +125,13 @@ def impala_extension_detail(request, addon):
 
     ctx = {
         'addon': addon,
-        'author_addons': author_addons,
-        'src': request.GET.get('src', 'addon-detail'),
+        'src': request.GET.get('src', 'dp-btn-primary'),
+        'version_src': request.GET.get('src', 'dp-btn-version'),
         'tags': addon.tags.not_blacklisted(),
         'grouped_ratings': GroupedRating.get(addon.id),
         'recommendations': recommended,
         'review_form': ReviewForm(),
-        'reviews': Review.objects.latest().filter(addon=addon),
+        'reviews': Review.objects.valid().filter(addon=addon, is_latest=True),
         'get_replies': Review.get_replies,
         'collections': collections.order_by('-subscribers')[:3],
         'abuse_form': AbuseForm(request=request),
@@ -219,8 +140,12 @@ def impala_extension_detail(request, addon):
     # details.html just returns the top half of the page for speed. The bottom
     # does a lot more queries we don't want on the initial page load.
     if request.is_ajax():
+        # Other add-ons/apps from the same author(s).
+        ctx['author_addons'] = addon.authors_other_addons(app=request.APP)[:6]
         return jingo.render(request, 'addons/impala/details-more.html', ctx)
     else:
+        if addon.is_webapp():
+            ctx['search_placeholder'] = 'apps'
         return jingo.render(request, 'addons/impala/details.html', ctx)
 
 
@@ -239,31 +164,34 @@ def _category_personas(qs, limit):
 @mobile_template('addons/{mobile/}persona_detail.html')
 def persona_detail(request, addon, template=None):
     """Details page for Personas."""
+    if not (addon.is_public() or addon.is_pending()):
+        raise http.Http404
+
     persona = addon.persona
 
-    # this persona's categories
-    categories = addon.categories.filter(application=request.APP.id)
-    if categories:
-        qs = Addon.objects.valid().filter(categories=categories[0])
+    # This persona's categories.
+    categories = addon.categories.all()
+    category_personas = None
+    if categories.exists():
+        qs = Addon.objects.public().filter(categories=categories[0])
         category_personas = _category_personas(qs, limit=6)
-    else:
-        category_personas = None
-
-    # other personas from the same author(s)
-    author_personas = Addon.objects.valid().filter(
-        persona__author=persona.author,
-        type=amo.ADDON_PERSONA).exclude(
-            pk=addon.pk).select_related('persona')[:3]
 
     data = {
         'addon': addon,
         'persona': persona,
         'categories': categories,
-        'author_personas': author_personas,
+        'author_personas': persona.authors_other_addons()[:3],
         'category_personas': category_personas,
-        # Remora uses persona.author despite there being a display_username.
-        'author_gallery': settings.PERSONAS_USER_ROOT % persona.author,
     }
+
+    try:
+        author = addon.authors.all()[0]
+    except IndexError:
+        author = None
+    else:
+        author = author.get_url_path(src='addon-detail')
+    data['author_gallery'] = author
+
     if not request.MOBILE:
         # tags
         dev_tags, user_tags = addon.tags_partitioned_by_developer
@@ -271,9 +199,10 @@ def persona_detail(request, addon, template=None):
             'dev_tags': dev_tags,
             'user_tags': user_tags,
             'review_form': ReviewForm(),
-            'reviews': Review.objects.latest().filter(addon=addon),
+            'reviews': Review.objects.valid().filter(addon=addon,
+                                                     is_latest=True),
             'get_replies': Review.get_replies,
-            'search_cat': 'personas',
+            'search_cat': 'themes',
             'abuse_form': AbuseForm(request=request),
         })
 
@@ -293,21 +222,28 @@ class BaseFilter(object):
     that's used if nothing good is found in request.GET.
     """
 
-    def __init__(self, request, base, key, default):
+    def __init__(self, request, base, key, default, model=Addon):
         self.opts_dict = dict(self.opts)
+        self.extras_dict = dict(self.extras) if hasattr(self, 'extras') else {}
         self.request = request
         self.base_queryset = base
         self.key = key
+        self.model = model
         self.field, self.title = self.options(self.request, key, default)
         self.qs = self.filter(self.field)
 
     def options(self, request, key, default):
         """Get the (option, title) pair we want according to the request."""
-        if key in request.GET and request.GET[key] in self.opts_dict:
+        if key in request.GET and (request.GET[key] in self.opts_dict or
+                                   request.GET[key] in self.extras_dict):
             opt = request.GET[key]
         else:
             opt = default
-        return opt, self.opts_dict[opt]
+        if opt in self.opts_dict:
+            title = self.opts_dict[opt]
+        else:
+            title = self.extras_dict[opt]
+        return opt, title
 
     def all(self):
         """Get a full mapping of {option: queryset}."""
@@ -324,28 +260,53 @@ class BaseFilter(object):
     def _filter(self, field):
         return getattr(self, 'filter_%s' % field)()
 
+    def filter_featured(self):
+        ids = self.model.featured_random(self.request.APP, self.request.LANG)
+        return manual_order(self.model.objects, ids, 'addons.id')
+
+    def filter_price(self):
+        return self.model.objects.order_by('addonpremium__price__price', 'id')
+
+    def filter_free(self):
+        if self.model == Addon:
+            return self.model.objects.top_free(self.request.APP, listed=False)
+        else:
+            return self.model.objects.top_free(listed=False)
+
+    def filter_paid(self):
+        if self.model == Addon:
+            return self.model.objects.top_paid(self.request.APP, listed=False)
+        else:
+            return self.model.objects.top_paid(listed=False)
+
     def filter_popular(self):
-        return (Addon.objects.order_by('-weekly_downloads')
+        return (self.model.objects.order_by('-weekly_downloads')
                 .with_index(addons='downloads_type_idx'))
 
+    def filter_downloads(self):
+        return self.filter_popular()
+
     def filter_users(self):
-        return (Addon.objects.order_by('-average_daily_users')
+        return (self.model.objects.order_by('-average_daily_users')
                 .with_index(addons='adus_type_idx'))
 
     def filter_created(self):
-        return (Addon.objects.order_by('-created')
+        return (self.model.objects.order_by('-created')
                 .with_index(addons='created_type_idx'))
 
     def filter_updated(self):
-        return (Addon.objects.order_by('-last_updated')
+        return (self.model.objects.order_by('-last_updated')
                 .with_index(addons='last_updated_type_idx'))
 
     def filter_rating(self):
-        return (Addon.objects.order_by('-bayesian_rating')
+        return (self.model.objects.order_by('-bayesian_rating')
                 .with_index(addons='rating_type_idx'))
 
+    def filter_hotness(self):
+        return self.model.objects.order_by('-hotness')
+
     def filter_name(self):
-        return order_by_translation(Addon.objects.all(), 'name')
+        return order_by_translation(self.model.objects.all(), 'name')
 
 
 class ESBaseFilter(BaseFilter):
@@ -372,76 +333,44 @@ class HomepageFilter(BaseFilter):
 
     filter_new = BaseFilter.filter_created
 
-    def __init__(self, *args, **kw):
-        self.featured_ids = Addon.featured_random(args[0].APP, args[0].LANG)
-        super(HomepageFilter, self).__init__(*args, **kw)
-
-    def filter_featured(self):
-        return Addon.objects.filter(pk__in=self.featured_ids)
-
-    def order_featured(self, filter):
-        return manual_order(filter, self.featured_ids, 'addon_id')
-
 
 def home(request):
     # Add-ons.
-    base = Addon.objects.listed(request.APP).exclude(type=amo.ADDON_PERSONA)
-    filter = HomepageFilter(request, base, key='browse', default='featured')
-    addon_sets = dict((key, qs[:4]) for key, qs in filter.all().items())
-
-    # Collections.
-    q = Collection.objects.filter(listed=True, application=request.APP.id)
-    collections = q.order_by('-weekly_subscribers')[:3]
-    promobox = CollectionPromoBox(request)
-
-    # Global stats.
-    try:
-        downloads = (GlobalStat.objects.filter(name='addon_total_downloads')
-                     .latest())
-    except GlobalStat.DoesNotExist:
-        downloads = None
-
-    return jingo.render(request, 'addons/home.html',
-                        {'downloads': downloads,
-                         'filter': filter, 'addon_sets': addon_sets,
-                         'collections': collections, 'promobox': promobox})
-
-
-def impala_home(request):
-    # Add-ons.
     base = Addon.objects.listed(request.APP).filter(type=amo.ADDON_EXTENSION)
-    featured_ids = Addon.featured_random(request.APP, request.LANG)
+    # This is lame for performance. Kill it with ES.
+    frozen = list(FrozenAddon.objects.values_list('addon', flat=True))
 
     # Collections.
     collections = Collection.objects.filter(listed=True,
                                             application=request.APP.id,
                                             type=amo.COLLECTION_FEATURED)
-    featured = base.filter(id__in=featured_ids)[:18]
-    popular = base.order_by('-average_daily_users')[:10]
-    hotness = base.order_by('-hotness')[:18]
-    personas = (Addon.objects.listed(request.APP)
-                .filter(type=amo.ADDON_PERSONA, id__in=featured_ids))[:18]
-
-    return jingo.render(request, 'addons/impala/home.html',
+    featured = Addon.objects.featured(request.APP, request.LANG,
+                                      amo.ADDON_EXTENSION)[:18]
+    popular = base.exclude(id__in=frozen).order_by('-average_daily_users')[:10]
+    hotness = base.exclude(id__in=frozen).order_by('-hotness')[:18]
+    personas = Addon.objects.featured(request.APP, request.LANG,
+                                      amo.ADDON_PERSONA)[:18]
+    return jingo.render(request, 'addons/home.html',
                         {'popular': popular, 'featured': featured,
                          'hotness': hotness, 'personas': personas,
                          'src': 'homepage', 'collections': collections})
 
 
 @mobilized(home)
-@cache_page(60 * 10)
 def home(request):
     # Shuffle the list and get 3 items.
     rand = lambda xs: random.shuffle(xs) or xs[:3]
     # Get some featured add-ons with randomness.
-    featured = Addon.featured_random(request.APP, request.LANG)
+    featured = Addon.featured_random(request.APP, request.LANG)[:3]
     # Get 10 popular add-ons, then pick 3 at random.
     qs = list(Addon.objects.listed(request.APP)
+                   .filter(type=amo.ADDON_EXTENSION)
                    .order_by('-average_daily_users')
                    .values_list('id', flat=True)[:10])
     popular = rand(qs)
     # Do one query and split up the add-ons.
-    addons = Addon.objects.filter(id__in=featured + popular)
+    addons = (Addon.objects.filter(id__in=featured + popular)
+              .filter(type=amo.ADDON_EXTENSION))
     featured = [a for a in addons if a.id in featured]
     popular = sorted([a for a in addons if a.id in popular],
                      key=attrgetter('average_daily_users'), reverse=True)
@@ -450,13 +379,11 @@ def home(request):
 
 
 def homepage_promos(request):
-    from discovery.views import get_modules
-    from constants.platforms import PLATFORM_DICT
-    platform = PLATFORM_DICT.get(request.GET.get('platform'), 'All').api_name
-    version = request.GET.get('version')
-    modules = get_modules(request, platform, version)
-    return jingo.render(request, 'addons/impala/homepage_promos.html',
-                        {'modules': modules})
+    from discovery.views import promos
+    version, platform = request.GET.get('version'), request.GET.get('platform')
+    if not (platform or version):
+        raise http.Http404
+    return promos(request, 'home', version, platform)
 
 
 class CollectionPromoBox(object):
@@ -508,11 +435,10 @@ class CollectionPromoBox(object):
 def eula(request, addon, file_id=None):
     if not addon.eula:
         return http.HttpResponseRedirect(addon.get_url_path())
-    if file_id is not None:
+    if file_id:
         version = get_object_or_404(addon.versions, files__id=file_id)
     else:
         version = addon.current_version
-
     return jingo.render(request, 'addons/eula.html',
                         {'addon': addon, 'version': version})
 
@@ -527,6 +453,8 @@ def privacy(request, addon):
 
 @addon_view
 def developers(request, addon, page):
+    if addon.is_persona():
+        raise http.Http404()
     if 'version' in request.GET:
         qs = addon.versions.filter(files__status__in=amo.VALID_STATUSES)
         version = get_list_or_404(qs, version=request.GET['version'])[0]
@@ -534,125 +462,90 @@ def developers(request, addon, page):
         version = addon.current_version
 
     if 'src' in request.GET:
-        src = request.GET['src']
+        contribution_src = src = request.GET['src']
     else:
-        src = {'developers': 'meet-developers',
-               'installed': 'post-download',
-               'roadblock': 'roadblock'}.get(page, None)
+        page_srcs = {
+            'developers': ('developers', 'meet-developers'),
+            'installed': ('meet-the-developer-post-install', 'post-download'),
+            'roadblock': ('meetthedeveloper_roadblock', 'roadblock'),
+        }
+        # Download src and contribution_src are different.
+        src, contribution_src = page_srcs.get(page)
+    return jingo.render(request, 'addons/impala/developers.html',
+                        {'addon': addon, 'page': page, 'src': src,
+                         'contribution_src': contribution_src,
+                         'version': version})
 
-    if addon.is_persona():
-        raise http.Http404()
-    author_addons = order_by_translation(addon.authors_other_addons, 'name')
-    return jingo.render(request, 'addons/developers.html',
-                        {'addon': addon, 'author_addons': author_addons,
-                         'page': page, 'src': src, 'version': version})
 
-
-def old_contribute(request, addon):
-    contrib_type = request.GET.get('type', '')
+@addon_view
+@anonymous_csrf_exempt
+@post_required
+def contribute(request, addon):
+    webapp = addon.is_webapp()
+    contrib_type = request.POST.get('type', 'suggested')
     is_suggested = contrib_type == 'suggested'
-    source = request.GET.get('source', '')
-    comment = request.GET.get('comment', '')
+    source = request.POST.get('source', '')
+    comment = request.POST.get('comment', '')
 
     amount = {
         'suggested': addon.suggested_amount,
-        'onetime': request.GET.get('onetime-amount', ''),
-        'monthly': request.GET.get('monthly-amount', '')}.get(contrib_type, '')
-
-    contribution_uuid = hashlib.md5(str(uuid.uuid4())).hexdigest()
-
-    contrib = Contribution(addon_id=addon.id,
-                           charity_id=addon.charity_id,
-                           amount=amount,
-                           source=source,
-                           source_locale=request.LANG,
-                           annoying=addon.annoying,
-                           uuid=str(contribution_uuid),
-                           is_suggested=is_suggested,
-                           suggested_amount=addon.suggested_amount,
-                           comment=comment)
-    contrib.save()
-
-    return_url = "%s?%s" % (reverse('addons.thanks', args=[addon.slug]),
-                            urllib.urlencode({'uuid': contribution_uuid}))
-    # L10n: {0} is an add-on name.
-    if addon.charity:
-        name, paypal = addon.charity.name, addon.charity.paypal
-    else:
-        name, paypal = addon.name, addon.paypal_id
-    contrib_for = _(u'Contribution for {0}').format(jinja2.escape(name))
-    redirect_url_params = contribute_url_params(
-                            paypal,
-                            addon.id,
-                            contrib_for,
-                            absolutify(return_url),
-                            amount,
-                            contribution_uuid,
-                            contrib_type == 'monthly',
-                            comment)
-
-    return http.HttpResponseRedirect(settings.PAYPAL_CGI_URL
-                                     + '?'
-                                     + urllib.urlencode(redirect_url_params))
-
-
-def embedded_contribute(request, addon):
-    contrib_type = request.GET.get('type', 'suggested')
-    is_suggested = contrib_type == 'suggested'
-    source = request.GET.get('source', '')
-    comment = request.GET.get('comment', '')
-
-    amount = {
-        'suggested': addon.suggested_amount,
-        'onetime': request.GET.get('onetime-amount', '')}.get(contrib_type, '')
+        'onetime': request.POST.get('onetime-amount', '')
+    }.get(contrib_type, '')
     if not amount:
         amount = settings.DEFAULT_SUGGESTED_CONTRIBUTION
 
+    # This is all going to get shoved into solitude. Temporary.
+    form = ContributionForm({'amount': amount})
+    if not form.is_valid():
+        return http.HttpResponse(json.dumps({'error': 'Invalid data.',
+                                             'status': '', 'url': '',
+                                             'paykey': ''}),
+                                 content_type='application/json')
+
     contribution_uuid = hashlib.md5(str(uuid.uuid4())).hexdigest()
-    uuid_qs = urllib.urlencode({'uuid': contribution_uuid})
 
     if addon.charity:
-        name, paypal_id = addon.charity.name, addon.charity.paypal
+        # TODO(andym): Figure out how to get this in the addon authors
+        # locale, rather than the contributors locale.
+        name, paypal_id = (u'%s: %s' % (addon.name, addon.charity.name),
+                           addon.charity.paypal)
     else:
         name, paypal_id = addon.name, addon.paypal_id
+    # l10n: {0} is the addon name
     contrib_for = _(u'Contribution for {0}').format(jinja2.escape(name))
 
-    paykey, nice_error = None, None
+    preapproval = None
+    if waffle.flag_is_active(request, 'allow-pre-auth') and request.amo_user:
+        preapproval = request.amo_user.get_preapproval()
+
+    paykey, error, status = '', '', ''
     try:
-        paykey = paypal.get_paykey({
-            'return_url': absolutify('%s?%s' % (reverse('addons.paypal',
-                                                args=[addon.slug, 'complete']),
-                                                uuid_qs)),
-            'cancel_url': absolutify('%s?%s' % (reverse('addons.paypal',
-                                                args=[addon.slug, 'cancel']),
-                                                uuid_qs)),
-            'uuid': contribution_uuid,
-            'amount': str(amount),
-            'email': paypal_id,
-            'ip': request.META.get('REMOTE_ADDR'),
-            'memo': contrib_for})
-    except paypal.AuthError, error:
-        paypal_log.error('Authentication error: %s' % error)
-        nice_error = _('There was a problem communicating with Paypal.')
-    except Exception, error:
-        paypal_log.error('Error: %s' % error)
-        nice_error = _('There was a problem with that contribution.')
+        paykey, status = paypal.get_paykey(
+            dict(amount=amount,
+                 email=paypal_id,
+                 ip=request.META.get('REMOTE_ADDR'),
+                 memo=contrib_for,
+                 pattern='%s.paypal' % ('apps' if webapp else 'addons'),
+                 preapproval=preapproval,
+                 slug=addon.slug,
+                 uuid=contribution_uuid))
+    except paypal.PaypalError as error:
+        paypal.paypal_log_cef(request, addon, contribution_uuid,
+                              'PayKey Failure', 'PAYKEYFAIL',
+                              'There was an error getting the paykey')
+        log.error('Error getting paykey, contribution for addon: %s'
+                  % addon.pk, exc_info=True)
 
     if paykey:
-        contrib = Contribution(addon_id=addon.id,
-                           charity_id=addon.charity_id,
-                           amount=amount,
-                           source=source,
-                           source_locale=request.LANG,
-                           annoying=addon.annoying,
-                           uuid=str(contribution_uuid),
-                           is_suggested=is_suggested,
-                           suggested_amount=addon.suggested_amount,
-                           comment=comment,
-                           paykey=paykey)
+        contrib = Contribution(addon_id=addon.id, charity_id=addon.charity_id,
+                               amount=amount, source=source,
+                               source_locale=request.LANG,
+                               annoying=addon.annoying,
+                               uuid=str(contribution_uuid),
+                               is_suggested=is_suggested,
+                               suggested_amount=addon.suggested_amount,
+                               comment=comment, paykey=paykey)
         contrib.save()
-
-    assert settings.PAYPAL_FLOW_URL, 'settings.PAYPAL_FLOW_URL is not defined'
 
     url = '%s?paykey=%s' % (settings.PAYPAL_FLOW_URL, paykey)
     if request.GET.get('result_type') == 'json' or request.is_ajax():
@@ -660,61 +553,13 @@ def embedded_contribute(request, addon):
         # not have a paykey and the JS can cope appropriately.
         return http.HttpResponse(json.dumps({'url': url,
                                              'paykey': paykey,
-                                             'error': nice_error}),
+                                             'error': str(error),
+                                             'status': status}),
                                  content_type='application/json')
     return http.HttpResponseRedirect(url)
 
 
-@addon_view
-def contribute(request, addon):
-    if settings.PAYPAL_USE_EMBEDDED:
-        return embedded_contribute(request, addon)
-    else:
-        return old_contribute(request, addon)
-
-
-def contribute_url_params(business, addon_id, item_name, return_url,
-                          amount='', item_number='',
-                          monthly=False, comment=''):
-
-    lang = translation.get_language()
-    try:
-        paypal_lang = settings.PAYPAL_COUNTRYMAP[lang]
-    except KeyError:
-        lang = lang.split('-')[0]
-        paypal_lang = settings.PAYPAL_COUNTRYMAP.get(lang, 'US')
-
-    # Get all the data elements that will be URL params
-    # on the Paypal redirect URL.
-    data = {'business': business,
-            'item_name': item_name,
-            'item_number': item_number,
-            'bn': settings.PAYPAL_BN + '-AddonID' + str(addon_id),
-            'no_shipping': '1',
-            'return': return_url,
-            'charset': 'utf-8',
-            'lc': paypal_lang,
-            'notify_url': "%s%s" % (settings.SERVICES_URL,
-                                    reverse('amo.paypal'))}
-
-    if not monthly:
-        data['cmd'] = '_donations'
-        if amount:
-            data['amount'] = amount
-    else:
-        data.update({
-            'cmd': '_xclick-subscriptions',
-            'p3': '12',  # duration: for 12 months
-            't3': 'M',  # time unit, 'M' for month
-            'a3': amount,  # recurring contribution amount
-            'no_note': '1'})  # required: no "note" text field for user
-
-    if comment:
-        data['custom'] = comment
-
-    return data
-
-
+@csrf_exempt
 @addon_view
 def paypal_result(request, addon, status):
     uuid = request.GET.get('uuid')
@@ -733,8 +578,7 @@ def paypal_result(request, addon, status):
 @addon_view
 def share(request, addon):
     """Add-on sharing"""
-    return share_redirect(request, addon, name=addon.name,
-                          description=truncate(addon.summary, length=250))
+    return share_redirect(request, addon, addon.name, addon.summary)
 
 
 @addon_view
@@ -745,8 +589,8 @@ def license(request, addon, version=None):
     else:
         version = addon.current_version
     if not (version and version.license):
-        raise http.Http404()
-    return jingo.render(request, 'addons/license.html',
+        raise http.Http404
+    return jingo.render(request, 'addons/impala/license.html',
                         dict(addon=addon, version=version))
 
 
@@ -760,10 +604,9 @@ def license_redirect(request, version):
 def report_abuse(request, addon):
     form = AbuseForm(request.POST or None, request=request)
     if request.method == "POST" and form.is_valid():
-        url = reverse('addons.detail', args=[addon.slug])
-        send_abuse_report(request, addon, url, form.cleaned_data['text'])
+        send_abuse_report(request, addon, form.cleaned_data['text'])
         messages.success(request, _('Abuse reported.'))
-        return redirect('addons.detail', addon.slug)
+        return http.HttpResponseRedirect(addon.get_url_path())
     else:
         return jingo.render(request, 'addons/report_abuse_full.html',
                             {'addon': addon, 'abuse_form': form, })
@@ -771,5 +614,16 @@ def report_abuse(request, addon):
 
 @cache_control(max_age=60 * 60 * 24)
 def persona_redirect(request, persona_id):
+    if persona_id == 0:
+        # Newer themes have persona_id == 0, doesn't mean anything.
+        return http.HttpResponseNotFound()
+
     persona = get_object_or_404(Persona, persona_id=persona_id)
-    return redirect('addons.detail', persona.addon.slug, permanent=True)
+    try:
+        to = reverse('addons.detail', args=[persona.addon.slug])
+    except Addon.DoesNotExist:
+        # Would otherwise throw 500. Something funky happened during GP
+        # migration which caused some Personas to be without Addons (problem
+        # with cascading deletes?). Tell GoogleBot these are dead with a 404.
+        return http.HttpResponseNotFound()
+    return http.HttpResponsePermanentRedirect(to)

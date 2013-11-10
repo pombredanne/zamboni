@@ -29,7 +29,6 @@
             "guid": "{b1fad17a-3b98-c743-ed56-85c722d622d3}",
             "trusted": false,
             "locale_disambiguation": null,
-            "binary": false,
             "the_future": null,
             "weekly_downloads": 541,
             "support_url": null,
@@ -39,7 +38,6 @@
             "average_daily_users": 14094,
             "bayesian_rating": 4.5252699999999999,
             "share_count": 1,
-            "get_satisfaction_company": "",
             "support_email": null,
             "public_stats": false,
             "status": 4,
@@ -52,7 +50,6 @@
             "admin_review": false,
             "external_software": false,
             "highest_status": 4,
-            "get_satisfaction_product": "",
             "name": 104238,
             "description": 104238,
             "created": "2008-03-10 14:30:42",
@@ -99,7 +96,7 @@
             "filename": "grapple_yummy-3.0.1-fx-macosx.jar",
             "platform": 3,
             "version": 94144,
-            "size": 616,
+            "size": 630784,
             "datestatuschanged": "2010-02-08 06:27:41"
         }
     },
@@ -107,7 +104,6 @@
         "pk": 888,
         "model": "users.userprofile",
         "fields": {
-            "sandboxshown": false,
             "display_collections_fav": false,
             "display_collections": false,
             "averagerating": "4.88",
@@ -119,13 +115,10 @@
             "email": "dd+50b9da4b9@davedash.com",
             "location": "",
             "bio": null,
-            "firstname": "Aronnax",
             "deleted": false,
-            "lastname": "G.",
             "emailhidden": false,
             "user": null,
             "password": "",
-            "nickname": "Aronnax",
             "username": "Aronnax",
             "display_name": "Aronnax",
             "resetcode_expires": null,
@@ -143,7 +136,8 @@
             "application": 1,
             "version": "3.7a1pre",
             "version_int": 3070000001000,
-            "created": "2009-08-19 07:35:43"
+            "created": "2009-08-19 07:35:43",
+            "modified": "2009-08-19 07:35:43"
         }
     },
     {
@@ -153,7 +147,8 @@
             "application": 1,
             "version": "3.6b1pre",
             "version_int": 3060000101000,
-            "created": "2009-08-19 07:35:43"
+            "created": "2009-08-19 07:35:43",
+            "modified": "2009-08-19 07:35:43"
         }
     },
     {

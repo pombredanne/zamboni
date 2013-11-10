@@ -1,31 +1,35 @@
-from email.Utils import formatdate
-from email.mime.text import MIMEText
 import smtplib
 import sys
-from time import time
 import traceback
+
+from email.Utils import formatdate
+from email.mime.text import MIMEText
+from time import time
 from urlparse import parse_qsl
 
-import MySQLdb as mysql
-import sqlalchemy.pool as pool
-
-import commonware.log
 from django.core.management import setup_environ
+from django.utils.http import urlencode
 
 import settings_local as settings
 setup_environ(settings)
-import log_settings
+# This has to be imported after the settings so statsd knows where to log to.
+from django_statsd.clients import statsd
+
+import commonware.log
+import MySQLdb as mysql
+import sqlalchemy.pool as pool
 
 try:
     from compare import version_int
 except ImportError:
     from apps.versions.compare import version_int
 
-from utils import (get_mirror,
-                   APP_GUIDS, PLATFORMS, VERSION_BETA,
-                   STATUS_PUBLIC, STATUSES_PUBLIC, STATUS_BETA, STATUS_NULL,
-                   STATUS_LITE, STATUS_LITE_AND_NOMINATED, ADDON_SLUGS_UPDATE)
+from constants import applications, base
+from utils import (APP_GUIDS, get_mirror, log_configure, PLATFORMS,
+                   STATUSES_PUBLIC)
 
+# Go configure the log.
+log_configure()
 
 good_rdf = """<?xml version="1.0"?>
 <RDF:RDF xmlns:RDF="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
@@ -87,13 +91,14 @@ mypool = pool.QueuePool(getconn, max_overflow=10, pool_size=5, recycle=300)
 
 class Update(object):
 
-    def __init__(self, data):
+    def __init__(self, data, compat_mode='strict'):
         self.conn, self.cursor = None, None
         self.data = data.copy()
         self.data['row'] = {}
         self.flags = {'use_version': False, 'multiple_status': False}
         self.is_beta_version = False
         self.version_int = 0
+        self.compat_mode = compat_mode
 
     def is_valid(self):
         # If you accessing this from unit tests, then before calling
@@ -103,8 +108,9 @@ class Update(object):
             self.cursor = self.conn.cursor()
 
         data = self.data
-
-        for field in ['reqVersion', 'id', 'version', 'appID', 'appVersion']:
+        # Version can be blank.
+        data['version'] = data.get('version', '')
+        for field in ['reqVersion', 'id', 'appID', 'appVersion']:
             if field not in data:
                 return False
 
@@ -113,8 +119,12 @@ class Update(object):
             return False
 
         sql = """SELECT id, status, addontype_id, guid FROM addons
-                 WHERE guid = %(guid)s AND inactive = 0 LIMIT 1;"""
-        self.cursor.execute(sql, {'guid': self.data['id']})
+                 WHERE guid = %(guid)s AND
+                       inactive = 0 AND
+                       status != %(STATUS_DELETED)s
+                 LIMIT 1;"""
+        self.cursor.execute(sql, {'guid': self.data['id'],
+                                  'STATUS_DELETED': base.STATUS_DELETED})
         result = self.cursor.fetchone()
         if result is None:
             return False
@@ -130,14 +140,14 @@ class Update(object):
             else:
                 data['appOS'] = None
 
-        self.is_beta_version = VERSION_BETA.search(data.get('version', ''))
+        self.is_beta_version = base.VERSION_BETA.search(data['version'])
         return True
 
     def get_beta(self):
         data = self.data
-        data['status'] = STATUS_PUBLIC
+        data['status'] = base.STATUS_PUBLIC
 
-        if data['addon_status'] == STATUS_PUBLIC:
+        if data['addon_status'] == base.STATUS_PUBLIC:
             # Beta channel looks at the addon name to see if it's beta.
             if self.is_beta_version:
                 # For beta look at the status of the existing files.
@@ -154,24 +164,25 @@ class Update(object):
                     status = result[1]
                     # If it's in Beta or Public, then we should be looking
                     # for similar. If not, find something public.
-                    if status in (STATUS_BETA, STATUS_PUBLIC):
+                    if status in (base.STATUS_BETA, base.STATUS_PUBLIC):
                         data['status'] = status
                     else:
                         data.update(STATUSES_PUBLIC)
                         self.flags['multiple_status'] = True
 
-        elif data['addon_status'] in (STATUS_LITE, STATUS_LITE_AND_NOMINATED):
-            data['status'] = STATUS_LITE
+        elif data['addon_status'] in (base.STATUS_LITE,
+                                      base.STATUS_LITE_AND_NOMINATED):
+            data['status'] = base.STATUS_LITE
         else:
             # Otherwise then we'll keep the update within the current version.
-            data['status'] = STATUS_NULL
+            data['status'] = base.STATUS_NULL
             self.flags['use_version'] = True
 
     def get_update(self):
         self.get_beta()
         data = self.data
 
-        sql = """
+        sql = ["""
             SELECT
                 addons.guid as guid, addons.addontype_id as type,
                 addons.inactive as disabled_by_user,
@@ -180,7 +191,9 @@ class Update(object):
                 files.status as file_status, files.hash,
                 files.filename, versions.id as version_id,
                 files.datestatuschanged as datestatuschanged,
-                versions.releasenotes, versions.version as version
+                files.strict_compatibility as strict_compat,
+                versions.releasenotes, versions.version as version,
+                addons.premium_type
             FROM versions
             INNER JOIN addons
                 ON addons.id = versions.addon_id AND addons.id = %(id)s
@@ -195,37 +208,70 @@ class Update(object):
                 ON appmax.id = applications_versions.max
             INNER JOIN files
                 ON files.version_id = versions.id AND (files.platform_id = 1
-            """
+            """]
         if data.get('appOS'):
-            sql += ' OR files.platform_id = %(appOS)s'
+            sql.append(' OR files.platform_id = %(appOS)s')
 
         if self.flags['use_version']:
-            sql += (') WHERE files.status > %(status)s AND '
+            sql.append(') WHERE files.status > %(status)s AND '
                     'versions.version = %(version)s ')
         else:
             if self.flags['multiple_status']:
                 # Note that getting this properly escaped is a pain.
                 # Suggestions for improvement welcome.
-                sql += (') WHERE files.status in (%(STATUS_PUBLIC)s,'
-                        '%(STATUS_LITE)s,%(STATUS_LITE_AND_NOMINATED)s)')
+                sql.append(') WHERE files.status in (%(STATUS_PUBLIC)s,'
+                        '%(STATUS_LITE)s,%(STATUS_LITE_AND_NOMINATED)s) ')
             else:
-                sql += ') WHERE files.status = %(status)s '
+                sql.append(') WHERE files.status = %(status)s ')
 
-        sql += """
-            AND (appmin.version_int <= %(version_int)s
-            AND appmax.version_int >= %(version_int)s)
-            ORDER BY versions.id DESC LIMIT 1;
-            """
+        sql.append('AND appmin.version_int <= %(version_int)s ')
 
-        self.cursor.execute(sql, data)
+        if self.compat_mode == 'ignore':
+            pass  # no further SQL modification required.
+
+        elif self.compat_mode == 'normal':
+            # When file has strict_compatibility enabled, or file has binary
+            # components, default to compatible is disabled.
+            sql.append("""AND
+                CASE WHEN files.strict_compatibility = 1 OR
+                          files.binary_components = 1
+                THEN appmax.version_int >= %(version_int)s ELSE 1 END
+            """)
+            # Filter out versions that don't have the minimum maxVersion
+            # requirement to qualify for default-to-compatible.
+            d2c_max = applications.D2C_MAX_VERSIONS.get(data['app_id'])
+            if d2c_max:
+                data['d2c_max_version'] = version_int(d2c_max)
+                sql.append("AND appmax.version_int >= %(d2c_max_version)s ")
+
+            # Filter out versions found in compat overrides
+            sql.append("""AND
+                NOT versions.id IN (
+                SELECT version_id FROM incompatible_versions
+                WHERE app_id=%(app_id)s AND
+                  (min_app_version='0' AND
+                       max_app_version_int >= %(version_int)s) OR
+                  (min_app_version_int <= %(version_int)s AND
+                       max_app_version='*') OR
+                  (min_app_version_int <= %(version_int)s AND
+                       max_app_version_int >= %(version_int)s)) """)
+
+        else:  # Not defined or 'strict'.
+            sql.append('AND appmax.version_int >= %(version_int)s ')
+
+        sql.append('ORDER BY versions.id DESC LIMIT 1;')
+
+        self.cursor.execute(''.join(sql), data)
         result = self.cursor.fetchone()
+
         if result:
             row = dict(zip([
                 'guid', 'type', 'disabled_by_user', 'appguid', 'min', 'max',
                 'file_id', 'file_status', 'hash', 'filename', 'version_id',
-                'datestatuschanged', 'releasenotes', 'version'],
+                'datestatuschanged', 'strict_compat', 'releasenotes',
+                'version', 'premium_type'],
                 list(result)))
-            row['type'] = ADDON_SLUGS_UPDATE[row['type']]
+            row['type'] = base.ADDON_SLUGS_UPDATE[row['type']]
             row['url'] = get_mirror(self.data['addon_status'],
                                     self.data['id'], row)
             data['row'] = row
@@ -250,7 +296,7 @@ class Update(object):
         return rdf
 
     def get_no_updates_rdf(self):
-        name = ADDON_SLUGS_UPDATE[self.data['type']]
+        name = base.ADDON_SLUGS_UPDATE[self.data['type']]
         return no_updates_rdf % ({'guid': self.data['guid'], 'type': name})
 
     def get_good_rdf(self):
@@ -302,21 +348,16 @@ def log_exception(data):
 
 
 def application(environ, start_response):
-    start = time()
     status = '200 OK'
-    timing = (environ['REQUEST_METHOD'], '%s?%s' %
-              (environ['SCRIPT_NAME'], environ['QUERY_STRING']))
-    data = dict(parse_qsl(environ['QUERY_STRING']))
-    try:
-        update = Update(data)
-        output = update.get_rdf()
-        start_response(status, update.get_headers(len(output)))
-    except:
-        timing_log.info('%s "%s" (500) %.2f [ANON]' %
-                        (timing[0], timing[1], time() - start))
-        #mail_exception(data)
-        log_exception(data)
-        raise
-    timing_log.info('%s "%s" (200) %.2f [ANON]' %
-                    (timing[0], timing[1], time() - start))
+    with statsd.timer('services.update'):
+        data = dict(parse_qsl(environ['QUERY_STRING']))
+        compat_mode = data.pop('compatMode', 'strict')
+        try:
+            update = Update(data, compat_mode)
+            output = update.get_rdf()
+            start_response(status, update.get_headers(len(output)))
+        except:
+            #mail_exception(data)
+            log_exception(data)
+            raise
     return [output]

@@ -1,5 +1,4 @@
 {% extends "devhub/base.html" %}
-{% from 'includes/forms.html' import required %}
 
 {% set title = _('Add-on Packager') %}
 {% block title %}{{ dev_page_title(title) }}{% endblock %}
@@ -10,7 +9,7 @@
   <h2>{{ title }}</h2>
   <h3>{{ _('Add-on packaged successfully!') }}</h3>
 </header>
-<section class="item">
+<section>
   <p>
   {% trans %}
   Use the download link below to save a copy of your extension's compressed
@@ -18,19 +17,26 @@
   application, simply rename the <kbd>.zip</kbd> extension to <kbd>.xpi</kbd>.
   {% endtrans %}
   </p>
-  <div id="packager-download" data-downloadurl="{{ url('devhub.package_addon_json', uuid) }}">
-    <span>{{ _('Please wait...') }}</span>
+  <div id="packager-download"
+       data-downloadurl="{{ url('devhub.package_addon_json', package_name) }}">
+    <span>{{ _('Please wait&hellip;') }}</span>
     <noscript>
       {% trans %}
       JavaScript needs to be enabled to fetch the packaged add-on.
       {% endtrans %}
     </noscript>
   </div>
-</section>
-<header>
   <h3>{{ _('What do I do next?') }}</h3>
-</header>
-<section class="item">
+  {% trans %}
+  <ol>
+    <li>
+      Follow the instructions in the packaged source code to create your
+      own preferences and make your own customizations.
+    </li>
+    <li>Remove any source code that you don't eventually use.</li>
+    <li>Read the documentation and ask for help when you need it!</li>
+  </ol>
+  {% endtrans %}
   <p>
   {% trans gs_url=url('devhub.docs', 'getting-started'),
            ht_url=url('devhub.docs', 'how-to') %}

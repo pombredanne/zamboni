@@ -75,7 +75,6 @@
         "pk": 1,
         "model": "files.platform",
         "fields": {
-            "icontype": "",
             "modified": "2008-04-07 08:16:55",
             "created": "2007-03-05 13:09:27"
         }
@@ -98,7 +97,6 @@
             "trusted": false,
             "description": 309894,
             "locale_disambiguation": null,
-            "binary": false,
             "the_future": null,
             "weekly_downloads": 51417,
             "support_url": 309897,
@@ -124,7 +122,6 @@
             "slug": "youtube",
             "external_software": false,
             "charity": null,
-            "get_satisfaction_product": null,
             "name": 309895,
             "created": "2009-01-19 15:28:14",
             "type": 4,
@@ -135,7 +132,6 @@
             "suggested_amount": null,
             "site_specific": false,
             "_current_version": 61037,
-            "get_satisfaction_company": null,
             "the_reason": null
         }
     },
@@ -164,7 +160,7 @@
             "filename": "-20090119.xml",
             "platform": 1,
             "version": 61037,
-            "size": 4,
+            "size": 4096,
             "datestatuschanged": "2009-03-19 11:34:47"
         }
     },
@@ -172,7 +168,6 @@
         "pk": 3907389,
         "model": "users.userprofile",
         "fields": {
-            "sandboxshown": false,
             "display_collections_fav": false,
             "display_collections": false,
             "averagerating": "4.84",
@@ -187,14 +182,11 @@
             "username": "ditman",
             "bio": null,
             "failed_login_attempts": 0,
-            "firstname": "David",
             "deleted": false,
-            "lastname": "Iglesias",
             "emailhidden": true,
             "last_login_attempt_ip": "",
             "last_login_attempt": null,
             "password": "",
-            "nickname": "ditman",
             "resetcode_expires": null,
             "resetcode": "",
             "created": "2009-01-19 15:19:21",

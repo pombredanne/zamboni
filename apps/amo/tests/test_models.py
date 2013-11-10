@@ -1,10 +1,10 @@
-from test_utils import TestCase
 
 from mock import Mock
 from nose.tools import eq_
 
 import amo.models
 from amo.models import manual_order
+from amo.tests import TestCase
 from amo import models as context
 from addons.models import Addon
 
@@ -50,10 +50,20 @@ class TestModelBase(TestCase):
         self.saved_cb = amo.models._on_change_callbacks.copy()
         amo.models._on_change_callbacks.clear()
         self.cb = Mock()
+        self.cb.__name__ = 'testing_mock_callback'
         Addon.on_change(self.cb)
 
     def tearDown(self):
-         amo.models._on_change_callbacks = self.saved_cb
+        amo.models._on_change_callbacks = self.saved_cb
+
+    def test_multiple_ignored(self):
+        cb = Mock()
+        cb.__name__ = 'something'
+        old = len(amo.models._on_change_callbacks[Addon])
+        Addon.on_change(cb)
+        eq_(len(amo.models._on_change_callbacks[Addon]), old + 1)
+        Addon.on_change(cb)
+        eq_(len(amo.models._on_change_callbacks[Addon]), old + 1)
 
     def test_change_called_on_new_instance_save(self):
         for create_addon in (Addon, Addon.objects.create):
@@ -106,3 +116,32 @@ class TestModelBase(TestCase):
         addon.save()
         assert fn.called
         # No exception = pass
+
+    def test_safer_get_or_create(self):
+        data = {'guid': '123', 'type': amo.ADDON_EXTENSION}
+        a, c = Addon.objects.safer_get_or_create(**data)
+        assert c
+        b, c = Addon.objects.safer_get_or_create(**data)
+        assert not c
+        eq_(a, b)
+
+    def test_reload(self):
+        # Make it an extension.
+        addon = Addon.objects.create(type=amo.ADDON_EXTENSION)
+        addon.save()
+
+        # Make it a persona.
+        Addon.objects.get(id=addon.id).update(type=amo.ADDON_PERSONA)
+
+        # Still an extension.
+        eq_(addon.type, amo.ADDON_EXTENSION)
+
+        # Reload. And it's magically now a persona.
+        eq_(addon.reload().type, amo.ADDON_PERSONA)
+        eq_(addon.type, amo.ADDON_PERSONA)
+
+
+def test_cache_key():
+    # Test that we are not taking the db into account when building our
+    # cache keys for django-cache-machine. See bug 928881.
+    eq_(Addon._cache_key(1, 'default'), Addon._cache_key(1, 'slave'))

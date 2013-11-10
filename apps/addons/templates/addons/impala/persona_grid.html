@@ -1,11 +1,10 @@
-{% cache pages %}
-<ul class="listing-grid personas three-col c">
+<ul class="listing-grid personas {{ columns }} c">
 {% for page in pages %}
   {% set first_page = loop.first %}
   <section>
   {% for addon in page %}
     <li>
-      <div class="persona item">
+      <div class="persona hovercard">
         <a href="{{ addon.get_url_path() }}">
           <div class="persona-preview">
             <img {{ 'src' if first_page else 'data-defer-src' }}="{{ addon.persona.thumb_url }}"
@@ -22,4 +21,3 @@
   </section>
 {% endfor %}
 </ul>
-{% endcache %}

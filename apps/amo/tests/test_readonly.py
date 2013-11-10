@@ -3,11 +3,11 @@ from django.db import models
 from django.utils import importlib
 
 import MySQLdb as mysql
-import test_utils
-import safe_signals
+from lib.misc import safe_signals
 from nose.tools import assert_raises, eq_
 from pyquery import PyQuery as pq
 
+import amo.tests
 from amo.urlresolvers import reverse
 from addons.models import Addon
 
@@ -26,7 +26,7 @@ def quickcopy(val):
     return val
 
 
-class ReadOnlyModeTest(test_utils.TestCase):
+class ReadOnlyModeTest(amo.tests.TestCase):
     extra = ('amo.middleware.ReadOnlyMiddleware',)
 
     def setUp(self):
@@ -59,13 +59,6 @@ class ReadOnlyModeTest(test_utils.TestCase):
 
     def test_db_error(self):
         assert_raises(mysql.OperationalError, Addon.objects.create, id=12)
-
-    def test_login_error(self):
-        # This tries to do a db write.
-        r = self.client.get(reverse('users.login'))
-        eq_(r.status_code, 503)
-        title = pq(r.content)('title').text()
-        assert title.startswith('Maintenance in progress'), title
 
     def test_bail_on_post(self):
         r = self.client.post('/en-US/firefox/')

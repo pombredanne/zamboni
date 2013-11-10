@@ -7,6 +7,8 @@
 {% block content %}
 {{ breadcrumbs([(addon.type_url(), amo.ADDON_TYPES[addon.type]), (None, addon.name)]) }}
 
+{% set is_artist = waffle.flag('submit-personas') and request.check_ownership(addon, require_owner=False) %}
+
 <hgroup>
   <h2 class="addon"{{ addon.name|locale_html }}>
     <img src="{{ addon.icon_url }}" class="icon"/>
@@ -14,62 +16,33 @@
       {{ addon.name }}
     </span>
   </h2>
-  <h4 class="author">{{ _('by') }} {{ users_list(addon.listed_authors) }}</h4>
+  <h4 class="author">{{ _('by') }} {{ users_list(addon.listed_authors) or persona.display_username }}</h4>
 </hgroup>
 
+{% include "addons/includes/persona_pending_notice.html" %}
+
 <div id="persona" class="primary" role="main" data-id="{{ addon.id }}">
-  {% include "messages.html" %}
-  <div class="featured">
-    <div class="featured-inner object-lead">
-
-      <div id="addon-summary-wrapper">
-        <div id="persona-summary" class="{{ addon|statusflags }}">
-
-          {{ persona_preview(persona, linked=False) }}
-
-          <table itemscope itemtype="http://data-vocabulary.org/Review-aggregate">
-            {% with addon_name='<span itemprop="itemreviewed">{0}</span>'|f(addon.name|e) %}
-              {# L10n: This is a caption for a table. {0} is an add-on name. #}
-              <caption>{{ _('Add-on Information for {0}')|f(addon_name)|xssafe }}</caption>
-            {% endwith %}
-            {% include "addons/persona_detail_table.html" %}
-          </table>
-
-          <p{{ addon.description|locale_html }}>{{ addon.description|nl2br }}</p>
-
-          {{ big_install_button(addon, show_warning=False) }}
-
-          <div class="widgets">
-            {{ favorites_widget(addon) }}
-            {% include 'addons/includes/collection_add_widget.html' %}
-          </div>
-
-          {# TODO(davedash): Remove until zamboni does sharing
-          {{ sharing_box(addon) }}
-          #}
-
-      </div></div>{# /addon-summary and -wrapper #}
-  </div></div>{# /featured-inner and featured #}
+  {% if not persona.addon.is_pending() or waffle.flag('submit-personas') and request.check_ownership(addon, require_owner=False) %}
+    {# If theme is pending, only artist should see theme listing. #}
+    {% include "addons/includes/persona.html" %}
+  {% endif %}
 
   <div id="more-personas">
-    {% cache category_personas %}
-      {% if category_personas %}
+    {% if category_personas %}
       <div id="more-category" class="persona-list {{ 'persona-list-3col' if not author_personas else 'persona-list-2col' }}">
         {# L10n: {0} is a category name, such as Nature #}
-        <h3>{{ _('More {0} Personas')|f(categories[0].name) }}</h3>
+        <h3>{{ _('More {0} Themes')|f(categories[0].name) }}</h3>
         <div class="article">
           {% for other in category_personas %}
             {{ persona_preview(other.persona, size='small') }}
           {% endfor %}
         </div>
         {# L10n: {0} is a category name, such as Nature #}
-        <a href="{{ categories[0].get_url_path() }}" class="more-link">{{ _('See all {0} Personas')|f(categories[0].name) }}</a>
+        <a href="{{ categories[0].get_url_path() }}" class="more-link">{{ _('See all {0} Themes')|f(categories[0].name) }}</a>
       </div>
-      {% endif %}
-    {% endcache %}
+    {% endif %}
 
-    {% cache author_personas %}
-      {% if author_personas %}
+    {% if author_personas %}
       <div id="more-artist">
         <h3>{{ _('More by this Artist') }}</h3>
         <div class="article">
@@ -77,10 +50,11 @@
             {{ persona_preview(other.persona, size='small') }}
           {% endfor %}
         </div>
-        <a href="{{ author_gallery }}" class="more-link">{{ _('See all Personas by this Artist') }}</a>
+        {% if author_gallery %}
+          <a href="{{ author_gallery }}" class="more-link">{{ _('See all Themes by this Artist') }}</a>
+        {% endif %}
       </div>
-      {% endif %}
-    {% endcache %}
+    {% endif %}
   </div>{# /more-personas #}
 
   {{ review_list_box(addon=addon, reviews=reviews) }}
@@ -91,7 +65,6 @@
   {% if abuse_form %}
     {{ addon_report_abuse(hide=True, addon=addon) }}
   {% endif %}
-
 </div>{# /primary #}
 
 <div id="persona-side" class="secondary" role="navigation">
@@ -109,7 +82,7 @@
   </div>
   {% endif %}
 
-  {{ tags_box(addon=addon, tags=tags) }}
+  {{ tags_box(addon=addon, tags=user_tags) }}
 
 </div>{# /secondary #}
 {% endblock content %}

@@ -1,23 +1,18 @@
-import test_utils
 from mock import Mock
 from nose.tools import eq_
 from pyquery import PyQuery
 
 import amo
-from addons.helpers import (statusflags, flag, support_addon, contribution,
-                            performance_note, mobile_persona_preview,
-                            mobile_persona_confirm)
+import amo.tests
+from addons.helpers import (statusflags, flag, contribution, performance_note,
+                            mobile_persona_preview, mobile_persona_confirm)
 from addons.models import Addon
 
 
-class TestHelpers(test_utils.TestCase):
-    fixtures = ['addons/featured', 'base/collections', 'base/featured',
-                'bandwagon/featured_collections']
-
-    def setUp(self):
-        # Addon._feature keeps an in-process cache we need to clear.
-        if hasattr(Addon, '_feature'):
-            del Addon._feature
+class TestHelpers(amo.tests.TestCase):
+    fixtures = ['base/addon_3615', 'base/users',
+                'addons/featured', 'base/collections',
+                'base/featured', 'bandwagon/featured_collections']
 
     def test_statusflags(self):
         ctx = {'APP': amo.FIREFOX, 'LANG': 'en-US'}
@@ -48,19 +43,6 @@ class TestHelpers(test_utils.TestCase):
         # category featured
         featured = Addon.objects.get(pk=1001)
         eq_(flag(ctx, featured), '<h5 class="flag">Featured</h5>')
-
-    def test_support_addon(self):
-        a = Addon(id=12, type=1)
-        eq_(support_addon(a), '')
-
-        a.wants_contributions = a.paypal_id = True
-        a.status = amo.STATUS_PUBLIC
-        eq_(PyQuery(support_addon(a))('a').text(), 'Support this add-on')
-
-        a.suggested_amount = '12'
-        doc = PyQuery(support_addon(a))
-        eq_(doc('.contribute').text(),
-            'Support this add-on: Contribute $12.00')
 
     def test_contribution_box(self):
         a = Addon.objects.get(pk=7661)
@@ -139,7 +121,7 @@ class TestHelpers(test_utils.TestCase):
         eq_(more.attr('href'), persona.addon.get_url_path())
 
 
-class TestPerformanceNote(test_utils.TestCase):
+class TestPerformanceNote(amo.tests.TestCase):
     listing = '<div class="performance-note">'
     not_listing = '<div class="notification performance-note">'
 

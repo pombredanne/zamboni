@@ -24,7 +24,7 @@
             "localized_string_clean": null,
             "created": "2010-04-21 12:36:48",
             "locale": "ru",
-            "modified": null,
+            "modified": "2010-04-21 12:36:48",
             "id": 1043705,
             "localized_string": "I wanted to install _ not _ the latest version of firefox and use this wonderful piece. Unfortunately Block + does not work with earlier versions * fox: (. I have weak komputer - I wanted to install firefox - version 1.0 or 2.0 ... \r\n---\r\n\u042f \u0445\u043e\u0442\u0435\u043b \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c _ \u043d\u0435 \u0441\u0430\u043c\u0443\u044e \u043d\u043e\u0432\u0443\u044e _ \u0432\u0435\u0440\u0441\u0438\u044e firefox \u0438 \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c \u044d\u0442\u0443 \u0437\u0430\u043c\u0435\u0447\u0430\u0442\u0435\u043b\u044c\u043d\u0443\u044e \u0448\u0442\u0443\u043a\u0443. \u041d\u043e \u043a \u0441\u043e\u0436\u0430\u043b\u0435\u043d\u0438\u044e \u0411\u043b\u043e\u043a + \u043d\u0435 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442 \u0441 \u0440\u0430\u043d\u043d\u0438\u043c\u0438 \u0432\u0435\u0440\u0441\u0438\u044f\u043c\u0438 *fox :( . \u0423 \u043c\u0435\u043d\u044f \u0441\u043b\u0430\u0431\u0435\u043d\u044c\u043a\u0438\u0439 \u043a\u043e\u043c\u043f\u0443\u0442\u0435\u0440 - \u0445\u043e\u0442\u0435\u043b \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c  firefox - \u0432\u0435\u0440\u0441\u0438\u044e 1.0 \u0438\u043b\u0438 2.0...\r\n"
         }
@@ -36,7 +36,7 @@
             "localized_string_clean": null,
             "created": "2010-04-21 12:36:47",
             "locale": "ru",
-            "modified": null,
+            "modified": "2010-04-21 12:36:47",
             "id": 1043704,
             "localized_string": "I have weak komputer :("
         }
@@ -45,7 +45,6 @@
         "pk": 5293223,
         "model": "users.userprofile",
         "fields": {
-            "sandboxshown": false,
             "display_collections_fav": false,
             "display_collections": false,
             "occupation": "",
@@ -57,13 +56,10 @@
             "email": "root_x@ukr.net",
             "notifycompat": true,
             "bio": null,
-            "firstname": "povierennyy",
             "deleted": false,
-            "lastname": "",
             "emailhidden": false,
             "user": 5293223,
             "password": "sha512$7b5436061f8c0902088c292c057be69fdb17312e2f71607c9c51641f5d876522$08d1d370d89e2ae92755fd03464a7276ca607c431d04a52d659f7a184f3f9918073637d82fc88981c7099c7c46a1137b9fdeb675304eb98801038905a9ee0600",
-            "nickname": "root_x",
             "username": "root_x",
             "resetcode_expires": null,
             "resetcode": "",
@@ -106,7 +102,7 @@
             "localized_string_clean": null,
             "created": "2010-04-22 22:42:45",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2010-04-22 22:42:45",
             "id": 1046853,
             "localized_string": "\u041d\u043e\u0432\u044b\u0435 \u0432\u0435\u0440\u0441\u0438\u0438 Firefox \u0440\u0430\u0431\u043e\u0442\u0430\u044e\u0442 *\u0431\u044b\u0441\u0442\u0440\u0435\u0435* \u0441\u0442\u0430\u0440\u044b\u0445. \u0423\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u0435 3.6 \u0438 \u043d\u0435 \u043c\u0430\u0439\u0442\u0435\u0441\u044c \u0434\u0443\u0440\u044c\u044e. Firefox 2.0 \u0443\u0436\u0435 \u0434\u0430\u0432\u043d\u043e \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f, \u0442\u0430\u043c \u043c\u0430\u0441\u0441\u0430 \u0438\u0437\u0432\u0435\u0441\u0442\u043d\u044b\u0445 \u0434\u044b\u0440 \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u0438, \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c \u0435\u0433\u043e \u043d\u0438 \u0432 \u043a\u043e\u0435\u043c \u0441\u043b\u0443\u0447\u0430\u0435 \u043d\u0435\u043b\u044c\u0437\u044f - \u0438\u043d\u0430\u0447\u0435 \"\u043c\u0435\u0434\u043b\u0435\u043d\u043d\u044b\u0439\" \u043a\u043e\u043c\u043f\u044c\u044e\u0442\u0435\u0440 \u0441\u043a\u043e\u0440\u043e \u0441\u0442\u0430\u043d\u0435\u0442 \u0435\u0449\u0435 \u043c\u0435\u0434\u043b\u0435\u043d\u043d\u0435\u0439, \u0438\u0437-\u0437\u0430 \u0432\u0440\u0435\u0434\u043e\u043d\u043e\u0441\u043d\u044b\u0445 \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c."
         }
@@ -118,7 +114,7 @@
             "localized_string_clean": null,
             "created": "2010-04-22 22:42:44",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2010-04-22 22:42:44",
             "id": 1046852,
             "localized_string": "Don't use Firefox 2.0!"
         }
@@ -127,7 +123,6 @@
         "pk": 346,
         "model": "users.userprofile",
         "fields": {
-            "sandboxshown": false,
             "display_collections_fav": false,
             "display_collections": true,
             "occupation": "",
@@ -139,13 +134,10 @@
             "email": "trev@adblockplus.org",
             "notifycompat": true,
             "bio": null,
-            "firstname": "Wladimir",
             "deleted": false,
-            "lastname": "Palant",
             "emailhidden": false,
             "user": 346,
             "password": "sha512$7b5436061f8c0902088c292c057be69fdb17312e2f71607c9c51641f5d876522$08d1d370d89e2ae92755fd03464a7276ca607c431d04a52d659f7a184f3f9918073637d82fc88981c7099c7c46a1137b9fdeb675304eb98801038905a9ee0600",
-            "nickname": "Wladimir Palant",
             "username": "Wladimir Palant",
             "resetcode_expires": null,
             "resetcode": "",
@@ -160,6 +152,7 @@
         "model": "addons.addon",
         "fields": {
             "slug": "a1865",
+            "app_slug": "a1865",
             "dev_agreement": true,
             "eula": null,
             "_current_version": 90149,
@@ -173,7 +166,6 @@
             "the_future": null,
             "trusted": true,
             "locale_disambiguation": null,
-            "binary": false,
             "guid": "{d10d0bf8-f5b5-c8b4-a8b2-2b9879e08c5d}",
             "weekly_downloads": 813599,
             "support_url": null,
@@ -183,7 +175,6 @@
             "average_daily_users": 7409464,
             "bayesian_rating": 4.7014300000000002,
             "share_count": 117,
-            "get_satisfaction_company": null,
             "homepage": null,
             "support_email": null,
             "public_stats": true,
@@ -197,7 +188,6 @@
             "admin_review": false,
             "external_software": false,
             "highest_status": 4,
-            "get_satisfaction_product": null,
             "name": null,
             "created": "2006-01-17 07:28:30",
             "type": 1,

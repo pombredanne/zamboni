@@ -1,17 +1,17 @@
-from collections import defaultdict
 import contextlib
 import threading
 
 from django.conf import settings
-from django.db import models
-from django.utils import translation
+from django.db import models, transaction
+from django.utils import encoding, translation
 
 import caching.base
-import elasticutils
 import multidb.pinning
+import pyes.exceptions
 import queryset_transform
 
-from . import signals, search
+from . import search
+from . import signals  # Needed to set up url prefix signals.
 
 
 _locals = threading.local()
@@ -108,6 +108,7 @@ class RawQuerySet(models.query.RawQuerySet):
 class CachingRawQuerySet(RawQuerySet, caching.base.CachingRawQuerySet):
     """A RawQuerySet with __len__ and caching."""
 
+
 # Make TransformQuerySet one of CachingQuerySet's parents so that we can do
 # transforms on objects and then get them cached.
 CachingQuerySet = caching.base.CachingQuerySet
@@ -136,6 +137,20 @@ class UncachedManagerBase(models.Manager):
     def raw(self, raw_query, params=None, *args, **kwargs):
         return RawQuerySet(raw_query, self.model, params=params,
                            using=self._db, *args, **kwargs)
+
+    def safer_get_or_create(self, defaults=None, **kw):
+        """
+        This is subjective, but I don't trust get_or_create until #13906
+        gets fixed. It's probably fine, but this makes me happy for the moment
+        and solved a get_or_create we've had in the past.
+        """
+        with transaction.commit_on_success():
+            try:
+                return self.get(**kw), False
+            except self.model.DoesNotExist:
+                if defaults is not None:
+                    kw.update(defaults)
+                return self.create(**kw), True
 
 
 class ManagerBase(caching.base.CachingManager, UncachedManagerBase):
@@ -189,7 +204,7 @@ class _NoChangeInstance(object):
         return self.__instance.update(*args, **kw)
 
 
-_on_change_callbacks = defaultdict(list)
+_on_change_callbacks = {}
 
 
 # @TODO(Kumar) liberate: move OnChangeMixin Model mixin to nuggets
@@ -229,8 +244,16 @@ class OnChangeMixin(object):
             Any call to instance.save() or instance.update() within a callback
             will not trigger any change handlers.
 
+        .. note::
+
+            Duplicates based on function.__name__ are ignored for a given
+            class.
         """
-        _on_change_callbacks[cls].append(callback)
+        existing = _on_change_callbacks.get(cls, [])
+        if callback.__name__ in [e.__name__ for e in existing]:
+            return callback
+
+        _on_change_callbacks.setdefault(cls, []).append(callback)
         return callback
 
     def _send_changes(self, old_attr, new_attr_kw):
@@ -248,7 +271,7 @@ class OnChangeMixin(object):
         """
         signal = kw.pop('_signal', True)
         result = super(OnChangeMixin, self).save(*args, **kw)
-        if signal:
+        if signal and self.__class__ in _on_change_callbacks:
             self._send_changes(self._initial_attr, dict(self.__dict__))
         return result
 
@@ -260,8 +283,8 @@ class OnChangeMixin(object):
         """
         signal = kw.pop('_signal', True)
         old_attr = dict(self.__dict__)
-        result = super(OnChangeMixin, self).update(**kw)
-        if signal:
+        result = super(OnChangeMixin, self).update(_signal=signal, **kw)
+        if signal and self.__class__ in _on_change_callbacks:
             self._send_changes(old_attr, kw)
         return result
 
@@ -269,20 +292,40 @@ class OnChangeMixin(object):
 class SearchMixin(object):
 
     @classmethod
-    def index(cls, document, id=None, bulk=False, force_insert=False):
+    def _get_index(cls):
+        indexes = settings.ES_INDEXES
+        return indexes.get(cls._meta.db_table) or indexes['default']
+
+    @classmethod
+    def index(cls, document, id=None, bulk=False, index=None):
         """Wrapper around pyes.ES.index."""
-        elasticutils.get_es().index(
-            document, index=settings.ES_INDEX, doc_type=cls._meta.app_label,
-            id=id, bulk=bulk, force_insert=force_insert)
+        search.get_es().index(
+            document, index=index or cls._get_index(),
+            doc_type=cls._meta.db_table, id=id, bulk=bulk)
 
     @classmethod
-    def unindex(cls, id):
-        elasticutils.get_es().delete(settings.ES_INDEX,
-                                     cls._meta.app_label, id)
+    def unindex(cls, id, index=None):
+        es = search.get_es()
+        try:
+            es.delete(index or cls._get_index(), cls._meta.db_table, id)
+        except pyes.exceptions.NotFoundException:
+            # Item wasn't found, whatevs.
+            pass
 
     @classmethod
-    def search(cls):
-        return search.ES(cls)
+    def search(cls, index=None):
+        return search.ES(cls, index or cls._get_index())
+
+    # For compatibility with elasticutils > v0.5.
+    # TODO: Remove these when we've moved mkt to its own index.
+
+    @classmethod
+    def get_index(cls):
+        return cls._get_index()
+
+    @classmethod
+    def get_mapping_type_name(cls):
+        return cls._meta.db_table
 
 
 class ModelBase(SearchMixin, caching.base.CachingMixin, models.Model):
@@ -297,7 +340,6 @@ class ModelBase(SearchMixin, caching.base.CachingMixin, models.Model):
     modified = models.DateTimeField(auto_now=True)
 
     objects = ManagerBase()
-    uncached = UncachedManagerBase()
 
     class Meta:
         abstract = True
@@ -305,6 +347,23 @@ class ModelBase(SearchMixin, caching.base.CachingMixin, models.Model):
 
     def get_absolute_url(self, *args, **kwargs):
         return self.get_url_path(*args, **kwargs)
+
+    @classmethod
+    def _cache_key(cls, pk, db):
+        """
+        Custom django-cache-machine cache key implementation that avoids having
+        the real db in the key, since we are only using master-slaves we don't
+        need it and it avoids invalidation bugs with FETCH_BY_ID.
+        """
+        key_parts = ('o', cls._meta, pk, 'default')
+        return ':'.join(map(encoding.smart_unicode, key_parts))
+
+    def reload(self):
+        """Reloads the instance from the database."""
+        from_db = self.__class__.objects.get(id=self.id)
+        for field in self.__class__._meta.fields:
+            setattr(self, field.name, getattr(from_db, field.name))
+        return self
 
     def update(self, **kw):
         """
@@ -336,13 +395,29 @@ def manual_order(qs, pks, pk_name='id'):
     Given a query set and a list of primary keys, return a set of objects from
     the query set in that exact order.
     """
-
     if not pks:
-        return []
-
-    objects = qs.filter(id__in=pks).extra(
+        return qs.none()
+    return qs.filter(id__in=pks).extra(
             select={'_manual': 'FIELD(%s, %s)'
                 % (pk_name, ','.join(map(str, pks)))},
             order_by=['_manual'])
 
-    return objects
+
+class BlobField(models.Field):
+    """MySQL blob column.
+
+    This is for using AES_ENCYPT() to store values.
+    It could maybe turn into a fancy transparent encypt/decrypt field
+    like http://djangosnippets.org/snippets/2489/
+    """
+    description = "blob"
+
+    def db_type(self, **kw):
+        return 'blob'
+
+
+class FakeEmail(ModelBase):
+    message = models.TextField()
+
+    class Meta:
+        db_table = 'fake_email'

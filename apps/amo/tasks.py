@@ -1,22 +1,21 @@
 import datetime
-import time
 
 from django.conf import settings
 
 import commonware.log
-import celery.signals
-import redisutils
 import phpserialize
 from celeryutils import task
 from hera.contrib.django_utils import flush_urls
-from statsd import statsd
 
 import amo
+from abuse.models import AbuseReport
 from addons.models import Addon
+from amo.decorators import set_task_user
 from applications.models import Application, AppVersion
 from bandwagon.models import Collection
-from devhub.models import ActivityLog, LegacyAddonLog
-from editors.models import EventLog
+from devhub.models import ActivityLog, AppLog, LegacyAddonLog
+from editors.models import EscalationQueue, EventLog
+from market.models import Refund
 from reviews.models import Review
 from stats.models import Contribution
 
@@ -64,7 +63,7 @@ def set_modified_on_object(obj, **kw):
 def delete_logs(items, **kw):
     log.info('[%s@%s] Deleting logs' % (len(items), delete_logs.rate_limit))
     ActivityLog.objects.filter(pk__in=items).exclude(
-            action__in=amo.LOG_KEEP).delete()
+        action__in=amo.LOG_KEEP).delete()
 
 
 @task
@@ -72,7 +71,7 @@ def delete_stale_contributions(items, **kw):
     log.info('[%s@%s] Deleting stale contributions' %
              (len(items), delete_stale_contributions.rate_limit))
     Contribution.objects.filter(
-            transaction_id__isnull=True, pk__in=items).delete()
+        transaction_id__isnull=True, pk__in=items).delete()
 
 
 @task
@@ -126,52 +125,81 @@ def migrate_editor_eventlog(items, **kw):
                 log.warning("Couldn't find review for %d" % item.changed_id)
 
 
-class TaskStats(object):
-    prefix = 'celery:tasks:stats'
-    pending = prefix + ':pending'
-    failed = prefix + ':failed'
-    run = prefix + ':run'
-    timer = prefix + ':timer'
+@task
+@set_task_user
+def find_abuse_escalations(addon_id, **kw):
+    weekago = datetime.date.today() - datetime.timedelta(days=7)
+    add_to_queue = True
 
-    @property
-    def redis(self):
-        # Keep this in a property so it's evaluated at runtime.
-        return redisutils.connections['master']
+    for abuse in AbuseReport.recent_high_abuse_reports(1, weekago, addon_id):
+        if EscalationQueue.objects.filter(addon=abuse.addon).exists():
+            # App is already in the queue, no need to re-add it.
+            log.info(u'[addon:%s] High abuse reports, but already escalated' %
+                     (abuse.addon,))
+            add_to_queue = False
 
-    def on_sent(self, sender, **kw):
-        # sender is the name of the task (like "amo.tasks.ok").
-        # id in here.
-        self.redis.hincrby(self.pending, sender, 1)
-        self.redis.hset(self.timer, kw['id'], time.time())
+        # We have an abuse report... has it been detected and dealt with?
+        logs = (AppLog.objects.filter(
+            activity_log__action=amo.LOG.ESCALATED_HIGH_ABUSE.id,
+            addon=abuse.addon).order_by('-created'))
+        if logs:
+            abuse_since_log = AbuseReport.recent_high_abuse_reports(
+                1, logs[0].created, addon_id)
+            # If no abuse reports have happened since the last logged abuse
+            # report, do not add to queue.
+            if not abuse_since_log:
+                log.info(u'[addon:%s] High abuse reports, but none since last '
+                         u'escalation' % abuse.addon)
+                continue
 
-    def on_postrun(self, sender, **kw):
-        # sender is the task object. task_id in here.
-        pending = self.redis.hincrby(self.pending, sender.name, -1)
-        # Clamp pending at 0. Tasks could be coming in before we started
-        # tracking.
-        if pending < 0:
-            self.redis.hset(self.pending, sender.name, 0)
-        self.redis.hincrby(self.run, sender.name, 1)
-
-        start = self.redis.hget(self.timer, kw['task_id'])
-        if start:
-            t = (time.time() - float(start)) * 1000
-            statsd.timing('tasks.%s' % sender.name, int(t))
-
-    def on_failure(self, sender, **kw):
-        # sender is the task object.
-        self.redis.hincrby(self.failed, sender.name, 1)
-
-    def stats(self):
-        get = self.redis.hgetall
-        return get(self.pending), get(self.failed), get(self.run)
-
-    def clear(self):
-        for name in self.pending, self.failed, self.run, self.timer:
-            self.redis.delete(name)
+        # If we haven't bailed out yet, escalate this app.
+        msg = u'High number of abuse reports detected'
+        if add_to_queue:
+            EscalationQueue.objects.create(addon=abuse.addon)
+        amo.log(amo.LOG.ESCALATED_HIGH_ABUSE, abuse.addon,
+                abuse.addon.current_version, details={'comments': msg})
+        log.info(u'[addon:%s] %s' % (abuse.addon, msg))
 
 
-task_stats = TaskStats()
-celery.signals.task_sent.connect(task_stats.on_sent)
-celery.signals.task_postrun.connect(task_stats.on_postrun)
-celery.signals.task_failure.connect(task_stats.on_failure)
+@task
+@set_task_user
+def find_refund_escalations(addon_id, **kw):
+    try:
+        addon = Addon.objects.get(pk=addon_id)
+    except Addon.DoesNotExist:
+        log.info(u'[addon:%s] Task called but no addon found.' % addon_id)
+        return
+
+    refund_threshold = 0.05
+    weekago = datetime.date.today() - datetime.timedelta(days=7)
+    add_to_queue = True
+
+    ratio = Refund.recent_refund_ratio(addon.id, weekago)
+    if ratio > refund_threshold:
+        if EscalationQueue.objects.filter(addon=addon).exists():
+            # App is already in the queue, no need to re-add it.
+            log.info(u'[addon:%s] High refunds, but already escalated' % addon)
+            add_to_queue = False
+
+        # High refunds... has it been detected and dealt with already?
+        logs = (AppLog.objects.filter(
+            activity_log__action=amo.LOG.ESCALATED_HIGH_REFUNDS.id,
+            addon=addon).order_by('-created', '-id'))
+        if logs:
+            since_ratio = Refund.recent_refund_ratio(addon.id, logs[0].created)
+            # If not high enough ratio since the last logged, do not add to
+            # the queue.
+            if not since_ratio > refund_threshold:
+                log.info(u'[addon:%s] High refunds, but not enough since last '
+                         u'escalation. Ratio: %.0f%%' % (addon,
+                                                         since_ratio * 100))
+                return
+
+        # If we haven't bailed out yet, escalate this app.
+        msg = u'High number of refund requests (%.0f%%) detected.' % (
+            (ratio * 100),)
+        if add_to_queue:
+            EscalationQueue.objects.create(addon=addon)
+        amo.log(amo.LOG.ESCALATED_HIGH_REFUNDS, addon,
+                addon.current_version, details={'comments': msg})
+        log.info(u'[addon:%s] %s' % (addon, msg))

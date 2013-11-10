@@ -1,11 +1,15 @@
-from datetime import datetime
+from datetime import datetime, timedelta
+
 from django import http
+from django.conf import settings
+from django.core.exceptions import PermissionDenied
 
 import mock
+from nose import SkipTest
 from nose.tools import eq_
-import test_utils
 
-from amo import decorators
+import amo.tests
+from amo import decorators, get_user, set_user
 from amo.urlresolvers import reverse
 
 from users.models import UserProfile
@@ -30,6 +34,7 @@ def test_json_view():
     assert isinstance(response, http.HttpResponse)
     eq_(response.content, '{"x": 1}')
     eq_(response['Content-Type'], 'application/json')
+    eq_(response.status_code, 200)
 
 
 def test_json_view_normal_response():
@@ -47,6 +52,46 @@ def test_json_view_error():
     assert isinstance(response, http.HttpResponseBadRequest)
     eq_(response.content, '{"msg": "error"}')
     eq_(response['Content-Type'], 'application/json')
+
+
+def test_json_view_status():
+    f = lambda r: {'x': 1}
+    response = decorators.json_view(f, status_code=202)(mock.Mock())
+    eq_(response.status_code, 202)
+
+
+def test_json_view_response_status():
+    response = decorators.json_response({'msg': 'error'}, status_code=202)
+    eq_(response.content, '{"msg": "error"}')
+    eq_(response['Content-Type'], 'application/json')
+    eq_(response.status_code, 202)
+
+
+@mock.patch('django.db.transaction.commit_on_success')
+def test_write(commit_on_success):
+    # Until we can figure out celery.delay issues.
+    raise SkipTest
+
+    @decorators.write
+    def some_func():
+        pass
+    assert not commit_on_success.called
+    some_func()
+    assert commit_on_success.called
+
+
+class TestTaskUser(amo.tests.TestCase):
+    fixtures = ['base/users']
+
+    def test_set_task_user(self):
+        @decorators.set_task_user
+        def some_func():
+            return get_user()
+
+        set_user(UserProfile.objects.get(username='regularuser'))
+        eq_(get_user().pk, 999)
+        eq_(some_func().pk, int(settings.TASK_USER_ID))
+        eq_(get_user().pk, 999)
 
 
 class TestLoginRequired(object):
@@ -82,11 +127,11 @@ class TestLoginRequired(object):
     def test_no_redirect_success(self):
         func = decorators.login_required(redirect=False)(self.f)
         self.request.user.is_authenticated.return_value = True
-        response = func(self.request)
+        func(self.request)
         assert self.f.called
 
 
-class TestSetModifiedOn(test_utils.TestCase):
+class TestSetModifiedOn(amo.tests.TestCase):
     fixtures = ['base/users']
 
     @decorators.set_modified_on
@@ -101,8 +146,39 @@ class TestSetModifiedOn(test_utils.TestCase):
                 datetime.today().date())
 
     def test_not_set_modified_on(self):
-        users = list(UserProfile.objects.all()[:3])
+        yesterday = datetime.today() - timedelta(days=1)
+        qs = UserProfile.objects.all()
+        qs.update(modified=yesterday)
+        users = list(qs[:3])
         self.some_method(False, set_modified_on=users)
         for user in users:
             date = UserProfile.objects.get(pk=user.pk).modified.date()
             assert date < datetime.today().date()
+
+
+class TestPermissionRequired(amo.tests.TestCase):
+
+    def setUp(self):
+        self.f = mock.Mock()
+        self.f.__name__ = 'function'
+        self.request = mock.Mock()
+
+    @mock.patch('access.acl.action_allowed')
+    def test_permission_not_allowed(self, action_allowed):
+        action_allowed.return_value = False
+        func = decorators.permission_required('', '')(self.f)
+        with self.assertRaises(PermissionDenied):
+            func(self.request)
+
+    @mock.patch('access.acl.action_allowed')
+    def test_permission_allowed(self, action_allowed):
+        action_allowed.return_value = True
+        func = decorators.permission_required('', '')(self.f)
+        func(self.request)
+        assert self.f.called
+
+    @mock.patch('access.acl.action_allowed')
+    def test_permission_allowed_correctly(self, action_allowed):
+        func = decorators.permission_required('Admin', '%')(self.f)
+        func(self.request)
+        action_allowed.assert_called_with(self.request, 'Admin', '%')

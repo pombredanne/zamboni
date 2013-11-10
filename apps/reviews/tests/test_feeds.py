@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 import mock
-import test_utils
 from nose.tools import eq_
 
+import amo.tests
 from reviews import feeds
 from translations.models import Translation
 
 
-class FeedTest(test_utils.TestCase):
+class FeedTest(amo.tests.TestCase):
     # Rub some unicode all over the reviews feed.
 
     def setUp(self):
@@ -19,9 +19,7 @@ class FeedTest(test_utils.TestCase):
         self.addon.name = self.wut
 
         self.user = mock.Mock()
-        self.user.username = None
-        self.user.firstname = self.u
-        self.user.lastname = self.u
+        self.user.name = self.u
 
         self.review = mock.Mock()
         self.review.title = self.wut
@@ -40,8 +38,7 @@ class FeedTest(test_utils.TestCase):
         eq_(self.feed.item_title(self.review), self.u)
 
     def test_item_author_name(self):
-        eq_(self.feed.item_author_name(self.review),
-            '%s %s' % (self.u, self.u))
+        eq_(self.feed.item_author_name(self.review), self.u)
 
         self.user.username = self.u
         eq_(self.feed.item_author_name(self.review), self.u)

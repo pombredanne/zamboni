@@ -104,106 +104,13 @@ p.install-button {
     font-size: 120%;
 }
 
-.section-teaser .item {
-    margin: 0;
-    padding-top: 1em;
-}
-
-.section-teaser .slideshow-controls {
-    margin:-38px 0 0;
-}
-.section-teaser .addon-view .column {
-    width: 31%;
-}
-.section-teaser .addon-view .lead {
-    padding-top: 1em;
-    margin-bottom: 1em;
-    margin-left: 4.5em;
-}
-.html-rtl .section-teaser .addon-view .lead {
-    margin-left: auto;
-    margin-right: 4.5em;
-}
-
-.section-teaser .addon-view h3 {
-    margin-bottom: 0.2em;
-}
-
-.section-teaser .teaser-header ol li {
-    margin-right: 2.5em;
-}
-
-.html-rtl .section-teaser .window ol.teaser-items {
-    direction: rtl;
-    left: auto;
-    right: 0;
-}
-
 .html-rtl .column {
     float: right;
     margin-left: 0;
     margin-right: 2%;
 }
-.html-rtl .section-teaser .column {
-    border-left: none;
-    border-right: 1px dotted #A4CFDE;
-}
 .html-rtl .first {
     margin-right: 0;
-}
-.html-rtl .section-teaser .first {
-    border-right: none;
-}
-.html-rtl .section-teaser .addon-view {
-    background-position: left bottom;
-}
-.html-rtl .section-teaser .addon-view .column {
-    border: none;
-    text-align: right;
-}
-.html-rtl .section-teaser .addon-view .column-inner {
-    padding-left: 0;
-    padding-right: 55px;
-}
-.html-rtl .section-teaser .column p, .html-rtl .section-teaser .column h3 {
-    margin-left: 0;
-    margin-right: 1em;
-}
-.html-rtl .section-teaser .column p.install-button {
-    margin-right: 0;
-}
-.html-rtl .section-teaser .teaser-header ol li {
-    margin-left: 5em;
-    margin-right: 0;
-    float: right;
-}
-.html-rtl .section-teaser .teaser-header ol li:last-child {
-    margin-left: 0;
-}
-.html-rtl .section-teaser .prev,
-.html-rtl .section-teaser .next {
-    right: auto;
-    left: 8px;
-    background-position: 0 0;
-}
-.html-rtl .section-teaser .prev {
-    left: auto;
-    right: 8px;
-    background-position: 0 -150px;
-}
-.html-rtl .section-teaser .active.next {
-    background-position: 0 -50px;
-}
-.html-rtl .section-teaser .active.prev {
-    background-position: 0 -200px;
-}
-.html-rtl .section-teaser .active.next:focus,
-.html-rtl .section-teaser .active.next:hover {
-    background-position: 0 -100px;
-}
-.html-rtl .section-teaser .active.prev:focus,
-.html-rtl .section-teaser .active.prev:hover {
-    background-position: 0 -250px;
 }
 
 /* Email links */
@@ -1028,87 +935,6 @@ div.collector-firstrun-favorite {
     clear: right;
 }
 
-/* RTL support for the aux-nav box */
-.html-rtl #aux-nav p.context {
-    float: left;
-    padding-right: auto;
-    padding-left: 1em;
-    right: auto;
-    left: 0;
-}
-.html-rtl #aux-nav ul {
-    float: left;
-    padding-right: auto;
-}
-.html-rtl #aux-nav span.greeting {
-    margin-right: auto;
-    margin-left: 1em;
-}
-.html-rtl #aux-nav .settings {
-    margin-right: auto;
-    margin-left: 1em;
-}
-.html-rtl #aux-nav > ul {
-    padding: 0;
-    background-position: top left;
-    border-right: none;
-    border-left: 3px solid transparent;
-}
-.html-rtl #aux-nav > ul li {
-    margin-left: auto;
-    margin-right: 1em;
-}
-.html-rtl #aux-nav > ul li {
-    background-position: top right;
-    margin-left: 0;
-    margin-right: 0;
-}
-.html-rtl #aux-nav > ul li li {
-    background-position: top right;
-}
-.html-rtl #aux-nav > ul li ul li {
-    text-align: right;
-}
-.html-rtl #aux-nav > ul li ul li a {
-    background-position: top right;
-    padding-left: 0.3em;
-}
-.html-rtl #aux-nav ul.change li ul li a {
-    padding-right: 45px;
-}
-.html-rtl #aux-nav > ul li ul li.firefox a {
-    background-position: 95% 0;
-}
-.html-rtl #aux-nav > ul li ul li.thunderbird a {
-    background-position: 95% -50px;
-}
-.html-rtl #aux-nav > ul li ul li.sunbird a {
-    background-position: 95% -100px;
-}
-.html-rtl #aux-nav > ul li ul li.seamonkey a {
-    background-position: 95% -150px;
-}
-.html-rtl #aux-nav > ul a.controller:link,
-.html-rtl #aux-nav > ul a.controller:visited,
-.html-rtl #aux-nav > ul a.controller:focus,
-.html-rtl #aux-nav > ul a.controller:hover,
-.html-rtl #aux-nav > ul a.controller:active {
-    padding-left: 20px;
-    padding-right: 1em;
-    background-position: 5% -65px;
-}
-.html-rtl #aux-nav > ul a.controller:focus,
-.html-rtl #aux-nav > ul a.controller:hover,
-.html-rtl #aux-nav > ul a.controller:active {
-    background-position: 5% -105px;
-}
-.html-rtl #aux-nav > ul ul {
-    right: auto;
-    left: -3px;
-    border-right: none;
-    border-left: 3px solid #A2C2D7;
-}
-
 /** Frozen button styles **/
 .exp-loggedout .button.positive:link,
 .exp-loggedout .button.positive:visited,
@@ -1148,7 +974,7 @@ a:focus.button.negative {
 }
 
 .item h3, .item h4 {
-    overflow: visible;
+    word-wrap: break-word;
 }
 
 /** END Adding focus outlines to buttons **/
@@ -1507,19 +1333,17 @@ html[xmlns] .clearfix {
     padding-right: 20px;
 }
 
-.addon-collections li .collectionitem,
-.collection-add > span,
-#addons-edit p strong {
-	padding-left: 22px;
-	background-image: url(../../img/icons/icons.png);
-	background-repeat: no-repeat;
-	background-position: 0px -300px;
+.collectionitem,
+.collection-add strong {
+    padding-left: 22px;
+    background: url(../../img/icons/icons.png) no-repeat 0 -300px;
 }
 
-.html-rtl .addon-collections li .collectionitem {
-	padding-right: 20px;
-	padding-left: 0;
-	background-position: 100% -300px;
+.html-rtl .collectionitem,
+.html-rtl .collection-add strong {
+    background-position: 100% -300px;
+    display: inline-block;
+    padding: 0 20px 0 0;
 }
 
 .addon-otheraddons li .addonitem {
@@ -1817,7 +1641,7 @@ html[xmlns] .clearfix {
 
 .html-rtl .barometer .upvotes {
     padding: 0 1.2em 0 0; /* Space for the image. */
-    margin: 0 0 0 0.2em; /* Space between number and bar. */
+    margin: 0 0 0 .2em; /* Space between number and bar. */
     background-position: right 32.5%;
 }
 

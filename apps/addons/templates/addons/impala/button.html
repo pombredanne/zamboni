@@ -4,18 +4,12 @@
 
 <div class="install-shell">
 <div class="install {{ b.install_class|join(' ') }}"
-     data-addon="{{ addon.id }}"
-     data-icon="{{ addon.icon_url }}"
-     data-developers="{{ addon.meet_the_dev_url() }}"
-     data-name="{{ addon.name }}"
-     {{ b.attrs()|xmlattr }}
-  {% if compat %}
-     data-min="{{ compat.min.version }}"
-     data-max="{{ compat.max.version }}"
-  {% endif %}>
+     {% include 'addons/includes/button_data_attributes.html' %}>
   <p class="install-button">
     {% set links = b.links() %}
-    {% if not links %}
+    {% if b.is_premium and not b.can_be_purchased %}
+      {{ _('Not ready for purchase.') }}
+    {% elif not links %}
       {{ _('No compatible versions') }}
     {% endif %}
     {% if settings.ADD_TO_MOBILE %}
@@ -40,27 +34,7 @@
     {% endif %}
     {% for link in links %}
       {% set extra = "platform " + link.os.shortname if link.os else "" %}
-      <a class="button {{ b.button_class|join(' ') }} {{ extra }}"
-         data-hash="{{ link.file.hash }}"
-         {% if b.show_warning %}
-           href="{{ b.addon.get_url_path() }}"
-           data-realurl="{{ link.url }}"
-         {% else %}
-           href="{{ link.url }}"
-         {% endif %}>
-        <b></b>
-        <span>
-          {{ link.text }}
-          {% if link.os %}
-            <span class="os" data-os="{{ link.os.name }}">
-              {% if not (b.show_eula or b.show_contrib) %}
-                {# L10n: {0} is a platform name like Windows or Mac OS X. #}
-                {{ _('for {0}')|f(link.os.name) }}
-              {% endif %}
-            </span>
-          {% endif %}
-        </span>
-      </a>
+      {% include 'addons/includes/install_button.html' %}
     {% endfor %}
   </p>
 </div> {# install #}
@@ -68,22 +42,46 @@
 {% if b.detailed %}
   {% if addon.privacy_policy %}
     <a class="privacy-policy badge" href="{{ url('addons.privacy', addon.slug) }}">
-      <strong>{{ _('Privacy Policy') }}</strong>
+      {{ _('Privacy Policy') }}
     </a>
   {% endif %}
 
   {% if addon.is_unreviewed() %}
-    <p class="warning">{% trans url=url('pages.faq') + "#unreviewed" %}
-      This add-on has not been reviewed by Mozilla.
-      <a href="{{ url }}">Learn more</a>
-    {% endtrans %} </p>
+    <p class="warning">
+      {% if addon.is_webapp() %}
+        {% trans url=url('pages.faq') + "#unreviewed" %}
+          This app has not been reviewed by Mozilla.
+          <a href="{{ url }}">Learn more</a>
+        {% endtrans %}
+      {% else %}
+        {% trans url=url('pages.faq') + "#unreviewed" %}
+          This add-on has not been reviewed by Mozilla.
+          <a href="{{ url }}">Learn more</a>
+        {% endtrans %}
+      {% endif %}
+    </p>
   {% elif b.lite %}
     <p class="warning">{% trans url=url('pages.faq') + "#preliminary" %}
       This add-on has been preliminarily reviewed by Mozilla.
       <a href="{{ url }}">Learn more</a>
     {% endtrans %} </p>
-  {% elif addon.is_selfhosted() %}
-    <p class="warning">{{ _("This add-on is hosted on the developer's own website and has not been reviewed by Mozilla.") }}</p>
   {% endif %}
 {% endif %}
+
+{% if version.is_compatible %}
+  {% with reasons=version.is_compatible[1] %}
+    <div class="d2c-reasons-popup popup">
+      <p>{% trans app=APP.pretty %}
+        This add-on is not compatible with your version of {{ app }} because of
+        the following:
+      {% endtrans %}</p>
+      <ul>{% for reason in reasons %}<li>{{ reason }}</li>{% endfor %}</ul>
+    </div>
+  {% endwith %}
+{% endif %}
+
 </div> {# install-shell #}
+
+{% if addon.is_webapp() %}
+  {% include 'addons/includes/apps_error_msg.html' %}
+{% endif %}

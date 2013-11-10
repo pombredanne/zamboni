@@ -1,16 +1,17 @@
+from django.contrib.auth.models import User
 from django.http import HttpRequest
 
 import mock
-from nose.tools import assert_false, eq_
-from test_utils import TestCase
+from nose.tools import assert_false
 
 import amo
+from amo.tests import TestCase, req_factory_factory
 from amo.urlresolvers import reverse
 from addons.models import Addon, AddonUser
-from cake.models import Session
 from users.models import UserProfile
 
-from .acl import match_rules, action_allowed, check_addon_ownership
+from .acl import (action_allowed, check_addon_ownership, check_ownership,
+                  check_reviewer, match_rules)
 
 
 def test_match_rules():
@@ -18,7 +19,8 @@ def test_match_rules():
     Unit tests for the match_rules method.
     """
 
-    rules = ('*:*',
+    rules = (
+        '*:*',
         'Editors:*,Admin:EditAnyAddon,Admin:flagged,Admin:addons,'
         'Admin:EditAnyCollection',
         'Tests:*,Admin:serverstatus,Admin:users',
@@ -34,12 +36,23 @@ def test_match_rules():
         'Admin:*',
         'Admin:Foo',
         'Admin:Bar',
-        )
+    )
 
     for rule in rules:
         assert match_rules(rule, 'Admin', '%'), "%s != Admin:%%" % rule
 
-    rules = ('Doctors:*',)
+    rules = (
+        'Doctors:*',
+        'Stats:View',
+        'CollectionStats:View',
+        'Addons:Review',
+        'Apps:Review',
+        'Personas:Review',
+        'Locales:Edit',
+        'Locale.de:Edit',
+        'Reviews:Edit',
+        'None:None',
+    )
 
     for rule in rules:
         assert not match_rules(rule, 'Admin', '%'), \
@@ -53,37 +66,11 @@ def test_anonymous_user():
 
 
 class ACLTestCase(TestCase):
-    """
-    Test some basic ACLs by going to various locked pages on AMO.
-    """
-
+    """Test some basic ACLs by going to various locked pages on AMO."""
     fixtures = ['access/login.json']
 
     def test_admin_login_anon(self):
-        """
-        Login form for anonymous user on the admin page.
-        """
-        url = '/en-US/admin/models/'
-        r = self.client.get(url)
-        self.assertRedirects(r, '%s?to=%s' % (reverse('users.login'), url))
-
-    def test_admin_login_adminuser(self):
-        """
-        No form should be present for an admin
-        """
-        c = self.client
-        session = Session.objects.get(pk='1234')
-        c.login(session=session)
-        response = c.get('/en-US/admin/models/')
-        assert response.context['user'].is_authenticated()
-        self.assertNotContains(response, 'login-form')
-
-    def test_admin_login(self):
-        """
-        Non admin user should see a login form.
-        """
-        session = Session.objects.get(pk='4567')
-        self.client.login(session=session)
+        # Login form for anonymous user on the admin page.
         url = '/en-US/admin/models/'
         r = self.client.get(url)
         self.assertRedirects(r, '%s?to=%s' % (reverse('users.login'), url))
@@ -117,15 +104,36 @@ class TestHasPerm(TestCase):
         self.request.amo_user = self.login_admin()
         self.request.groups = self.request.amo_user.groups.all()
         assert check_addon_ownership(self.request, self.addon)
+        assert check_addon_ownership(self.request, self.addon, admin=True)
+        assert not check_addon_ownership(self.request, self.addon, admin=False)
+
+    def test_require_author(self):
+        assert check_ownership(self.request, self.addon, require_author=True)
+
+    def test_require_author_when_admin(self):
+        self.request.amo_user = self.login_admin()
+        self.request.groups = self.request.amo_user.groups.all()
+        assert check_ownership(self.request, self.addon, require_author=False)
+
+        assert not check_ownership(self.request, self.addon,
+                                   require_author=True)
 
     def test_disabled(self):
         self.addon.update(status=amo.STATUS_DISABLED)
         assert not check_addon_ownership(self.request, self.addon)
         self.test_admin()
 
+    def test_deleted(self):
+        self.addon.update(status=amo.STATUS_DELETED)
+        assert not check_addon_ownership(self.request, self.addon)
+        self.request.amo_user = self.login_admin()
+        self.request.groups = self.request.amo_user.groups.all()
+        assert not check_addon_ownership(self.request, self.addon)
+
     def test_ignore_disabled(self):
         self.addon.update(status=amo.STATUS_DISABLED)
-        assert check_addon_ownership(self.request, self.addon, ignore_disabled=True)
+        assert check_addon_ownership(self.request, self.addon,
+                                     ignore_disabled=True)
 
     def test_owner(self):
         assert check_addon_ownership(self.request, self.addon)
@@ -135,6 +143,10 @@ class TestHasPerm(TestCase):
         assert not check_addon_ownership(self.request, self.addon)
 
         self.au.role = amo.AUTHOR_ROLE_VIEWER
+        self.au.save()
+        assert not check_addon_ownership(self.request, self.addon)
+
+        self.au.role = amo.AUTHOR_ROLE_SUPPORT
         self.au.save()
         assert not check_addon_ownership(self.request, self.addon)
 
@@ -149,6 +161,10 @@ class TestHasPerm(TestCase):
         self.au.save()
         assert not check_addon_ownership(self.request, self.addon, dev=True)
 
+        self.au.role = amo.AUTHOR_ROLE_SUPPORT
+        self.au.save()
+        assert not check_addon_ownership(self.request, self.addon, dev=True)
+
     def test_viewer(self):
         assert check_addon_ownership(self.request, self.addon, viewer=True)
 
@@ -159,3 +175,64 @@ class TestHasPerm(TestCase):
         self.au.role = amo.AUTHOR_ROLE_VIEWER
         self.au.save()
         assert check_addon_ownership(self.request, self.addon, viewer=True)
+
+        self.au.role = amo.AUTHOR_ROLE_SUPPORT
+        self.au.save()
+        assert check_addon_ownership(self.request, self.addon, viewer=True)
+
+    def test_support(self):
+        assert check_addon_ownership(self.request, self.addon, viewer=True)
+
+        self.au.role = amo.AUTHOR_ROLE_DEV
+        self.au.save()
+        assert not check_addon_ownership(self.request, self.addon,
+                                         support=True)
+
+        self.au.role = amo.AUTHOR_ROLE_VIEWER
+        self.au.save()
+        assert not check_addon_ownership(self.request, self.addon,
+                                         support=True)
+
+        self.au.role = amo.AUTHOR_ROLE_SUPPORT
+        self.au.save()
+        assert check_addon_ownership(self.request, self.addon, support=True)
+
+
+class TestCheckReviewer(TestCase):
+    fixtures = ['base/user_2519']
+
+    def setUp(self):
+        self.user = UserProfile.objects.get()
+        self.user.user = User.objects.get()
+        self.user.save()
+
+    def test_no_perm(self):
+        req = req_factory_factory('noop', user=self.user)
+        assert not check_reviewer(req)
+        assert not check_reviewer(req, only='app')
+        assert not check_reviewer(req, only='addon')
+        assert not check_reviewer(req, only='persona')
+
+    def test_perm_apps(self):
+        self.grant_permission(self.user, 'Apps:Review')
+        req = req_factory_factory('noop', user=self.user)
+        assert check_reviewer(req)
+        assert check_reviewer(req, only='app')
+        assert not check_reviewer(req, only='addon')
+        assert not check_reviewer(req, only='persona')
+
+    def test_perm_addons(self):
+        self.grant_permission(self.user, 'Addons:Review')
+        req = req_factory_factory('noop', user=self.user)
+        assert check_reviewer(req)
+        assert not check_reviewer(req, only='app')
+        assert check_reviewer(req, only='addon')
+        assert not check_reviewer(req, only='persona')
+
+    def test_perm_themes(self):
+        self.grant_permission(self.user, 'Personas:Review')
+        req = req_factory_factory('noop', user=self.user)
+        assert check_reviewer(req)
+        assert not check_reviewer(req, only='app')
+        assert not check_reviewer(req, only='addon')
+        assert check_reviewer(req, only='persona')

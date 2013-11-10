@@ -1,24 +1,137 @@
+#file-viewer, #files-wrapper, #file-viewer table tr td {
+    /* The file viewer currently completely falls apart in RTL mode.
+       The contents also tend to be formatted for LTR regardless of
+       locale. */
+    direction: ltr;
+    text-align: left;
+}
+.html-rtl #files,
+.html-rtl h4,
+.html-rtl #diff-wrapper + * {
+    direction: rtl;
+    text-align: right;
+}
+
+#breadcrumbs-wrapper {
+    padding-top: .5em;
+    clear: both;
+}
+
+#breadcrumbs-wrapper .breadcrumbs {
+    clear: left;
+}
+
+#diff-selector {
+    float: right;
+    margin-bottom: .5em;
+}
+
 #file-viewer div.featured-inner {
     padding: 1em;
 }
 
+#file-viewer-inner {
+    position: relative;
+    min-height: 40em;
+}
+
 #files {
-    width: 20%;
     display: block;
-    float: left;
+    position: absolute;
+    width: 20em;
+    z-index: 2;
 }
 
 #files li a {
     display: inline-block;
-    padding: 2px 20px;
+    padding: 1px 1px 2px 20px;
 }
 
 #files ul.root {
-    overflow-x: auto;
+    white-space: nowrap;
+    overflow: visible;
 }
 
 #files ul.root ul {
     padding-left: 20px;
+}
+
+#files-inner {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 100%;
+}
+
+#files-wrapper {
+    max-height: 100%;
+    overflow: auto;
+}
+
+#content-wrapper, #messages, #thinking {
+    padding-left: 23em;
+}
+
+#controls {
+    height: 0;
+}
+
+#controls-inner {
+    padding-bottom: .5em;
+}
+
+.collapsed-files #files {
+    width: 2em;
+}
+
+.collapsed-files #content-wrapper, .collapsed-files #messages, .collapsed-collapsed #thinking {
+    padding-left: 3em;
+}
+
+.collapsed-files #files-wrapper {
+    height: 1.8em;
+    width: 1.8em;
+    overflow: visible;
+    background: url(../../img/developers/folder.png) no-repeat center center;
+}
+
+.collapsed-files #files-wrapper:hover {
+    border-top: 1px solid #000;
+    margin-top: -1px;
+}
+
+.collapsed-files #files-wrapper:hover > #files-tree {
+    display: block;
+    background: #fff;
+    position: absolute;
+    margin: -1px 0 0 1.8em;
+    max-height: 100%;
+    overflow-y: auto;
+    padding-left: 1em;
+    width: 20em;
+    border: 1px solid #000;
+    border-left: none;
+    border-radius: 0 1em 1em 0;
+}
+
+.collapsed-files #files-tree {
+    display: none;
+}
+
+.collapsed-files .command,
+.collapsed-files #toggle-known-container,
+.collapsed-files #jetpack-version,
+.collapsed-files #tab-stops-container {
+    display: none !important;
+}
+
+.collapsed-files #files {
+    padding-bottom: 0 !important;
+}
+
+/* Hack to find the default font's em width. */
+#metadata {
+    width: 1em;
 }
 
 /* The following fixes the minimum width and makes
@@ -30,19 +143,16 @@ body.file-viewer div.section {
 .syntaxhighlighter .line {
     display: block;
     white-space: pre;
-    max-width: 58em;
+    max-width: 54em;
 }
 
-.full .syntaxhighlighter .line {
-    max-width: 80em;
+.collapsed-files .syntaxhighlighter .line {
+    max-width: 73em;
 }
 
-#content-wrapper, #thinking {
-    padding-left: 25%;
-}
-
-#content-wrapper.full, #thinking.full {
-    padding-left: 0;
+#validating {
+    text-align: center;
+    margin-bottom: 1em;
 }
 
 span.number {
@@ -72,8 +182,12 @@ div.diff-bar .delete, #diff td.code div.delete, #diff td.code div.delete .conten
     color: #444444;
 }
 
-#diff .syntaxhighlighter, #diff table {
+.syntaxhighlighter, .syntaxhighlighter table {
     margin: 0;
+}
+
+#diff-wrapper {
+    margin-bottom: 1em;
 }
 
 a.closed {
@@ -84,16 +198,96 @@ a.open {
     background: url('../../img/icons/minus.gif') 0 no-repeat;
 }
 
-a.diff {
+#files a > span {
+    -moz-boder-radius: 4px;
+    border-radius: 4px;
+    padding: 3px;
+}
+
+a.diff > span {
     background-color: #ffffcc;
+}
+
+a.known > span {
+    color: #bbb;
+}
+
+.hide-known-files .known {
+    display: none !important;
+}
+
+#files a.notice, #files a.warning, #files a.error {
+    font-weight: bold;
+}
+
+#files a.notice > span:after,
+#files a.warning > span:after,
+#files a.error > span:after {
+    display: inline-block;
+    background: url(../../img/zamboni/notifications.png) no-repeat;
+    width: 16px;
+    height: 18px;
+    margin-left: 4px;
+    vertical-align: middle;
+    content: "\00a0";
+}
+
+#files a.notice > span:after {
+    background-position: 0px -516px;
+    width: 18px;
+    margin-left: 8px;
+}
+
+#files a.warning > span:after {
+    background-position: 2px -304px;
+}
+
+#files a.error > span:after {
+    background-position: 2px -162px;
+}
+
+a.selected > span {
+    background-color: #3D6DB5;
+    color: white;
+}
+
+.gutter a.notice, .gutter a.warning, .gutter a.error {
+    margin: -1px;
+    -moz-border-radius: 3px;
+    border-radius: 3px;
+    border: 1px solid #000;
+    font-weight: bold;
+}
+.code .notice, .code .warning, .code .error {
+    margin: -1px;
+}
+
+.gutter a.notice, .diff-bar .notice {
+    background-color: #1A81FE;
+    color: white;
+}
+.code .notice {
+    border: 1px dotted #1A81FE;
+}
+
+.gutter a.warning, .diff-bar .warning {
+    background-color: #F0B500;
+    color: white;
+}
+.code .warning {
+    border: 1px dotted #F0B500;
+}
+
+.gutter a.error, .diff-bar .error {
+    background-color: #D81E00;
+    color: white;
+}
+.code .error {
+    border: 1px dotted #D81E00;
 }
 
 div.diff-bar {
     margin-left: -1px;
-}
-
-a.selected {
-    background-color: #ddf8dd;
 }
 
 .waiting {
@@ -117,14 +311,19 @@ a.selected {
     padding: 0px 2px;
     border-radius: 2px;
     -moz-border-radius: 2px;
+    cursor: pointer;
 }
 
 #commands td {
-    padding: 0 0 0 1ex;
+    padding: 0 0 0 .5em;
 }
 
-#diff {
+#diff, #content {
     padding-left: 11px;
+}
+
+.diff-bar.js-hidden + #diff, .diff-bar.js-hidden + #content {
+    padding-left: 0;
 }
 
 #diff-wrapper {
@@ -140,7 +339,6 @@ td.gutter, td.code {
     border: 1px solid gray;
     width: 10px;
     position: absolute;
-    overflow: hidden;
     height: 200px;
 }
 
@@ -174,6 +372,89 @@ td.gutter, td.code {
     max-width: 100%;
 }
 
+#tooltip > span {
+    white-space: pre-wrap;
+    text-align: left;
+    max-width: 70ex;
+}
+
+
+.message {
+    display:none;
+
+    position: absolute;
+    padding-left: 10px;
+    top: -.2em;
+    left: 100%;
+
+    position: absolute;
+    z-index: 16385;
+    text-align: left;
+    font-size: 11px;
+}
+
+.diff-bar .message {
+    top: -.8em;
+    margin-top: -4px;
+}
+
+.message-inner {
+    position: relative;
+    padding: 0.5em 1em;
+
+    border: 1px solid #fff;
+    border-radius: .8em;
+    background: #2A4364;
+    color: white;
+    border-radius: .8em;
+    -moz-border-radius: .8em;
+    -webkit-border-radius: .8em;
+}
+
+.message a {
+    color: white;
+    font-weight: bold;
+    text-decoration: underline !important;
+}
+
+.message-inner > div {
+    line-height: 1.2em;
+    width: 70ex;
+    white-space: pre-wrap;
+}
+.message-inner > div + div {
+    margin-top: 1em;
+}
+
+.message p {
+    margin: 1em 0;
+}
+
+.message-inner:before {
+    content: "\00a0";
+    display: block; /* reduce the damage in FF3.0 */
+    position: absolute;
+    width: 0;
+    height: 0;
+    margin-top: -6px;
+    top: 1.1em;
+    left: -16px;
+    border: solid transparent;
+    border-width: 6px 9px;
+    border-right-color: #2A4364;
+    pointer-events: none;
+}
+
+.message-container {
+    position: relative;
+    overflow: visible !important;
+}
+
+.message-container:hover > .message {
+    display: block;
+}
+
+
 .number-combo {
     display: inline-block;
 }
@@ -194,9 +475,27 @@ td.gutter, td.code {
 
 .number-combo-button-up:hover,
 .number-combo-button-down:hover {
-    text-shadow: black 0 0 .01em;
+    text-shadow: #000 0 0 .01em;
 }
 
 #tab-stops-container {
     display: none;
+    margin: .5em 0;
+}
+
+#toggle-known-container {
+    margin-top: .3em;
+}
+
+#jetpack-version {
+    margin: .5em 0;
+}
+
+
+option.status-public {
+    font-weight: bold;
+}
+
+option.status-lite {
+    font-style: italic;
 }

@@ -2,15 +2,15 @@ import json
 
 from django.core.management import call_command
 from nose.tools import eq_
-import test_utils
 
 import amo
+import amo.tests
 from amo.helpers import url
 from applications.models import AppVersion, Application
 from applications.management.commands import dump_apps
 
 
-class TestAppVersion(test_utils.TestCase):
+class TestAppVersion(amo.tests.TestCase):
 
     def test_major_minor(self):
         """Check that major/minor/alpha is getting set."""
@@ -37,7 +37,7 @@ class TestAppVersion(test_utils.TestCase):
         eq_(v.minor3, None)
 
 
-class TestApplication(test_utils.TestCase):
+class TestApplication(amo.tests.TestCase):
     fixtures = ['applications/all_apps.json']
 
     def test_string_representation(self):
@@ -50,8 +50,8 @@ class TestApplication(test_utils.TestCase):
             eq_(unicode(model_app), unicode(static_app.pretty))
 
 
-class TestViews(test_utils.TestCase):
-    fixtures = ['base/appversion']
+class TestViews(amo.tests.TestCase):
+    fixtures = ['base/apps', 'base/appversion']
 
     def test_appversions(self):
         eq_(self.client.get(url('apps.appversions')).status_code, 200)
@@ -60,8 +60,8 @@ class TestViews(test_utils.TestCase):
         eq_(self.client.get(url('apps.appversions.rss')).status_code, 200)
 
 
-class TestCommands(test_utils.TestCase):
-    fixtures = ['applications/all_apps.json', 'base/appversion']
+class TestCommands(amo.tests.TestCase):
+    fixtures = ['applications/all_apps.json', 'base/apps', 'base/appversion']
 
     def test_dump_apps(self):
         call_command('dump_apps')
@@ -73,8 +73,6 @@ class TestCommands(test_utils.TestCase):
             data = apps[str(app.id)]
             versions = sorted([a.version for a in
                                AppVersion.objects.filter(application=app)])
-            if app.id == amo.FIREFOX.id:
-                versions.append(u'4.0.*') # bug 613234
             r_app = amo.APPS_ALL[app.id]
             eq_("%s: %r" % (r_app.short, sorted(data['versions'])),
                 "%s: %r" % (r_app.short, versions))

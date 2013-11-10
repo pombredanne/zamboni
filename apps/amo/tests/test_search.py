@@ -1,18 +1,60 @@
+from django.core import paginator
+
+import mock
+from nose import SkipTest
 from nose.tools import eq_
 
+import amo
+import amo.search
 import amo.tests
 from addons.models import Addon
 
 
-class TestES(amo.tests.ESTestCase):
-    es = True
+class TestESIndexing(amo.tests.ESTestCase):
+    mock_es = False
+    test_es = True
 
-    # This should go in a test for the cron.
+    # This needs to be in its own class for data isolation.
     def test_indexed_count(self):
         # Did all the right addons get indexed?
         eq_(Addon.search().filter(type=1, is_disabled=False).count(),
             Addon.objects.filter(disabled_by_user=False,
                                  status__in=amo.VALID_STATUSES).count())
+
+    def test_get_es_not_mocked(self):
+        es = amo.search.get_es()
+        assert not issubclass(es.__class__, mock.Mock)
+
+
+class TestNoESIndexing(amo.tests.TestCase):
+
+    mock_es = True
+
+    def test_no_es(self):
+        assert not getattr(self, 'es', False), (
+            'TestCase should not have "es" attribute')
+
+    def test_not_indexed(self):
+        raise SkipTest
+        addon = Addon.objects.create(type=amo.ADDON_EXTENSION,
+                                     status=amo.STATUS_PUBLIC)
+        assert issubclass(
+            Addon.search().filter(id__in=addon.id).count().__class__,
+            mock.Mock)
+
+    def test_get_es_mocked(self):
+        raise SkipTest
+        es = amo.search.get_es()
+        assert issubclass(es.__class__, mock.Mock)
+
+
+class TestES(amo.tests.ESTestCase):
+    test_es = True
+
+    @classmethod
+    def setUpClass(cls):
+        super(TestES, cls).setUpClass()
+        cls.setUpIndex()
 
     def test_clone(self):
         # Doing a filter creates a new ES object.
@@ -45,6 +87,16 @@ class TestES(amo.tests.ESTestCase):
         eq_(qs._build_query(), {'fields': ['id'],
                                 'query': {'term': {'type': 1}}})
 
+    def test_query_text(self):
+        qs = Addon.search().query(name__text='woo woo')
+        eq_(qs._build_query(), {'fields': ['id'],
+                                'query': {'match': {'name': 'woo woo'}}})
+
+    def test_query_match(self):
+        qs = Addon.search().query(name__match='woo woo')
+        eq_(qs._build_query(), {'fields': ['id'],
+                                'query': {'match': {'name': 'woo woo'}}})
+
     def test_query_multiple_and_range(self):
         qs = Addon.search().query(type=1, status__gte=1)
         eq_(qs._build_query(), {'fields': ['id'],
@@ -70,6 +122,15 @@ class TestES(amo.tests.ESTestCase):
                                         {'term': {'type': 1}},
                                         {'range': {'status': {'gte': 2}}},
                                     ]}}
+                                ]}}})
+
+    def test_query_fuzzy(self):
+        fuzz = {'boost': 2, 'value': 'woo'}
+        qs = Addon.search().query(or_=dict(type=1, status__fuzzy=fuzz))
+        eq_(qs._build_query(), {'fields': ['id'],
+                                'query': {'bool': {'should': [
+                                    {'fuzzy': {'status': fuzz}},
+                                    {'term': {'type': 1}},
                                 ]}}})
 
     def test_order_by_desc(self):
@@ -126,11 +187,16 @@ class TestES(amo.tests.ESTestCase):
 
     def test_iter(self):
         qs = Addon.search().filter(type=1, is_disabled=False)
-        eq_(len(qs), 4)
-        eq_(len(list(qs)), 4)
+        eq_(len(qs), len(list(qs)))
 
     def test_count(self):
         eq_(Addon.search().count(), 6)
+
+    def test_count_uses_cached_results(self):
+        qs = Addon.search()
+        qs._results_cache = mock.Mock()
+        qs._results_cache.count = mock.sentinel.count
+        eq_(qs.count(), mock.sentinel.count)
 
     def test_len(self):
         qs = Addon.search()
@@ -174,6 +240,12 @@ class TestES(amo.tests.ESTestCase):
         eq_(qs._build_query(), {'fields': ['id'],
                                 'filter': {'range': {'status': {'lt': 4}}}})
 
+    def test_range(self):
+        qs = Addon.search().filter(date__range=('a', 'b'))
+        eq_(qs._build_query(), {'fields': ['id'],
+                                'filter': {'range': {'date': {'gte': 'a',
+                                                              'lte': 'b'}}}})
+
     def test_prefix(self):
         qs = Addon.search().query(name__startswith='woo')
         eq_(qs._build_query(), {'fields': ['id'],
@@ -184,11 +256,8 @@ class TestES(amo.tests.ESTestCase):
         eq_(qs._build_query(), {'fields': ['id', 'name']})
 
     def test_values_result(self):
-        qs = Addon.objects.order_by('id')
-        # The add-on indexer lowercases the name.
-        # The add-on indexer makes a list of names.
-        addons = [(a.id, [a.name]) for a in qs]
-        qs = Addon.search().values('name').order_by('id')
+        addons = [(a.id, a.slug) for a in self._addons]
+        qs = Addon.search().values('slug').order_by('id')
         eq_(list(qs), addons)
 
     def test_values_dict(self):
@@ -200,10 +269,8 @@ class TestES(amo.tests.ESTestCase):
         eq_(qs._build_query(), {})
 
     def test_values_dict_result(self):
-        qs = Addon.objects.order_by('id')
-        # The add-on indexer makes a list of names.
-        addons = [{'id': a.id, 'name': [a.name]} for a in qs]
-        qs = Addon.search().values_dict('name').order_by('id')
+        addons = [{'id': a.id, 'slug': a.slug} for a in self._addons]
+        qs = Addon.search().values_dict('slug').order_by('id')
         eq_(list(qs), list(addons))
 
     def test_empty_values_dict_result(self):
@@ -213,12 +280,11 @@ class TestES(amo.tests.ESTestCase):
             assert key in qs[0].keys(), qs[0].keys()
 
     def test_object_result(self):
-        addons = Addon.objects.all()[:1]
-        qs = Addon.search().filter(id=addons[0].id)[:1]
-        eq_(list(addons), list(qs))
+        qs = Addon.search().filter(id=self._addons[0].id)[:1]
+        eq_(self._addons[:1], list(qs))
 
     def test_object_result_slice(self):
-        addon = Addon.objects.all()[0]
+        addon = self._addons[0]
         qs = Addon.search().filter(id=addon.id)
         eq_(addon, qs[0])
 
@@ -291,7 +357,43 @@ class TestES(amo.tests.ESTestCase):
 
     def test_facet_range(self):
         facet = {'range': {'status': [{'lte': 3}, {'gte': 5}]}}
-        qs = Addon.search().filter(app=1).facet(by_status=facet)
+        # Pass a copy so edits aren't propagated back here.
+        qs = Addon.search().filter(app=1).facet(by_status=dict(facet))
         eq_(qs._build_query(), {'fields': ['id'],
                                 'filter': {'term': {'app': 1}},
                                 'facets': {'by_status': facet}})
+
+
+class TestPaginator(amo.tests.ESTestCase):
+    test_es = True
+
+    @classmethod
+    def setUpClass(cls):
+        super(TestPaginator, cls).setUpClass()
+        cls.setUpIndex()
+
+    def setUp(self):
+        self.request = request = mock.Mock()
+        request.GET.get.return_value = 1
+        request.GET.urlencode.return_value = ''
+        request.path = ''
+
+    def test_es_paginator(self):
+        qs = Addon.search()
+        pager = amo.utils.paginate(self.request, qs)
+        assert isinstance(pager.paginator, amo.utils.ESPaginator)
+
+    def test_validate_number(self):
+        p = amo.utils.ESPaginator(Addon.search(), 20)
+        # A bad number raises an exception.
+        with self.assertRaises(paginator.PageNotAnInteger):
+            p.page('a')
+
+        # A large number is ignored.
+        p.page(99)
+
+    def test_count(self):
+        p = amo.utils.ESPaginator(Addon.search(), 20)
+        eq_(p._count, None)
+        p.page(1)
+        eq_(p.count, Addon.search().count())

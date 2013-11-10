@@ -1,0 +1,1638 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: AMO-JS 0.1\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2013-10-25 13:55-0700\n"
+"PO-Revision-Date: 2012-03-08 05:44+0200\n"
+"Last-Translator: Αλέξανδρος Μιόγλου <alexandros@mioglou.me>\n"
+"Language-Team: el <fiotakis@otenet.gr>, <alexandros@mioglou.me>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=n != 1;\n"
+"X-Poedit-Country: GREECE\n"
+"X-Poedit-Language: Greek\n"
+
+#: media/js/common/ratingwidget.js:31
+msgid "{0} star"
+msgid_plural "{0} stars"
+msgstr[0] "{0} αστέρι"
+msgstr[1] "{0} αστέρια"
+
+#: media/js/common/upload-addon.js:34 media/js/common/upload-image.js:129 media/js/common/upload-packaged-app.js:34
+msgid "There was a problem contacting the server."
+msgstr "Παρουσιάστηκε πρόβλημα επικοινωνίας με το διακομιστή."
+
+#: media/js/common/upload-addon.js:52 media/js/common/upload-packaged-app.js:52
+msgid "Select a file..."
+msgstr "Επιλογή αρχείου..."
+
+#: media/js/common/upload-addon.js:53
+msgid "Your add-on should end with .xpi, .jar or .xml"
+msgstr "Το πρόσθετο σας θα πρέπει να έχει κατάληξη .xpi, .jar ή .xml"
+
+#. L10n: {0} is the percent of the file that has been uploaded.
+#: media/js/common/upload-addon.js:87 media/js/common/upload-packaged-app.js:89
+msgid "{0}% complete"
+msgstr "Ολοκληρώθηκε {0}%"
+
+#. L10n: "{bytes uploaded} of {total filesize}".
+#: media/js/common/upload-addon.js:90 media/js/common/upload-packaged-app.js:92
+msgid "{0} of {1}"
+msgstr "{0} από {1}"
+
+#: media/js/common/upload-addon.js:120 media/js/common/upload-packaged-app.js:120
+msgid "Cancel"
+msgstr "Ακύρωση"
+
+#: media/js/common/upload-addon.js:142 media/js/common/upload-packaged-app.js:142
+msgid "Uploading {0}"
+msgstr "Γίνεται αποστολή του {0}"
+
+#: media/js/common/upload-addon.js:169 media/js/common/upload-packaged-app.js:164
+msgid "Error with {0}"
+msgstr "Παρουσιάστηκε σφάλμα στο {0}"
+
+#: media/js/common/upload-addon.js:174
+msgid "Your add-on failed validation with {0} error."
+msgid_plural "Your add-on failed validation with {0} errors."
+msgstr[0] "Το πρόσθετο σας απέτυχε να επικυρωθεί, επιστρέφοντας {0} σφάλμα."
+msgstr[1] "Το πρόσθετο σας απέτυχε να επικυρωθεί, επιστρέφοντας {0} σφάλματα."
+
+#: media/js/common/upload-addon.js:188 media/js/common/upload-packaged-app.js:183
+msgid "&hellip;and {0} more"
+msgid_plural "&hellip;and {0} more"
+msgstr[0] "&hellip;και {0} περισσότερο"
+msgstr[1] "&hellip;και {0} περισσότερα"
+
+#: media/js/common/upload-addon.js:202 media/js/common/upload-addon.js:329 media/js/common/upload-packaged-app.js:197 media/js/common/upload-packaged-app.js:323 media/js/devreg/devhub.js:143
+#: media/js/zamboni/devhub.js:162
+msgid "See full validation report"
+msgstr "Δείτε την αναλυτική αναφορά επικύρωσης"
+
+#: media/js/common/upload-addon.js:214 media/js/common/upload-packaged-app.js:209
+msgid "Validating {0}"
+msgstr "Γίνεται επικύρωση {0}"
+
+#. L10n: first argument is an HTTP status code
+#: media/js/common/upload-addon.js:252 media/js/common/upload-packaged-app.js:245
+msgid "Received an empty response from the server; status: {0}"
+msgstr "Η απάντηση του εξυπηρετητή ήταν κενή; κατάσταση: {0}"
+
+#: media/js/common/upload-addon.js:263 media/js/common/upload-packaged-app.js:255
+msgid "Unexpected server error while validating."
+msgstr "Απρόσμενο σφάλμα διακομιστή κατά την επικύρωση."
+
+#: media/js/common/upload-addon.js:301 media/js/common/upload-packaged-app.js:292
+msgid "Finished validating {0}"
+msgstr "Ολοκληρώθηκε η επικύρωση του {0}"
+
+#: media/js/common/upload-addon.js:307
+msgid "Your add-on passed validation with no errors and {0} warning."
+msgid_plural "Your add-on passed validation with no errors and {0} warnings."
+msgstr[0] "Το πρόσθετο σας επικυρώθηκε χωρίς να παρουσιάσει σφάλματα και με {0} προειδοποίηση."
+msgstr[1] "Το πρόσθετο σας επικυρώθηκε χωρίς να παρουσιάσει σφάλματα και με {0} προειδοποιήσεις."
+
+#: media/js/common/upload-addon.js:312
+msgid "Your add-on passed validation with no errors or warnings."
+msgstr "Το πρόσθετο σας επικυρώθηκε χωρίς να παρουσιάσει σφάλματα ή προειδοποιήσεις."
+
+#: media/js/common/upload-addon.js:363
+msgid "Some platforms are not available for this type of add-on."
+msgstr "Μερικές πλατφόρμες δεν είναι διαθέσιμες για αυτό τον τύπο προσθέτου."
+
+#: media/js/common/upload-base.js:61
+msgid "The filetype you uploaded isn't recognized."
+msgstr "Δεν αναγνωρίζεται η μορφή αρχείου που αποστείλατε."
+
+#: media/js/common/upload-base.js:83
+msgid "You cancelled the upload."
+msgstr "Ακυρώσατε την μεταφόρτωση."
+
+#: media/js/common/upload-image.js:98 media/js/impala/users.js:51
+msgid "Images must be either PNG or JPG."
+msgstr "Οι εικόνες πρέπει να είναι είτε PNG είτε JPG"
+
+#: media/js/common/upload-image.js:102
+msgid "Videos must be in WebM."
+msgstr "Τα βίντεο πρέπει να είναι τύπου WebM."
+
+#: media/js/common/upload-packaged-app.js:53
+msgid "Your packaged app should end with <code>.zip</code>."
+msgstr "Η κατάληξη της τυποποιημένης σας εφαρμογής θα πρέπει να είναι <code>.zip</code>."
+
+#: media/js/common/upload-packaged-app.js:169 media/js/devreg/devhub.js:181 media/js/zamboni/devhub.js:169
+msgid "Your app failed validation with {0} error."
+msgid_plural "Your app failed validation with {0} errors."
+msgstr[0] "Η εφαρμογή σας απέτυχε στην αξιολόγηση με {0} σφάλμα."
+msgstr[1] "Η εφαρμογή σας απέτυχε στην αξιολόγηση με {0} σφάλματα."
+
+#: media/js/common/upload-packaged-app.js:298
+msgid "Your app passed validation with no errors and {0} warning."
+msgid_plural "Your app passed validation with no errors and {0} warnings."
+msgstr[0] "Η εφαρμογή σας πέρασε την αξιολόγηση χωρίς σφάλματα και {0} προειδοποίηση."
+msgstr[1] "Η εφαρμογή σας πέρασε την αξιολόγηση χωρίς σφάλματα και {0} προειδοποιήσεις."
+
+#: media/js/common/upload-packaged-app.js:303
+msgid "Your app passed validation with no errors or warnings."
+msgstr "Η εφαρμογή σας πέρασε την αξιολόγηση χωρίς σφάλματα ή προειδοποιήσεις."
+
+#: media/js/devreg/devhub.js:186
+msgid "Your app failed validation with {0} error and {1} message(s)."
+msgid_plural "Your app failed validation with {0} errors and {1} message(s)."
+msgstr[0] "Η εφαρμογή σας απέτυχε κατά την επικύρωση με {0} σφάλμα και {1} ειδοποίηση(εις)."
+msgstr[1] "Η εφαρμογή σας απέτυχε κατά την επικύρωση με {0} σφάλματα και {1} ειδοποίηση(εις)."
+
+#: media/js/devreg/devhub.js:200 media/js/zamboni/devhub.js:183
+msgid "Your app passed validation with no errors and {0} message."
+msgid_plural "Your app passed validation with no errors and {0} messages."
+msgstr[0] "Η εφαρμογή σας πέρασε την αξιολόγηση χωρίς σφάλματα και με {0} ειδοποίηση"
+msgstr[1] "Η εφαρμογή σας πέρασε την αξιολόγηση χωρίς σφάλματα και με {0} ειδοποιήσεις"
+
+#: media/js/devreg/devhub.js:205 media/js/zamboni/devhub.js:188
+msgid "Your app passed validation with no errors or messages."
+msgstr "Η εφαρμογή σας πέρασε την αξιολόγηση χωρίς σφάλματα ή ειδοποιήσεις."
+
+#: media/js/devreg/devhub.js:419 media/js/zamboni/devhub.js:487
+msgid "Changes Saved"
+msgstr "Οι αλλαγές αποθηκεύτηκαν"
+
+#: media/js/devreg/devhub.js:435
+msgid "Enter a new team member's email address"
+msgstr "Εισάγετε τη διεύθυνση email ενός νέου μέλους της ομάδας"
+
+#: media/js/devreg/devhub.js:443
+msgid "Refreshed"
+msgstr "Ανανεωμένο"
+
+#: media/js/devreg/devhub.js:616 media/js/zamboni/devhub.js:650
+msgid "There was an error uploading your file."
+msgstr "Παρουσιάστηκε σφάλμα κατά τη μεταφόρτωση του αρχείου σας."
+
+#: media/js/devreg/devhub.js:886 media/js/zamboni/devhub.js:925
+msgid "Learn more"
+msgstr "Μάθετε περισσότερα"
+
+#: media/js/devreg/devhub.js:890 media/js/zamboni/devhub.js:929
+msgid "Example"
+msgstr "Παράδειγμα"
+
+#: media/js/devreg/devhub.js:1192 media/js/zamboni/devhub.js:1285
+msgid "Image changes being processed"
+msgstr "Επεξεργάζονται οι αλλαγές εικόνων"
+
+#: media/js/devreg/expandable.js:15
+msgid "more..."
+msgstr "περισσότερα..."
+
+#: media/js/devreg/expandable.js:18
+msgid "less..."
+msgstr "λιγότερα..."
+
+#: media/js/devreg/init.js:35 media/js/mkt/init.js:47 media/js/zamboni/init.js:32
+msgid "This feature is temporarily disabled while we perform website maintenance. Please check back a little later."
+msgstr "Αυτό το χαρακτηριστικό έχει απενεργοποιηθεί προς το παρόν λόγω εκτέλεσης εργασιών συντήρησης. Παρακαλούμε προσπαθήστε ξανά αργότερα."
+
+#: media/js/devreg/l10n.js:45 media/js/zamboni/l10n.js:45
+msgid "Remove this localization"
+msgstr "Αφαίρεση αυτής της μετάφρασης"
+
+#: media/js/devreg/mobile_review_actions.js:6
+msgid "Keep review; remove flags"
+msgstr "Διατήρηση αξιολόγησης; αφαίρεση επισημάνσεων"
+
+#: media/js/devreg/mobile_review_actions.js:8
+msgid "Delete review"
+msgstr "Διαγραφή αξιολόγησης"
+
+#: media/js/devreg/mobile_review_actions.js:9
+msgid "Skip for now"
+msgstr "Παράλειψη για την ώρα"
+
+#: media/js/devreg/payments-enroll.js:9
+msgid "Spanish Banking Code"
+msgstr "Ισπανικός Κωδικός Τράπεζας"
+
+#: media/js/devreg/payments-enroll.js:11
+msgid "Irish Sort Code"
+msgstr "Ιρλανδικός Κωδικός Ταξινόμησης"
+
+#: media/js/devreg/payments-enroll.js:13
+msgid "Belgian Sort Code"
+msgstr "Βέλγικος Κωδικός Ταξινόμησης"
+
+#: media/js/devreg/payments-enroll.js:15
+msgid "Spanish/French/Italian/Dutch Banking Code"
+msgstr "Ισπανικός/Γαλλικός/Ιταλικός/Ολλανδικός Κωδικός Τράπεζας"
+
+#: media/js/devreg/payments-enroll.js:17
+msgid "Dutch/US Sort Code"
+msgstr "Ολλανδικός/Αμερικής Κωδικός Ταξινόμησης"
+
+#: media/js/devreg/payments-enroll.js:19
+msgid "Canadian Transit Number/German Routing Code"
+msgstr "Καναδικός Αριθμός Διέλευσης/Γερμανικός Κωδικός Δρομολόγησης"
+
+#: media/js/devreg/payments-enroll.js:21
+msgid "Korean Bank and Branch/Indonesian Bank Code"
+msgstr "Κορεάτικη Τράπεζα και Υποκατάστημα/Ινδονησίας Κωδικός Τράπεζας"
+
+#: media/js/devreg/payments-enroll.js:23
+msgid "Greek HEBIC/Indonesian Bank Code"
+msgstr "Ελληνικός HEBIC/Ινδονησίας Κωδικός Τράπεζας"
+
+#: media/js/devreg/payments-enroll.js:25
+msgid "UK/Irish Sort Code or NZ Account Prefix or Australian BSB Code"
+msgstr "Αγγλικός/Ιρλανδικός Κωδικός Ταξινόμησης ή NZ πρόθεμα λογαριασμού ή Κωδικός BSB Αυστραλίας"
+
+#: media/js/devreg/payments-enroll.js:27
+msgid "Austrian/Swiss Bank Code"
+msgstr "Αυστριακός/Ελβετικός Κωδικός Τράπεζας"
+
+#: media/js/devreg/payments-enroll.js:29
+msgid "Danish/Swiss Bank Code"
+msgstr "Δανέζικος/Ελβετικός Κωδικός Τράπεζας"
+
+#: media/js/devreg/payments-enroll.js:31
+msgid "Swiss/Iraqi Bank Code"
+msgstr "Ελβετικός/Ιράκ Κωδικός Τράπεζας"
+
+#: media/js/devreg/payments-enroll.js:33
+msgid "Iraqi Bank Code"
+msgstr "Κωδικός Τράπεζας Ιράκ"
+
+#. L10n: {0} is the name of a bank detected from the bank account code.
+#: media/js/devreg/payments-enroll.js:135
+msgid "Detected: {0}"
+msgstr "Βρέθηκαν: {0}"
+
+#. L10n: This sentence introduces a list of applications.
+#: media/js/devreg/payments-manage.js:24
+msgid "Warning: deleting payment account \"{0}\" will move that associated app to an incomplete status and it will no longer be available for sale:"
+msgid_plural "Warning: deleting payment account \"{0}\" will move those associated apps to an incomplete status and they will no longer be available for sale:"
+msgstr[0] "Προειδοποίση: η διαγραφή του λογαριασμού πληρωμής \"{0}\" θα κάνει την εφαρμογή μη ολοκληρωμένη και δεν θα είναι πλέον διαθέσιμη προς πώληση:"
+msgstr[1] "Προειδοποίση: η διαγραφή του λογαριασμού πληρωμής \"{0}\" θα κάνει τις εφαρμογές μη ολοκληρωμένες και δεν θα είναι πλέον διαθέσιμες προς πώληση:"
+
+#: media/js/devreg/payments-manage.js:56 media/js/devreg/payments-manage.js:101 media/js/devreg/validator.js:193 media/js/devreg/validator.js:438 media/js/devreg/validator.js:457
+#: media/js/mkt/buttons.js:85 media/js/mkt/buttons.js:94 media/js/zamboni/validator.js:193 media/js/zamboni/validator.js:446 media/js/zamboni/validator.js:465
+msgid "Error"
+msgstr "Σφάλμα"
+
+#: media/js/devreg/payments-manage.js:57 media/js/devreg/payments-manage.js:102
+msgid "There was a problem contacting the payment server."
+msgstr "Υπήρξε κάποιο πρόβλημα κατά την επικοινωνία με τον διακομιστή πληρωμής."
+
+#: media/js/devreg/payments-manage.js:80
+msgid "Authentication error"
+msgstr "Σφάλμα πιστοποίησης"
+
+#: media/js/devreg/payments-manage.js:122
+msgid "You do not currently have any payment accounts."
+msgstr "Δεν διαθέτετε αυτή τη στιγμή κανένα λογαριασμό πληρωμών."
+
+#: media/js/devreg/validator.js:71 media/js/zamboni/validator.js:71
+msgid "All tests passed successfully."
+msgstr "Όλοι οι έλεγχοι ολοκληρώθηκαν επιτυχώς."
+
+#: media/js/devreg/validator.js:74 media/js/devreg/validator.js:358 media/js/zamboni/validator.js:74 media/js/zamboni/validator.js:366
+msgid "These tests were not run."
+msgstr "Δεν εκτελέστηκαν αυτοί οι έλεγχοι."
+
+#: media/js/devreg/validator.js:119 media/js/devreg/validator.js:132 media/js/zamboni/validator.js:119 media/js/zamboni/validator.js:132
+msgid "Tests"
+msgstr "Έλεγχοι"
+
+#: media/js/devreg/validator.js:194 media/js/zamboni/validator.js:194
+msgid "Warning"
+msgstr "Προειδοποίηση"
+
+#: media/js/devreg/validator.js:281 media/js/zamboni/validator.js:281
+msgid "Compatibility Tests"
+msgstr "Τεστ συμβατότητας"
+
+#: media/js/devreg/validator.js:329 media/js/zamboni/validator.js:330
+msgid "App failed validation."
+msgstr "Η επικύρωση της εφαρμογής απέτυχε."
+
+#: media/js/devreg/validator.js:331 media/js/zamboni/validator.js:332
+msgid "App passed validation."
+msgstr "Η επικύρωση της εφαρμογής ολοκληρώθηκε επιτυχώς."
+
+#: media/js/devreg/validator.js:361 media/js/zamboni/validator.js:369
+msgid "{0} error"
+msgid_plural "{0} errors"
+msgstr[0] "{0} σφάλμα"
+msgstr[1] "{0} σφάλματα"
+
+#: media/js/devreg/validator.js:363 media/js/zamboni/validator.js:371
+msgid "{0} warning"
+msgid_plural "{0} warnings"
+msgstr[0] "{0} προειδοποίηση"
+msgstr[1] "{0} προειδοποιήσεις"
+
+#: media/js/devreg/validator.js:440 media/js/zamboni/validator.js:448
+msgid "Validation task could not complete or completed with errors"
+msgstr "Δεν ολοκληρώθηκε η επικύρωση ή ολοκληρώθηκε με σφάλματα"
+
+#: media/js/devreg/validator.js:458 media/js/zamboni/validator.js:466
+msgid "Internal server error"
+msgstr "Εσωτερικό σφάλμα διακομιστή"
+
+#: media/js/impala/collections.js:10 media/js/zamboni/collections.js:725
+msgid "Follow this Collection"
+msgstr "Παρακολούθηση της συλλογής"
+
+#: media/js/impala/collections.js:19
+msgid "Stop Following"
+msgstr "Διακοπή παρακολούθησης"
+
+#: media/js/impala/collections.js:20
+msgid "Following"
+msgstr "Παρακολούθηση"
+
+#. L10n: {0} is an app name.
+#: media/js/impala/listing.js:17 media/js/zamboni/themes.js:13
+msgid "This theme is incompatible with your version of {0}"
+msgstr "Δεν είναι συμβατό αυτό το θέμα με την έκδοση του {0} που έχετε"
+
+#: media/js/impala/persona_creation.js:102
+msgid "All Rights Reserved"
+msgstr "All Rights Reserved"
+
+#: media/js/impala/persona_creation.js:106
+msgid "Creative Commons Attribution 3.0"
+msgstr "Creative Commons Attribution 3.0"
+
+#: media/js/impala/persona_creation.js:111
+msgid "Creative Commons Attribution-NonCommercial 3.0"
+msgstr "Creative Commons Attribution-NonCommercial 3.0"
+
+#: media/js/impala/persona_creation.js:116
+msgid "Creative Commons Attribution-NonCommercial-NoDerivs 3.0"
+msgstr "Creative Commons Attribution-NonCommercial-NoDerivs 3.0"
+
+#: media/js/impala/persona_creation.js:121
+msgid "Creative Commons Attribution-NonCommercial-Share Alike 3.0"
+msgstr "Creative Commons Attribution-NonCommercial-Share Alike 3.0"
+
+#: media/js/impala/persona_creation.js:126
+msgid "Creative Commons Attribution-NoDerivs 3.0"
+msgstr "Creative Commons Attribution-NoDerivs 3.0"
+
+#: media/js/impala/persona_creation.js:131
+msgid "Creative Commons Attribution-ShareAlike 3.0"
+msgstr "Creative Commons Attribution-ShareAlike 3.0"
+
+#: media/js/impala/persona_creation.js:338
+msgid "Your Theme's Name"
+msgstr "Όνομα Θέματος"
+
+#: media/js/impala/reviews.js:23 media/js/zamboni/reviews.js:18
+msgid "Flagged for review"
+msgstr "Σημειώθηκε για αξιολόγηση"
+
+#: media/js/impala/reviews.js:40 media/js/zamboni/reviews.js:34
+msgid "Your input is required"
+msgstr "Απαιτείται η εισαγωγή"
+
+#: media/js/impala/reviews.js:133 media/js/zamboni/reviews.js:103
+msgid "Marked for deletion"
+msgstr "Σημειώθηκε για διαγραφή"
+
+#: media/js/impala/search.js:104
+msgid "Updating results&hellip;"
+msgstr "Ανανέωση αποτελεσμάτων&hellip;"
+
+#: media/js/impala/site_suggestions.js:46 media/js/zamboni/tests/suggestions_tests.js:160
+msgid "Category"
+msgstr "Κατηγορία"
+
+#: media/js/impala/suggestions.js:39 media/js/mkt/suggestions.js:66
+msgid "Search themes for <b>{0}</b>"
+msgstr "Αναζήτηση θέματος για <b>{0}</b>"
+
+#: media/js/impala/suggestions.js:41 media/js/mkt/suggestions.js:68
+msgid "Search apps for <b>{0}</b>"
+msgstr "Αναζήτηση εφαρμογών για <b>{0}</b>"
+
+#: media/js/impala/suggestions.js:43 media/js/mkt/suggestions.js:70
+msgid "Search add-ons for <b>{0}</b>"
+msgstr "Αναζήτηση προσθέτων για <b>{0}</b>"
+
+#: media/js/impala/users.js:33
+msgid "use original"
+msgstr "χρησιμοποίηση αρχικού"
+
+#: media/js/impala/stats/chart.js:267 media/js/mkt/stats/chart.js:320
+msgid "Week of {0}"
+msgstr "Εβδομάδα {0}"
+
+#: media/js/impala/stats/chart.js:269
+msgid "downloads"
+msgstr "λήψεις"
+
+#: media/js/impala/stats/chart.js:270 media/js/mkt/stats/chart.js:326
+msgid "{0} users"
+msgstr "{0} χρήστες"
+
+#: media/js/impala/stats/chart.js:271
+msgid "{0} add-ons"
+msgstr "{0} πρόσθετα"
+
+#: media/js/impala/stats/chart.js:272
+msgid "{0} collections"
+msgstr "{0} συλλογές"
+
+#: media/js/impala/stats/chart.js:273 media/js/mkt/stats/chart.js:328
+msgid "{0} reviews"
+msgstr "{0} αξιολογήσεις"
+
+#: media/js/impala/stats/chart.js:275 media/js/mkt/stats/chart.js:323 media/js/mkt/stats/chart_column.js:125
+msgid "{0} sales"
+msgstr "{0} πωλήσεις"
+
+#: media/js/impala/stats/chart.js:276 media/js/mkt/stats/chart.js:324 media/js/mkt/stats/chart_column.js:126
+msgid "{0} refunds"
+msgstr "{0} επιστροφές"
+
+#: media/js/impala/stats/chart.js:277 media/js/mkt/stats/chart.js:325
+msgid "{0} installs"
+msgstr "{0} εγκαταστάσεις"
+
+#: media/js/impala/stats/chart.js:369 media/js/impala/stats/csv_keys.js:3 media/js/impala/stats/csv_keys.js:102 media/js/mkt/stats/csv_keys.js:128
+msgid "Downloads"
+msgstr "Λήψεις"
+
+#: media/js/impala/stats/chart.js:379 media/js/impala/stats/csv_keys.js:6 media/js/impala/stats/csv_keys.js:103 media/js/mkt/stats/csv_keys.js:6 media/js/mkt/stats/csv_keys.js:129
+msgid "Daily Users"
+msgstr "Καθημερινοί χρήστες"
+
+#: media/js/impala/stats/chart.js:410
+msgid "Amount, in USD"
+msgstr "Σύνολο, σε USD"
+
+#: media/js/impala/stats/chart.js:421 media/js/impala/stats/csv_keys.js:97 media/js/mkt/stats/csv_keys.js:123
+msgid "Number of Contributions"
+msgstr "Αριθμός συνεισφορών"
+
+#: media/js/impala/stats/chart.js:447 media/js/mkt/stats/chart.js:395
+msgid "More Info..."
+msgstr "Περισσότερες πληροφορίες..."
+
+#. L10n: {0} is an ISO-formatted date.
+#: media/js/impala/stats/chart.js:451 media/js/mkt/stats/chart.js:399
+msgid "Details for {0}"
+msgstr "Λεπτομέρειες του {0}"
+
+#: media/js/impala/stats/csv_keys.js:9
+msgid "Collections Created"
+msgstr "Συλλογές που δημιουργήθηκαν"
+
+#: media/js/impala/stats/csv_keys.js:12
+msgid "Add-ons in Use"
+msgstr "Πρόσθετα σε χρήση"
+
+#: media/js/impala/stats/csv_keys.js:15
+msgid "Add-ons Created"
+msgstr "Δημιουργηθέντα Πρόσθετα"
+
+#: media/js/impala/stats/csv_keys.js:18
+msgid "Add-ons Downloaded"
+msgstr "Ληφθέντα Πρόσθετα"
+
+#: media/js/impala/stats/csv_keys.js:21
+msgid "Add-ons Updated"
+msgstr "Ενημερωμένα πρόσθετα"
+
+#: media/js/impala/stats/csv_keys.js:24
+msgid "Reviews Written"
+msgstr "Συνταχθείσες αξιολογήσεις"
+
+#: media/js/impala/stats/csv_keys.js:27
+msgid "User Signups"
+msgstr "Εγγραφές χρήστη"
+
+#: media/js/impala/stats/csv_keys.js:30
+msgid "Subscribers"
+msgstr "Εγγεγραμμένοι"
+
+#: media/js/impala/stats/csv_keys.js:33
+msgid "Ratings"
+msgstr "Αξιολογήσεις"
+
+#: media/js/impala/stats/csv_keys.js:36 media/js/impala/stats/csv_keys.js:107 media/js/mkt/stats/chart_column.js:147
+msgid "Sales"
+msgstr "Πωλήσεις"
+
+#: media/js/impala/stats/csv_keys.js:39 media/js/impala/stats/csv_keys.js:106 media/js/mkt/stats/chart.js:364 media/js/mkt/stats/csv_keys.js:3 media/js/mkt/stats/csv_keys.js:132
+msgid "Installs"
+msgstr "Εγκαταστάσεις"
+
+#: media/js/impala/stats/csv_keys.js:42 media/js/mkt/stats/csv_keys.js:57
+msgid "Unknown"
+msgstr "Άγνωστο"
+
+#: media/js/impala/stats/csv_keys.js:43 media/js/mkt/stats/csv_keys.js:58
+msgid "Add-ons Manager"
+msgstr "Διαχειριστής προσθέτων"
+
+#: media/js/impala/stats/csv_keys.js:44 media/js/mkt/stats/csv_keys.js:59
+msgid "Search Results"
+msgstr "Αποτελέσματα αναζήτησης"
+
+#: media/js/impala/stats/csv_keys.js:45 media/js/impala/stats/csv_keys.js:46 media/js/impala/stats/csv_keys.js:47 media/js/mkt/stats/csv_keys.js:60 media/js/mkt/stats/csv_keys.js:61
+#: media/js/mkt/stats/csv_keys.js:62
+msgid "Homepage Promo"
+msgstr "Promo Αρχικής Σελίδας"
+
+#: media/js/impala/stats/csv_keys.js:48 media/js/impala/stats/csv_keys.js:49 media/js/mkt/stats/csv_keys.js:63 media/js/mkt/stats/csv_keys.js:64
+msgid "Homepage Featured"
+msgstr "Προβεβλημένη Αρχική Σελίδα"
+
+#: media/js/impala/stats/csv_keys.js:50 media/js/impala/stats/csv_keys.js:51 media/js/mkt/stats/csv_keys.js:65 media/js/mkt/stats/csv_keys.js:66
+msgid "Homepage Up and Coming"
+msgstr "Προσεχής Αρχική Σελίδα"
+
+#: media/js/impala/stats/csv_keys.js:52 media/js/mkt/stats/csv_keys.js:67
+msgid "Homepage Most Popular"
+msgstr "Δημοφιλέστερη Αρχική Σελίδα"
+
+#: media/js/impala/stats/csv_keys.js:53 media/js/impala/stats/csv_keys.js:55 media/js/mkt/stats/csv_keys.js:68 media/js/mkt/stats/csv_keys.js:70
+msgid "Detail Page"
+msgstr "Σελίδα λεπτομερειών"
+
+#: media/js/impala/stats/csv_keys.js:54 media/js/impala/stats/csv_keys.js:56 media/js/mkt/stats/csv_keys.js:69 media/js/mkt/stats/csv_keys.js:71
+msgid "Detail Page (bottom)"
+msgstr "Σελίδα λεπτομερειών (κάτω μέρος)"
+
+#: media/js/impala/stats/csv_keys.js:57 media/js/mkt/stats/csv_keys.js:72
+msgid "Detail Page (Development Channel)"
+msgstr "Σελίδα λεπτομερειών (Κανάλι Ανάπτυξης)"
+
+#: media/js/impala/stats/csv_keys.js:58 media/js/impala/stats/csv_keys.js:59 media/js/impala/stats/csv_keys.js:60 media/js/mkt/stats/csv_keys.js:73 media/js/mkt/stats/csv_keys.js:74
+#: media/js/mkt/stats/csv_keys.js:75
+msgid "Often Used With"
+msgstr "Χρησιμοποιείται συχνά μαζί με"
+
+#: media/js/impala/stats/csv_keys.js:61 media/js/impala/stats/csv_keys.js:62 media/js/mkt/stats/csv_keys.js:76 media/js/mkt/stats/csv_keys.js:77
+msgid "Others By Author"
+msgstr "Άλλα από τον ίδιο"
+
+#: media/js/impala/stats/csv_keys.js:63 media/js/impala/stats/csv_keys.js:64 media/js/mkt/stats/csv_keys.js:78 media/js/mkt/stats/csv_keys.js:79
+msgid "Dependencies"
+msgstr "Εξαρτήσεις"
+
+#: media/js/impala/stats/csv_keys.js:65 media/js/impala/stats/csv_keys.js:66 media/js/mkt/stats/csv_keys.js:80 media/js/mkt/stats/csv_keys.js:81
+msgid "Upsell"
+msgstr "Upsell"
+
+#: media/js/impala/stats/csv_keys.js:68 media/js/mkt/stats/csv_keys.js:83
+msgid "Sharing"
+msgstr "Διαμοιρασμός"
+
+#: media/js/impala/stats/csv_keys.js:69 media/js/mkt/stats/csv_keys.js:84
+msgid "Category Pages"
+msgstr "Σελίδες κατηγορίας"
+
+#: media/js/impala/stats/csv_keys.js:70 media/js/mkt/stats/csv_keys.js:85
+msgid "Collections"
+msgstr "Συλλογές"
+
+#: media/js/impala/stats/csv_keys.js:71 media/js/impala/stats/csv_keys.js:72 media/js/mkt/stats/csv_keys.js:86
+msgid "Category Landing Featured Carousel"
+msgstr "Κατηγορία Προβεβλημένο Καρουζέλ"
+
+#: media/js/impala/stats/csv_keys.js:73 media/js/impala/stats/csv_keys.js:74 media/js/mkt/stats/csv_keys.js:89 media/js/mkt/stats/csv_keys.js:90
+msgid "Category Landing Top Rated"
+msgstr "Κατηγορία Υψηλότερη Βαθμολογία"
+
+#: media/js/impala/stats/csv_keys.js:75 media/js/impala/stats/csv_keys.js:76 media/js/mkt/stats/csv_keys.js:91 media/js/mkt/stats/csv_keys.js:92
+msgid "Category Landing Most Popular"
+msgstr "Κατηγορία Δημοφιλέστερα"
+
+#: media/js/impala/stats/csv_keys.js:77 media/js/impala/stats/csv_keys.js:78 media/js/mkt/stats/csv_keys.js:93 media/js/mkt/stats/csv_keys.js:94
+msgid "Category Landing Recently Added"
+msgstr "Κατηγορία Προστέθηκαν πρόσφατα"
+
+#: media/js/impala/stats/csv_keys.js:79 media/js/impala/stats/csv_keys.js:80 media/js/mkt/stats/csv_keys.js:95 media/js/mkt/stats/csv_keys.js:96
+msgid "Browse Listing Featured Sort"
+msgstr "Αναζήτηση Λίστας Προβεβλημένων Ταξινόμηση"
+
+#: media/js/impala/stats/csv_keys.js:81 media/js/impala/stats/csv_keys.js:82 media/js/mkt/stats/csv_keys.js:97 media/js/mkt/stats/csv_keys.js:98
+msgid "Browse Listing Users Sort"
+msgstr "Αναζήτηση Λίστας Χρηστών Ταξινόμηση"
+
+#: media/js/impala/stats/csv_keys.js:83 media/js/impala/stats/csv_keys.js:84 media/js/mkt/stats/csv_keys.js:99 media/js/mkt/stats/csv_keys.js:100
+msgid "Browse Listing Rating Sort"
+msgstr "Αναζήτηση Λίστας Αξιολογήσεων Ταξινόμηση"
+
+#: media/js/impala/stats/csv_keys.js:85 media/js/impala/stats/csv_keys.js:86 media/js/mkt/stats/csv_keys.js:101 media/js/mkt/stats/csv_keys.js:102
+msgid "Browse Listing Created Sort"
+msgstr "Αναζήτηση Λίστας Δημιουργηθέντων Ταξινόμηση"
+
+#: media/js/impala/stats/csv_keys.js:87 media/js/impala/stats/csv_keys.js:88 media/js/mkt/stats/csv_keys.js:103 media/js/mkt/stats/csv_keys.js:104
+msgid "Browse Listing Name Sort"
+msgstr "Αναζήτηση Λίστας Ονομάτων Ταξινόμηση"
+
+#: media/js/impala/stats/csv_keys.js:89 media/js/impala/stats/csv_keys.js:90 media/js/mkt/stats/csv_keys.js:105 media/js/mkt/stats/csv_keys.js:106
+msgid "Browse Listing Popular Sort"
+msgstr "Αναζήτηση Λίστας Δημοφιλών Ταξινόμηση"
+
+#: media/js/impala/stats/csv_keys.js:91 media/js/impala/stats/csv_keys.js:92 media/js/mkt/stats/csv_keys.js:107 media/js/mkt/stats/csv_keys.js:108
+msgid "Browse Listing Updated Sort"
+msgstr "Αναζήτηση Λίστας Ανανεωμένων"
+
+#: media/js/impala/stats/csv_keys.js:93 media/js/impala/stats/csv_keys.js:94 media/js/mkt/stats/csv_keys.js:109 media/js/mkt/stats/csv_keys.js:110
+msgid "Browse Listing Up and Coming Sort"
+msgstr "Αναζήτηση Λίστας Προσεχών"
+
+#: media/js/impala/stats/csv_keys.js:98 media/js/mkt/stats/csv_keys.js:124
+msgid "Total Amount Contributed"
+msgstr "Σύνολο συνεισφορών"
+
+#: media/js/impala/stats/csv_keys.js:99 media/js/mkt/stats/csv_keys.js:125
+msgid "Average Contribution"
+msgstr "Μέσος όρος συνεισφορών"
+
+#: media/js/impala/stats/csv_keys.js:108 media/js/mkt/stats/csv_keys.js:133
+msgid "Usage"
+msgstr "Χρήση"
+
+#: media/js/impala/stats/csv_keys.js:111 media/js/mkt/stats/csv_keys.js:137
+msgid "Firefox"
+msgstr "Firefox"
+
+#: media/js/impala/stats/csv_keys.js:112 media/js/mkt/stats/csv_keys.js:138
+msgid "Mozilla"
+msgstr "Mozilla"
+
+#: media/js/impala/stats/csv_keys.js:113 media/js/mkt/stats/csv_keys.js:139
+msgid "Thunderbird"
+msgstr "Thunderbird"
+
+#: media/js/impala/stats/csv_keys.js:114 media/js/mkt/stats/csv_keys.js:140
+msgid "Sunbird"
+msgstr "Sunbird"
+
+#: media/js/impala/stats/csv_keys.js:115 media/js/mkt/stats/csv_keys.js:141
+msgid "SeaMonkey"
+msgstr "SeaMonkey"
+
+#: media/js/impala/stats/csv_keys.js:116 media/js/mkt/stats/csv_keys.js:142
+msgid "Fennec"
+msgstr "Fennec"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:121
+msgid "Downloads and Daily Users, last {0} days"
+msgstr "Λήψεις και Καθημερινοί Χρήστες, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:123
+msgid "Downloads and Daily Users from {0} to {1}"
+msgstr "Λήψεις και Καθημερινοί Χρήστες από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:127
+msgid "Installs and Daily Users, last {0} days"
+msgstr "Λήψεις και Καθημερινοί Χρήστες, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:129
+msgid "Installs and Daily Users from {0} to {1}"
+msgstr "Εγκαταστάσεις και Καθημερινοί Χρήστες από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:133
+msgid "Downloads, last {0} days"
+msgstr "Λήψεις, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:135
+msgid "Downloads from {0} to {1}"
+msgstr "Λήψεις από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:139 media/js/mkt/stats/csv_keys.js:152
+msgid "Daily Users, last {0} days"
+msgstr "Καθημερινοί Χρήστες, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:141 media/js/mkt/stats/csv_keys.js:153
+msgid "Daily Users from {0} to {1}"
+msgstr "Καθημερινοί Χρήστες από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:145
+msgid "Applications, last {0} days"
+msgstr "Εφαρμογές, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:147
+msgid "Applications from {0} to {1}"
+msgstr "Εφαρμογές από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:151
+msgid "Platforms, last {0} days"
+msgstr "Πλατφόρμες, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:153
+msgid "Platforms from {0} to {1}"
+msgstr "Πλατφόρμες από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:157
+msgid "Languages, last {0} days"
+msgstr "Γλώσσες, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:159
+msgid "Languages from {0} to {1}"
+msgstr "Γλώσσες από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:163
+msgid "Add-on Versions, last {0} days"
+msgstr "Εκδόσεις προσθέτου, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:165
+msgid "Add-on Versions from {0} to {1}"
+msgstr "Εκδόσεις προσθέτου από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:169
+msgid "Add-on Status, last {0} days"
+msgstr "Κατάσταση προσθέτου, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:171
+msgid "Add-on Status from {0} to {1}"
+msgstr "Κατάσταση προσθέτου από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:175
+msgid "Download Sources, last {0} days"
+msgstr "Λήψη κώδικα, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:177
+msgid "Download Sources from {0} to {1}"
+msgstr "Λήψη κώδικα από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:181
+msgid "Contributions, last {0} days"
+msgstr "Συνεισφορές, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:183
+msgid "Contributions from {0} to {1}"
+msgstr "Συνεισφορές από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:187
+msgid "Site Metrics, last {0} days"
+msgstr "Μετρήσεις ιστοσελίδας, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:189
+msgid "Site Metrics from {0} to {1}"
+msgstr "Μετρήσεις ιστοσελίδας από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:193
+msgid "Add-ons in Use, last {0} days"
+msgstr "Πρόσθετα σε χρήση, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:195
+msgid "Add-ons in Use from {0} to {1}"
+msgstr "Πρόσθετα σε χρήση από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:199
+msgid "Add-ons Downloaded, last {0} days"
+msgstr "Ληφθέντα πρόσθετα, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:201
+msgid "Add-ons Downloaded from {0} to {1}"
+msgstr "Ληφθέντα πρόσθετα από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:205
+msgid "Add-ons Created, last {0} days"
+msgstr "Πρόσθετα που δημιουργήθηκαν, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:207
+msgid "Add-ons Created from {0} to {1}"
+msgstr "Πρόσθετα που δημιουργήθηκαν από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:211
+msgid "Add-ons Updated, last {0} days"
+msgstr "Πρόσθετα που ενημερώθηκαν, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:213
+msgid "Add-ons Updated from {0} to {1}"
+msgstr "Πρόσθετα που ενημερώθηκαν από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:217
+msgid "Reviews Written, last {0} days"
+msgstr "Συνταχθείσες αξιολογήσεις, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:219
+msgid "Reviews Written from {0} to {1}"
+msgstr "Συνταχθείσες αξιολογήσεις από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:223
+msgid "User Signups, last {0} days"
+msgstr "Εγγραφές χρήστη, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:225
+msgid "User Signups from {0} to {1}"
+msgstr "Εγγραφές χρήστη από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:229
+msgid "Collections Created, last {0} days"
+msgstr "Συλλογές που δημιουργήθηκαν, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:231
+msgid "Collections Created from {0} to {1}"
+msgstr "Συλλογές που δημιουργήθηκαν από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:235
+msgid "Subscribers, last {0} days"
+msgstr "Εγγεγραμμένοι, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:237
+msgid "Subscribers from {0} to {1}"
+msgstr "Εγγεγραμμένοι από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:241
+msgid "Ratings, last {0} days"
+msgstr "Αξιολογήσεις, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:243
+msgid "Ratings from {0} to {1}"
+msgstr "Αξιολογήσεις από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:247
+msgid "Sales, last {0} days"
+msgstr "Πωλήσεις, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:249
+msgid "Sales from {0} to {1}"
+msgstr "Πωλήσεις από {0} ως {1}"
+
+#. L10n: {0} is an integer.
+#: media/js/impala/stats/csv_keys.js:253 media/js/mkt/stats/csv_keys.js:147
+msgid "Installs, last {0} days"
+msgstr "Εγκαταστάσεις, τελευταίες {0} ημέρες"
+
+#. L10n: both {0} and {1} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:255 media/js/mkt/stats/csv_keys.js:149
+msgid "Installs from {0} to {1}"
+msgstr "Εγκαταστάσεις από {0} ως {1}"
+
+#. L10n: {0} and {1} are integers.
+#: media/js/impala/stats/csv_keys.js:261 media/js/mkt/stats/csv_keys.js:223
+msgid "<b>{0}</b> in last {1} days"
+msgstr "<b>{0}</b> τις τελευταίες {1} ημέρες"
+
+#. L10n: {0} is an integer and {1} and {2} are dates in YYYY-MM-DD format.
+#: media/js/impala/stats/csv_keys.js:263 media/js/impala/stats/csv_keys.js:269 media/js/mkt/stats/csv_keys.js:225 media/js/mkt/stats/csv_keys.js:231
+msgid "<b>{0}</b> from {1} to {2}"
+msgstr "<b>{0}</b> από {1} ως {2}"
+
+#. L10n: {0} and {1} are integers.
+#: media/js/impala/stats/csv_keys.js:267 media/js/mkt/stats/csv_keys.js:229
+msgid "<b>{0}</b> average in last {1} days"
+msgstr "<b>{0}</b> κατά μέσο όρο τις τελευταίες {1} ημέρες"
+
+#: media/js/impala/stats/overview.js:19 media/js/mkt/stats/overview.js:17
+msgid "No data available."
+msgstr "Δεν υπάρχουν δεδομένα."
+
+#: media/js/impala/stats/table.js:74 media/js/mkt/stats/table.js:88
+msgid "Date"
+msgstr "Ημερομηνία"
+
+#: media/js/impala/stats/topchart.js:96 media/js/mkt/stats/topchart.js:96
+msgid "Other"
+msgstr "Άλλο"
+
+#: media/js/mkt/apps.js:84
+msgid "The manifest could not be found at the given location."
+msgstr "Η δήλωση δε βρέθηκε στη δοθείσα τοποθεσία"
+
+#: media/js/mkt/apps.js:87 media/js/zamboni/apps.js:60
+msgid "App host could not be reached."
+msgstr "Δεν ήταν δυνατή "
+
+#: media/js/mkt/apps.js:90 media/js/zamboni/apps.js:63
+msgid "App manifest is unparsable."
+msgstr "Η δήλωση της εφαρμογής δε μπορεί να αναλυθεί."
+
+#: media/js/mkt/apps.js:93 media/js/zamboni/apps.js:66
+msgid "App manifest is invalid."
+msgstr "Η δήλωση της εφαρμογής δεν είναι έγκυρη."
+
+#: media/js/mkt/apps.js:96
+msgid "App is already installed."
+msgstr "Η εφαρμογή είναι ήδη εγκατεστημένη."
+
+#: media/js/mkt/apps.js:100
+msgid "Internal server error."
+msgstr "Σφάλμα εσωτερικού διακομιστή."
+
+#: media/js/mkt/apps.js:103
+msgid "Internal server error on app installation."
+msgstr "Σφάλμα εσωτερικού διακομιστή κατά την εγκατάσταση της εφαρμογής."
+
+#: media/js/mkt/apps.js:106 media/js/zamboni/apps.js:69
+msgid "Install failed. Please try again later."
+msgstr "Η εγκατάσταση απέτυχε. Παρακαλώ προσπαθήστε ξανά αργότερα."
+
+#: media/js/mkt/buttons.js:38
+msgid "Purchasing"
+msgstr "Αγορά"
+
+#: media/js/mkt/buttons.js:44
+msgid "Purchased"
+msgstr "Αγορασμένο"
+
+#: media/js/mkt/buttons.js:70
+msgid "Launch"
+msgstr "Εκκίνηση"
+
+#: media/js/mkt/consumer_init.js:24
+msgid "Click here to view the mobile Marketplace!"
+msgstr "Κάντε κλικ εδω για να δείτε τη φορητή έκδοση του Marketplace!"
+
+#: media/js/mkt/ecosystem.js:26
+msgid "This video requires a browser with support for open video "
+msgstr "Αυτό το βίντεο απαιτεί περιηγητή που να υποστηρίζει ανοιχτά πρότυπα βίντεο "
+
+#: media/js/mkt/ecosystem.js:27
+msgid "or the <a href=\"http://www.adobe.com/go/getflashplayer\">Adobe "
+msgstr "ή το <a href=\"http://www.adobe.com/go/getflashplayer\">Adobe "
+
+#: media/js/mkt/ecosystem.js:28
+msgid "Flash Player</a>."
+msgstr "Flash Player</a>."
+
+#: media/js/mkt/feedback.js:38
+msgid "Message must not be empty."
+msgstr "Το μήνυμα δε μπορεί να είναι κενό."
+
+#: media/js/mkt/login.js:73
+msgid "Persona login failed. Maybe you don't have an account under that email address?"
+msgstr "Η σύνδεση στο Persona απέτυχε. Μήπως δεν έχετε λογαριασμό με αυτή τη διεύθυνση email;"
+
+#: media/js/mkt/login.js:78
+msgid "Persona login failed. A server error was encountered."
+msgstr "Η σύνδεση στο Persona απέτυχε. Προέκυψε σφάλμα διακομιστή."
+
+#: media/js/mkt/lookup-tool.js:65
+msgid "Show All Results"
+msgstr ""
+
+#: media/js/mkt/lookup-tool.js:68
+msgid "Over {0} results found, consider refining your search."
+msgstr ""
+
+#: media/js/mkt/manifest.js:46
+msgid "Requested Permissions:"
+msgstr "Αιτούμενες άδειες:"
+
+#: media/js/mkt/manifest.js:54
+msgid "Certified"
+msgstr "Πιστοποιημένο"
+
+#: media/js/mkt/manifest.js:57
+msgid "Privileged"
+msgstr "Προνομιακή"
+
+#: media/js/mkt/manifest.js:60
+msgid "Unprivileged"
+msgstr "Μη προνομιακή"
+
+#: media/js/mkt/manifest.js:66
+msgid "No reason given"
+msgstr "Χωρίς αιτιολόγηση"
+
+#: media/js/mkt/overlay.js:41
+msgid "OK"
+msgstr "ΟΚ"
+
+#: media/js/mkt/payments.js:69
+msgid "Payment failed. Try again later."
+msgstr "Η πληρωμή απέτυχε. Προσπαθήστε ξανά αργότερα."
+
+#: media/js/mkt/reviewers.js:98
+msgid "Packaged App"
+msgstr "Συσκευασμένη εφαρμογή"
+
+#: media/js/mkt/reviewers.js:102
+msgid "Privileged App"
+msgstr "Προνομιακή εφαρμογή"
+
+#: media/js/mkt/reviewers.js:105
+msgid "More Information Requested"
+msgstr "Απαιτούνται περισσότερες πληροφορίες"
+
+#: media/js/mkt/reviewers.js:108
+msgid "Contains Editor Comment"
+msgstr "Περιέχει σχόλιο του συντάκτη"
+
+#: media/js/mkt/reviewers.js:112
+msgid "Premium App"
+msgstr "Premium Εφαρμογή"
+
+#: media/js/mkt/reviewers.js:115
+msgid "Escalated"
+msgstr "Κλιμακούμενη"
+
+#: media/js/mkt/reviewers.js:120
+msgid "Free"
+msgstr "Δωρεάν"
+
+#: media/js/mkt/reviewers.js:228
+msgid "Any"
+msgstr "Οποιοδήποτε"
+
+#: media/js/mkt/themes_review.js:174
+msgid "Requested Info"
+msgstr "Ζητούμενες πληροφορίες"
+
+#: media/js/mkt/themes_review.js:175
+msgid "Flagged"
+msgstr "Σημειωμένο"
+
+#: media/js/mkt/themes_review.js:176
+msgid "Duplicate"
+msgstr "Αντίγραφο"
+
+#: media/js/mkt/themes_review.js:177
+msgid "Rejected"
+msgstr "Απορριφθέν"
+
+#: media/js/mkt/themes_review.js:178
+msgid "Approved"
+msgstr "Εγκεκριμένο"
+
+#. L10n: {0} is the number of characters left.
+#: media/js/mkt/utils.js:89
+msgid "{0} character left."
+msgid_plural "{0} characters left."
+msgstr[0] "{0} χαρακτήρας απέμεινε."
+msgstr[1] "{0} χαρακτήρες απέμειναν."
+
+#: media/js/mkt/stats/chart.js:327
+msgid "{0} apps"
+msgstr "{0} εφαρμογές"
+
+#: media/js/mkt/stats/chart.js:339
+msgid "Week"
+msgstr "Εβδομάδα"
+
+#: media/js/mkt/stats/chart.js:342
+msgid "Month"
+msgstr "Μήνας"
+
+#: media/js/mkt/stats/chart.js:345
+msgid "Day"
+msgstr "Ημέρα"
+
+#: media/js/mkt/stats/chart.js:352 media/js/mkt/stats/csv_keys.js:9 media/js/mkt/stats/csv_keys.js:18 media/js/mkt/stats/csv_keys.js:27
+msgid "Amount Earned"
+msgstr "Σύνολο κέρδους"
+
+#: media/js/mkt/stats/chart.js:356 media/js/mkt/stats/csv_keys.js:12 media/js/mkt/stats/csv_keys.js:21 media/js/mkt/stats/csv_keys.js:30 media/js/mkt/stats/csv_keys.js:134
+msgid "Units Sold"
+msgstr "Πουληθέντες μονάδες"
+
+#: media/js/mkt/stats/chart.js:360 media/js/mkt/stats/csv_keys.js:15 media/js/mkt/stats/csv_keys.js:24 media/js/mkt/stats/csv_keys.js:33
+msgid "Units Refunded"
+msgstr "Επιστραφείσες μονάδες"
+
+#: media/js/mkt/stats/chart.js:368
+msgid "Users"
+msgstr "Χρήστες"
+
+#: media/js/mkt/stats/chart.js:372
+msgid "Apps"
+msgstr "Εφαρμογές"
+
+#: media/js/mkt/stats/chart_column.js:122
+msgid "by currency {0}"
+msgstr "από νόμισμα {0}"
+
+#: media/js/mkt/stats/chart_column.js:123
+msgid "by source {0}"
+msgstr "από πηγή {0}"
+
+#: media/js/mkt/stats/chart_column.js:131 media/js/mkt/stats/table.js:95
+msgid "Currency"
+msgstr "Νόμισμα"
+
+#: media/js/mkt/stats/chart_column.js:135 media/js/mkt/stats/table.js:98
+msgid "Source"
+msgstr "Πηγή"
+
+#: media/js/mkt/stats/chart_column.js:143
+msgid "Revenue"
+msgstr "Έσοδα"
+
+#: media/js/mkt/stats/chart_column.js:151
+msgid "Refunds"
+msgstr "Επιστροφές"
+
+#: media/js/mkt/stats/csv_keys.js:36 media/js/mkt/stats/csv_keys.js:192 media/js/mkt/stats/csv_keys.js:193
+msgid "Apps Added"
+msgstr "Προστεθείσες Εφαρμογές"
+
+#: media/js/mkt/stats/csv_keys.js:39 media/js/mkt/stats/csv_keys.js:196 media/js/mkt/stats/csv_keys.js:197
+msgid "Apps Installed"
+msgstr "Εγκατεστημένες εφαρμογές"
+
+#: media/js/mkt/stats/csv_keys.js:42 media/js/mkt/stats/csv_keys.js:200 media/js/mkt/stats/csv_keys.js:201
+msgid "Reviews"
+msgstr "Αξιολογήσεις"
+
+#: media/js/mkt/stats/csv_keys.js:45 media/js/mkt/stats/csv_keys.js:208 media/js/mkt/stats/csv_keys.js:209
+msgid "New Users"
+msgstr "Νέοι χρήστες"
+
+#: media/js/mkt/stats/csv_keys.js:48 media/js/mkt/stats/csv_keys.js:204 media/js/mkt/stats/csv_keys.js:205
+msgid "Total Users"
+msgstr "Συνολικοί χρήστες"
+
+#: media/js/mkt/stats/csv_keys.js:51 media/js/mkt/stats/csv_keys.js:212 media/js/mkt/stats/csv_keys.js:213
+msgid "Total Visitors"
+msgstr "Συνολικοί επισκέπτες"
+
+#: media/js/mkt/stats/csv_keys.js:54
+msgid "App Installs"
+msgstr "Εγκαταστάσεις εφαρμογής"
+
+#: media/js/mkt/stats/csv_keys.js:112
+msgid "Marketplace Browse Page"
+msgstr "Σελίδα περιήγησης Marketplace"
+
+#: media/js/mkt/stats/csv_keys.js:113
+msgid "Marketplace Browse Page, Featured"
+msgstr "Σελίδα περιήγησης Marketplace, Προβεβλημένη"
+
+#: media/js/mkt/stats/csv_keys.js:114
+msgid "Marketplace Category Page"
+msgstr "Σελίδα Κατηγοριών Marketplace"
+
+#: media/js/mkt/stats/csv_keys.js:115
+msgid "Marketplace Category Page, Featured"
+msgstr "Σελίδα Κατηγοριών Marketplace, Προβεβλημένη"
+
+#: media/js/mkt/stats/csv_keys.js:116
+msgid "Marketplace Detail Page"
+msgstr "Σελίδα Λεπτομερειών Marketplace"
+
+#: media/js/mkt/stats/csv_keys.js:117
+msgid "Marketplace Detail Page, Upsell"
+msgstr "Σελίδα Λεπτομερειών Marketplace, Upsell"
+
+#: media/js/mkt/stats/csv_keys.js:118
+msgid "Marketplace Home Page"
+msgstr "Αρχική Σελίδα Marketplace"
+
+#: media/js/mkt/stats/csv_keys.js:119
+msgid "Marketplace Search Results"
+msgstr "Αποτελέσματα Αναζήτησης Marketplace"
+
+#: media/js/mkt/stats/csv_keys.js:120
+msgid "Marketplace Search Results, Featured"
+msgstr "Αποτελέσματα Αναζήτησης Marketplace, Προβεβλημένα"
+
+#: media/js/mkt/stats/csv_keys.js:156
+msgid "Units Sold, last {0} days"
+msgstr "Πουληθέντες μονάδες, τελευταίες {0} ημέρες"
+
+#: media/js/mkt/stats/csv_keys.js:157
+msgid "Units Sold from {0} to {1}"
+msgstr "Πουληθέντες μονάδες από {0} ως {1}"
+
+#: media/js/mkt/stats/csv_keys.js:160
+msgid "Amount Earned, last {0} days"
+msgstr "Σύνολο κέρδους, τελευταίες {0} ημέρες"
+
+#: media/js/mkt/stats/csv_keys.js:161
+msgid "Amount Earned {0} to {1}"
+msgstr "Σύνολο κέρδους {0} ως {1}"
+
+#: media/js/mkt/stats/csv_keys.js:164
+msgid "Units Refunded, last {0} days"
+msgstr "Αποδιδόμενες μονάδες, τελευταίες {0} ημέρες"
+
+#: media/js/mkt/stats/csv_keys.js:165
+msgid "Units Refunded from {0} to {1}"
+msgstr "Αποδιδόμενες μονάδες από {0} ως {1}"
+
+#: media/js/mkt/stats/csv_keys.js:168 media/js/mkt/stats/csv_keys.js:169
+msgid "Total Units Sold by Currency"
+msgstr "Σύνολο μονάδων πουληθέντων από το νόμισμα"
+
+#: media/js/mkt/stats/csv_keys.js:172 media/js/mkt/stats/csv_keys.js:173
+msgid "Total Amount Earned by Currency"
+msgstr "Σύνολο μονάδων κερδισμένων από το νόμισμα"
+
+#: media/js/mkt/stats/csv_keys.js:176 media/js/mkt/stats/csv_keys.js:177
+msgid "Total Units Refunded by Currency"
+msgstr "Σύνολο μονάδων αποδιδόμενων από το νόμισμα"
+
+#: media/js/mkt/stats/csv_keys.js:180 media/js/mkt/stats/csv_keys.js:181
+msgid "Total Units Sold by Source"
+msgstr "Σύνολο μονάδων πουληθέντων από την πηγή"
+
+#: media/js/mkt/stats/csv_keys.js:184 media/js/mkt/stats/csv_keys.js:185
+msgid "Total Amount Earned by Source"
+msgstr "Σύνολο μονάδων κερδισμένων από την πηγή"
+
+#: media/js/mkt/stats/csv_keys.js:188 media/js/mkt/stats/csv_keys.js:189
+msgid "Total Units Refunded by Source"
+msgstr "Σύνολο μονάδων αποδιδόμενων από την πηγή"
+
+#: media/js/mkt/stats/csv_keys.js:216 media/js/mkt/stats/csv_keys.js:217
+msgid "Total Installs"
+msgstr "Σύνολο εγκαταστάσεων"
+
+#: media/js/zamboni/admin_validation.js:24 media/js/zamboni/devhub.js:1438 media/js/zamboni/editors.js:329
+msgid "Select an application first"
+msgstr "Επιλέξτε πρώτα εφαρμογή"
+
+#: media/js/zamboni/admin_validation.js:53
+msgid "Set {0} add-on to a max version of {1} and email the author."
+msgid_plural "Set {0} add-ons to a max version of {1} and email the authors."
+msgstr[0] "Ορισμός του max version για το πρόσθετο {0} σε {1} και αποστολή μηνύματος στον δημιουργό."
+msgstr[1] "Ορισμός του max version για τα πρόσθετα {0} σε {1} και αποστολή μηνύματος στους δημιουργούς."
+
+#: media/js/zamboni/admin_validation.js:59
+msgid "This will send emails to the authors of {0} file."
+msgid_plural "This will send emails to the authors of {0} files."
+msgstr[0] "Αυτή η ενέργεια θα στείλει email στους δημιουργούς  {0} αρχείου."
+msgstr[1] "Αυτή η ενέργεια θα στείλει email στους δημιουργούς  {0} αρχείων."
+
+#: media/js/zamboni/apps.js:54
+msgid "App installation not allowed."
+msgstr "Δεν επιτρέπεται η εγκατάσταση της εφαρμογής."
+
+#: media/js/zamboni/apps.js:57
+msgid "App manifest is malformed."
+msgstr "Η δήλωση της εφαρμογής έχει λάθος μορφή."
+
+#: media/js/zamboni/apps.js:80
+msgid "App installation failed."
+msgstr "Η εγκατάσταση της εφαρμογής απέτυχε."
+
+#: media/js/zamboni/apps.js:81
+msgid "This system does not support installing apps."
+msgstr "Το σύστημα δεν υποστηρίζει την εγκατάσταση εφαρμογών."
+
+#: media/js/zamboni/browserid_support.js:37
+msgid "Admins and editors must provide a password to log in."
+msgstr "Οι διαχειριστές και οι συντάκτες θα πρέπει να εισάγουν κωδικό για να συνδεθούν."
+
+#: media/js/zamboni/browserid_support.js:42
+msgid "BrowserID login failed. Maybe you don't have an account under that email address?"
+msgstr "Η σύνδεση με browserID απέτυχε. Μήπως δεν έχετε ορίσει αυτή τη διεύθυνση για τον λογαριασμό σας;"
+
+#. L10n: {0} is an app name like Firefox.
+#: media/js/zamboni/buttons.js:108
+msgid "Accept and Install"
+msgstr "Αποδοχή και εγκατάσταση"
+
+#: media/js/zamboni/buttons.js:108
+msgid "Add to {0}"
+msgstr "Προσθήκη στον {0}"
+
+#: media/js/zamboni/buttons.js:113
+msgid "Download Now"
+msgstr "Λήψη τώρα"
+
+#: media/js/zamboni/buttons.js:154
+msgid "Add-on has not been updated to support default-to-compatible."
+msgstr "Το πρόσθετο δεν έχει ενημερωθεί ώστε να υποστηρίζει την προεπιλογή σε συμβατό."
+
+#: media/js/zamboni/buttons.js:159
+msgid "You need to be using Firefox 10.0 or higher."
+msgstr "Χρειάζεται να χρησιμοποιείτε την έκδοση 10.0 του Firefox ή υψηλότερη."
+
+#: media/js/zamboni/buttons.js:171
+msgid "Mozilla has marked this version as incompatible with your Firefox version."
+msgstr "Ο Mozilla έχει σημειώσει αυτή την έκδοση ως μη συμβατή με την έκδοση του Firefox που έχετε."
+
+#. L10n: {0} is an platform like Windows or Linux.
+#: media/js/zamboni/buttons.js:249
+msgid "Install for {0} anyway"
+msgstr "Εγκατάσταση σε {0} οπωσδήποτε"
+
+#: media/js/zamboni/buttons.js:249
+msgid "Download for {0} anyway"
+msgstr "Λήψη για {0} οπωσδήποτε"
+
+#: media/js/zamboni/buttons.js:306
+msgid "Not available for your platform"
+msgstr "Δεν διατίθεται για το λειτουργικό σας"
+
+#. L10n: {0} is an app name, {1} is the app version.
+#: media/js/zamboni/buttons.js:317 media/js/zamboni/buttons.js:354
+msgid "Not available for {0} {1}"
+msgstr "Δεν διατίθεται για τον {0} {1}"
+
+#: media/js/zamboni/buttons.js:380
+msgid "Works with {app} {min} - {max}"
+msgstr "Συμβατό με {app} {min} - {max}"
+
+#: media/js/zamboni/buttons.js:382
+msgid "View other versions"
+msgstr "Προβολή άλλων εκδόσεων"
+
+#: media/js/zamboni/buttons.js:597 media/js/zamboni/mobile/buttons.js:39
+msgid "Sorry, you need a Mozilla-based browser (such as Firefox) to install a search plugin."
+msgstr "Λυπούμαστε αλλά απαιτείται περιηγητής της οικογένειας Mozilla (όπως ο Firefox) για να εγκαταστήσετε πρόσθετα αναζήτησης."
+
+#: media/js/zamboni/collections.js:193
+msgid "clear recently viewed"
+msgstr "Εκκαθάριση πρόσφατα προβληθέντων"
+
+#: media/js/zamboni/collections.js:365
+msgid "Adding to Favorites&hellip;"
+msgstr "Γίνεται προσθήκη στις αγαπημένες&hellip;"
+
+#: media/js/zamboni/collections.js:368
+msgid "Removing Favorite&hellip;"
+msgstr "Γίνεται αφαίρεση από τις αγαπημένες&hellip;"
+
+#: media/js/zamboni/collections.js:371
+msgid "Add to Favorites"
+msgstr "Προσθήκη στις αγαπημένες"
+
+#: media/js/zamboni/collections.js:374
+msgid "Remove from Favorites"
+msgstr "Αφαίρεση απ' τις αγαπημένες"
+
+#: media/js/zamboni/collections.js:437
+msgid "Pending"
+msgstr "Σε αναμονή"
+
+#: media/js/zamboni/collections.js:438
+msgid "Add a comment"
+msgstr "Προσθήκη σχολίου"
+
+#: media/js/zamboni/collections.js:438
+msgid "Comment"
+msgstr "Σχόλιο"
+
+#: media/js/zamboni/collections.js:439
+msgid "Remove this add-on from the collection"
+msgstr "Αφαίρεση αυτού του πρόσθετου από τη συλλογή"
+
+#: media/js/zamboni/collections.js:439 media/js/zamboni/collections.js:468
+msgid "Remove"
+msgstr "Αφαίρεση"
+
+#: media/js/zamboni/collections.js:468
+msgid "Remove this user as a contributor"
+msgstr "Αφαίρεση χρήστη από τους συντελεστές"
+
+#: media/js/zamboni/collections.js:480
+msgid "An email address is required."
+msgstr "Απαιτείται διεύθυνση email."
+
+#: media/js/zamboni/collections.js:498
+msgid "You cannot add yourself as a contributor."
+msgstr "Δε μπορείτε να προσθέσετε τον εαυτό σας στους συνεισφέροντες."
+
+#: media/js/zamboni/collections.js:500
+msgid "You have already added that user."
+msgstr "Έχετε ήδη προσθέσει αυτόν τον χρήστη."
+
+#: media/js/zamboni/collections.js:703
+msgid "Add to favorites"
+msgstr "Προσθήκη στα αγαπημένα"
+
+#: media/js/zamboni/collections.js:707
+msgid "Remove from favorites"
+msgstr "Αφαίρεση απ' τα αγαπημένα"
+
+#: media/js/zamboni/collections.js:734
+msgid "Stop following"
+msgstr "Διακοπή παρακολούθησης"
+
+#: media/js/zamboni/contributions.js:134
+msgid "Install App"
+msgstr "Εγκατάσταση εφαρμογής"
+
+#: media/js/zamboni/devhub.js:242
+msgid "Your browser does not support the video tag"
+msgstr "Ο περιηγητής σας δεν υποστηρίζει την οδηγία video."
+
+#: media/js/zamboni/devhub.js:503
+msgid "Enter a new author's email address"
+msgstr "Εισάγετε τη διεύθυνση νέου συντάκτη"
+
+#: media/js/zamboni/devhub.js:793
+msgid "{files} file"
+msgid_plural "{files} files"
+msgstr[0] "{files} αρχείο"
+msgstr[1] "{files} αρχεία"
+
+#: media/js/zamboni/devhub.js:796
+msgid "{reviews} review"
+msgid_plural "{reviews} reviews"
+msgstr[0] "{reviews} αξιολόγηση"
+msgstr[1] "{reviews} αξιολογήσεις"
+
+#: media/js/zamboni/devhub.js:1466
+msgid "Starting tests..."
+msgstr "Έναρξη ελέγχων..."
+
+#: media/js/zamboni/devhub.js:1473
+msgid "Waiting for test results..."
+msgstr "Αναμονή αποτελεσμάτων ελέγχων..."
+
+#: media/js/zamboni/devhub.js:1475 media/js/zamboni/devhub.js:1480
+msgid "Internal Server Error"
+msgstr "Εσωτερικό σφάλμα διακομιστή"
+
+#: media/js/zamboni/devhub.js:1515
+msgid "Must be a valid e-mail address."
+msgstr "Η διεύθυνση email πρέπει να είναι έγκυρη."
+
+#: media/js/zamboni/devhub_search.js:8
+msgid "No results found."
+msgstr "Δεν βρέθηκαν αποτελέσματα."
+
+#: media/js/zamboni/discovery_pane.js:217
+msgid "Sorry, we couldn't find any recommendations for you.<br>Please visit the <a href=\"{0}\">add-ons site</a> to find an add-on that's right for you."
+msgstr ""
+"Λυπούμαστε αλλά δεν μπορέσαμε να σας συστήσουμε κάτι που να σας ενδιαφέρει.<br>Σας παρακαλούμε να επισκεφθείτε τον <a href=\"{0}\">ιστότοπο πρόσθετων</a> για να βρείτε κάτι που να σας ταιριάζει."
+
+#: media/js/zamboni/discovery_pane.js:247
+msgid "Finding recommendations&hellip;"
+msgstr "Βρείτε συστάσεις&hellip;"
+
+#: media/js/zamboni/discovery_pane.js:249
+msgid "Updating recommendations&hellip;"
+msgstr "Ενημέρωση συστάσεων&hellip;"
+
+#: media/js/zamboni/editors.js:160
+msgid "{name} was viewing this page first."
+msgstr "Ο/Η {name} είχε φορτώσει τη σελίδα πριν από εσάς."
+
+#: media/js/zamboni/editors.js:210
+msgid "Receipt checked by app."
+msgstr "Η απόδειξη ελέγχθηκε από την εφαρμογή."
+
+#: media/js/zamboni/editors.js:212
+msgid "Receipt was not checked by app."
+msgstr "Η απόδειξη δεν ελέγχθηκε από την εφαρμογή."
+
+#: media/js/zamboni/editors.js:278
+msgid "{name} was viewing this add-on first."
+msgstr "Ο χρήστης {name} είδε αυτό το πρόσθετο πρώτος."
+
+#: media/js/zamboni/editors.js:289
+msgid "Loading&hellip;"
+msgstr "Γίνεται φόρτωση&hellip;"
+
+#: media/js/zamboni/editors.js:294
+msgid "Version Notes"
+msgstr "Σημειώσεις έκδοσης"
+
+#: media/js/zamboni/editors.js:299
+msgid "Notes for Reviewers"
+msgstr "Σημειώσεις για αξιολογητές"
+
+#: media/js/zamboni/editors.js:304
+msgid "No version notes found"
+msgstr "Δεν βρέθηκαν σημειώσεις έκδοσης"
+
+#: media/js/zamboni/editors.js:364
+msgid "Average Reviews"
+msgstr "Μέσος όρος αξιολογήσεων"
+
+#: media/js/zamboni/editors.js:420
+msgid "Number of Reviews"
+msgstr "Αριθμός αξιολογήσεων"
+
+#: media/js/zamboni/global.js:416
+msgid "Loading..."
+msgstr "Γίνεται φόρτωση..."
+
+#. L10n: {0} is the number of characters left.
+#: media/js/zamboni/global.js:489
+msgid "<b>{0}</b> character left."
+msgid_plural "<b>{0}</b> characters left."
+msgstr[0] "<b>{0}</b> χαρακτήρας διαθέσιμος."
+msgstr[1] "<b>{0}</b> χαρακτήρες διαθέσιμοι."
+
+#. L10n: {0} is a filename, such as `addon.zip`.
+#: media/js/zamboni/packager.js:31
+msgid "Download {0}"
+msgstr "Λήψη του {0}"
+
+#: media/js/zamboni/password-strength.js:20
+msgid "Password strength:"
+msgstr "Ισχύς κωδικού:"
+
+#: media/js/zamboni/password-strength.js:26
+msgid "At least {0} character left."
+msgid_plural "At least {0} characters left."
+msgstr[0] "Τουλάχιστον {0} χαρακτήρας διαθέσιμος"
+msgstr[1] "Τουλάχιστον {0} χαρακτήρες διαθέσιμοι"
+
+#: media/js/zamboni/perf.js:29 media/js/zamboni/perf.js:42
+msgid "All"
+msgstr "Όλα"
+
+#: media/js/zamboni/validator.js:336
+msgid "Add-on failed validation."
+msgstr "Το πρόσθετο απέτυχε να επικυρωθεί."
+
+#: media/js/zamboni/validator.js:338
+msgid "Add-on passed validation."
+msgstr "Το πρόσθετο επικυρώθηκε."
+
+#: media/js/zamboni/mobile/buttons.js:75
+msgid "Not Updated for {0} {1}"
+msgstr "Δεν έχει ενημερωθεί για τον {0} {1}"
+
+#: media/js/zamboni/mobile/buttons.js:76
+msgid "Requires Newer Version of {0}"
+msgstr "Απαιτεί νεότερη έκδοση του {0}"
+
+#: media/js/zamboni/mobile/buttons.js:77
+msgid "Unreviewed"
+msgstr "Δεν έχει αξιολογηθεί"
+
+#: media/js/zamboni/mobile/buttons.js:78
+msgid "Experimental <span>(Learn More)</span>"
+msgstr "Πειραματικό <span>(Μάθετε περισσότερα)</span>"
+
+#: media/js/zamboni/mobile/buttons.js:79 media/js/zamboni/mobile/buttons.js:80
+msgid "Not Available for {0}"
+msgstr "Δεν διατίθεται για τον {0}"
+
+#: media/js/zamboni/mobile/buttons.js:81
+msgid "Experimental"
+msgstr "Πειραματικό"
+
+#: media/js/zamboni/mobile/buttons.js:82
+msgid "Themes Require Newer Version of {0}"
+msgstr "Τα θέματα απαιτούν νεότερη έκδοση του {0}"
+
+#: media/js/zamboni/mobile/buttons.js:83
+msgid "Themes Require {0}"
+msgstr "Τα θέματα απαιτούν το {0}"
+
+#: media/js/zamboni/mobile/buttons.js:128
+msgid "Installing..."
+msgstr "Γίνεται εγκατάσταση..."
+
+#: media/js/zamboni/mobile/buttons.js:136
+msgid "Purchasing..."
+msgstr "Γίνεται αγορά..."
+
+#: media/js/zamboni/mobile/buttons.js:165
+msgid "This add-on has been preliminarily reviewed by Mozilla."
+msgstr "Αυτό το πρόσθετο έχει αξιολογηθεί μερικώς από την κοινότητα Mozilla"
+
+#: media/js/zamboni/mobile/buttons.js:299
+msgid "Keep it"
+msgstr "Διατήρηση"
+
+#: media/js/zamboni/mobile/general.js:338
+msgid "You're trying it on!"
+msgstr "Το δοκιμάζετε!"
+
+#: media/js/zamboni/mobile/general.js:350
+msgid "Added to Firefox"
+msgstr "Προστέθηκε στον Firefox"

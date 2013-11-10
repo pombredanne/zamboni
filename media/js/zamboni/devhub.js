@@ -1,56 +1,81 @@
 $(document).ready(function() {
     // Edit Add-on
-    if($("#edit-addon").length){
-        initEditAddon();
-    }
+    $("#edit-addon").exists(initEditAddon);
 
     //Ownership
-    if ($("#author_list").length) {
+    $("#author_list").exists(function() {
         initAuthorFields();
         initLicenseFields();
-    }
+    });
 
     //Payments
-    if ($('.payments').length) {
-        initPayments();
-    }
+    $('.payments').exists(initPayments);
 
     // Edit Versions
-    if($('.edit-version').length) {
-        initEditVersions();
-    }
+    $('.edit-version').exists(initEditVersions);
 
     // View versions
-    if($('#version-list').length) {
-        initVersions();
-    }
+    $('#version-list').exists(initVersions);
 
     // Submission process
-    if($('.addon-submission-process').length) {
+    $('.addon-submission-process').exists(function(){
         initLicenseFields();
         initCharCount();
         initSubmit();
-    }
+    });
+
+    // Merchant Account Setup
+    $('#id_paypal_id').exists(initMerchantAccount);
 
     // Validate addon (standalone)
-    if($('.validate-addon').length) {
-        initSubmit();
-    }
+    $('.validate-addon').exists(initSubmit);
+
+    // Add-on Compatibility Check
+    $('#addon-compat-upload').exists(initAddonCompatCheck, [$('#addon-compat-upload')]);
 
     // Submission > Describe
-    if ($("#submit-describe").length) {
-        initCatFields();
-    }
+    $("#submit-describe").exists(initCatFields);
+
+    // Submission > Descript > Summary
+    $('.addon-submission-process #submit-describe').exists(initTruncateSummary);
 
     // Submission > Media
-    if($('#submit-media').length) {
+    $('#submit-media').exists(function() {
         initUploadIcon();
         initUploadPreview();
-    }
+    });
+
+    $('.perf-tests').exists(initPerfTests, [window.document]);
 
     // Add-on uploader
     if($('#upload-addon').length) {
-        $('#upload-addon').addonUploader({'cancel': $('.upload-file-cancel') });
+        var opt = {'cancel': $('.upload-file-cancel') };
+        if($('#addon-compat-upload').length) {
+            opt.appendFormData = function(formData) {
+                formData.append('app_id',
+                                $('#id_application option:selected').val());
+                formData.append('version_id',
+                                $('#id_app_version option:selected').val());
+            };
+        }
+        $('#upload-addon').addonUploader(opt);
+        $('#id_admin_override_validation').addClass('addon-upload-failure-dependant')
+            .change(function () {
+                if ($(this).attr('checked')) {
+                    // TODO: Disable these when unchecked, or bounce
+                    // between upload_errors and upload_success
+                    // handlers? I think the latter would mostly be a
+                    // bad idea, since failed validation might give us
+                    // the wrong results, and admins overriding
+                    // validation might need some additional leeway.
+                    $('.platform:hidden').show();
+                    $('.platform label').removeClass('platform-disabled');
+                    $('.addon-upload-dependant').attr('disabled', false);
+                } else {
+                    $('.addon-upload-dependant').attr('disabled', true);
+                }
+            });
+        $('.addon-upload-failure-dependant').attr('disabled', true);
     }
 
     if ($(".version-upload").length) {
@@ -78,6 +103,7 @@ $(document).ready(function() {
                     var errors = $.parseJSON(xhr.responseText);
                     $("#upload-file").find(".errorlist").remove();
                     $("#upload-file").find(".upload-status").before(generateErrorList(errors));
+                    $('#upload-file-finish').attr('disabled', false);
                     $modal.setPos();
                 }
             });
@@ -87,9 +113,131 @@ $(document).ready(function() {
         }
     }
 
+    if($('#upload-webapp-url').exists()) {
+        $('#upload-webapp-url').bind("keyup change blur", function(e) {
+            var $this = $(this),
+                $button = $('#validate_app'),
+                // Ensure it's at least "protocol://host/something.(webapp/json)"
+                match = $this.val().match(/^(.+):\/\/(.+)\/(.+)\.(webapp|json)$/);
+
+            if($this.attr('data-input') != $this.val()) {
+                // Show warning if 8+ characters have been typed but there's no protocol.
+                if($this.val().length >= 8 && !$this.val().match(/^(.+):\/\//)) {
+                    $('#validate-error-protocol').fadeIn();
+                } else {
+                    $('#validate-error-protocol').hide();
+                }
+
+                // Show the button if valid
+                $button.toggleClass('disabled', !match);
+                $this.attr('data-input', $this.val());
+                $('#upload-status-results').remove();
+                $('#upload-file button.upload-file-submit').attr('disabled', true);
+            }
+        })
+        .trigger('keyup')
+        .bind('upload_finished', function(e, success, r, message) {
+            $('#upload-status-results').remove();
+            $('#upload-webapp-url').removeClass('loading');
+
+            var $error_box = $('<div>', {'id': 'upload-status-results', 'class':
+                                         'status-' + (success ? 'pass' : 'fail')}).show(),
+                $eb_messages = $("<ul>", {'id': 'upload_errors'}),
+                messages = r.validation.messages;
+
+            $error_box.append($("<strong>", {'text': message}));
+            $error_box.append($eb_messages);
+
+            $.each(messages, function(i, m) {
+                var li = $('<li>', {'html': m.message});
+                $eb_messages.append(li);
+            });
+
+            if (r && r.full_report_url) {
+                // There might not be a link to the full report
+                // if we get an early error like unsupported type.
+                $error_box.append($("<a>", {'href': r.full_report_url,
+                                            'target': '_blank',
+                                            'class': 'view-more',
+                                            'text': gettext('See full validation report')}));
+            }
+
+            $('.upload-status').append($error_box);
+        })
+        .bind('upload_errors', function(e, r) {
+            var v = r.validation,
+                error_message = format(ngettext(
+                    "Your app failed validation with {0} error.",
+                    "Your app failed validation with {0} errors.",
+                    v.errors), [v.errors]);
+
+            $(this).trigger('upload_finished', [false, r, error_message]);
+            $('#validate_app').removeClass('disabled');
+        })
+        .bind('upload_success', function(e, r) {
+            var message = "",
+                v = r.validation,
+                warnings = v.warnings + v.notices;
+
+            if(warnings > 0) {
+                message = format(ngettext(
+                            "Your app passed validation with no errors and {0} message.",
+                            "Your app passed validation with no errors and {0} messages.",
+                            warnings), [warnings]);
+            } else {
+                message = gettext("Your app passed validation with no errors or messages.");
+            }
+
+            $(this).trigger('upload_finished', [true, r, message]);
+            $('#upload-file button.upload-file-submit').attr('disabled', false);
+        });
+
+        // Add protocol if needed
+        $('#validate-error-protocol a').click(_pd(function() {
+            var $webapp_url = $('#upload-webapp-url');
+            $webapp_url.val($(this).text() + $webapp_url.val());
+            $webapp_url.focus().trigger('keyup');
+        }));
+
+        $('#validate-field').submit(function() {
+            if($('#validate_app').hasClass('disabled')) return false;
+
+            $('#validate_app').addClass('disabled');
+            $.post($('#upload-webapp-url').attr('data-upload-url'), {'manifest': $('#upload-webapp-url').val()}, check_webapp_validation);
+            $('#upload-webapp-url').addClass('loading');
+            return false;
+        });
+        function check_webapp_validation(results) {
+            var $upload_field = $('#upload-webapp-url');
+            $('#id_upload').val(results.upload);
+            if(! results.validation) {
+                setTimeout(function(){
+                    $.ajax({
+                        url: results.url,
+                        dataType: 'json',
+                        success: check_webapp_validation,
+                        error: function(xhr, textStatus, errorThrown) {
+                            /*
+                            var errOb = parseErrorsFromJson(xhr.responseText);
+                            $upload_field.trigger("upload_errors", [file, errOb.errors, errOb.json]);
+                            $upload_field.trigger("upload_finished", [file]);
+                            */
+                        }
+                    });
+                }, 1000);
+            } else {
+                if(results.validation.errors) {
+                    $upload_field.trigger("upload_errors", [results]);
+                } else {
+                    $upload_field.trigger("upload_success", [results]);
+                }
+            }
+        }
+    }
+
     // Jetpack
     if($('#jetpack').exists()) {
-        $('a[rel=video-lightbox]').click(_pd(function() {
+        $('a[rel="video-lightbox"]').click(_pd(function() {
             var $this = $(this),
                 text = gettext('Your browser does not support the video tag'),
                 $overlay = $('<div>', {id: 'jetpack-overlay'}),
@@ -136,7 +284,38 @@ $(document).ready(function() {
     }
     $('#edit-addon-media').bind('click', function() {
         imageStatus.cancel();
-    })
+    });
+
+    // hook up various links related to current version status
+    $('#modal-cancel').modal('#cancel-review', {width: 400});
+    $('#modal-delete').modal('#delete-addon', {
+        width: 400,
+        callback: function(obj) {
+            return fixPasswordField(this);
+        }
+    });
+    $('#modal-disable').modal('#disable-addon', {
+        width: 400,
+        callback: function(d){
+            $('.version_id', this).val($(d.click_target).attr('data-version'));
+            return true;
+        }
+    });
+
+    $('#enable-addon').bind('click', _pd(function() {
+        $.ajax({
+            'type': 'POST',
+            'url': $(this).attr('href'),
+            'success': function() {
+                window.location.reload();
+            }
+        });
+    }));
+
+    // In-app payments config.
+    if ($('#in-app-config').length) {
+        initInAppConfig($('#in-app-config'));
+    }
 });
 
 function initUploadControls() {
@@ -204,7 +383,7 @@ $(document).ready(function() {
 
     $('.modal-delete').each(function() {
         var el = $(this);
-        el.modal(el.closest('li').find('.delete-addon'), {
+        el.modal(el.siblings('.delete-addon'), {
             width: 400,
             callback: function(obj) {
                 fixPasswordField(this);
@@ -249,7 +428,7 @@ function truncateFields() {
     // as per Bug 622030...
     return;
     // var els = [
-    //         "#addon_description",
+    //         "#addon-description",
     //         "#developer_comments"
     //     ];
     // $(els.join(', ')).each(function(i,el) {
@@ -273,38 +452,46 @@ function addonFormSubmit() {
         // If the baseurl changes (the slug changed) we need to go to the new url.
         var baseurl = function(){
             return parent_div.find('#addon-edit-basic').attr('data-baseurl');
-        }
+        };
         $('.edit-media-button button').attr('disabled', false);
         $('form', parent_div).submit(function(e){
             e.preventDefault();
             var old_baseurl = baseurl();
             parent_div.find(".item").removeClass("loaded").addClass("loading");
-            var scrollBottom = $(document).height() - $(document).scrollTop();
+            var $document = $(document),
+                scrollBottom = $document.height() - $document.scrollTop(),
+                $form = $(this),
+                hasErrors = $form.find('.errorlist').length;
 
-            $.post(parent_div.find('form').attr('action'),
-                $(this).serialize(), function(d) {
-                    parent_div.html(d).each(addonFormSubmit);
-                    if (!parent_div.find(".errorlist").length && old_baseurl && old_baseurl !== baseurl()) {
-                        document.location = baseurl();
-                    }
-                    $(document).scrollTop($(document).height() - scrollBottom);
-                    truncateFields();
-                    annotateLocalizedErrors(parent_div);
-                    if(parent_div.is('#edit-addon-media')) {
-                        imageStatus.start();
-                        hideSameSizedIcons();
-                    }
+            $.post($form.attr('action'), $form.serialize(), function(d) {
+                parent_div.html(d).each(addonFormSubmit);
+                if (!hasErrors && old_baseurl && old_baseurl !== baseurl()) {
+                    document.location = baseurl();
+                }
+                $document.scrollTop($document.height() - scrollBottom);
+                truncateFields();
+                annotateLocalizedErrors(parent_div);
+                if (parent_div.is('#edit-addon-media')) {
+                    imageStatus.start();
+                    hideSameSizedIcons();
+                }
+                if ($form.find('#addon-categories-edit').length) {
+                    initCatFields();
+                }
+                if ($form.find('#required-addons').length) {
+                    initRequiredAddons();
+                }
 
-                    if (!parent_div.find(".errorlist").length) {
-                        var e = $(format('<b class="save-badge">{0}</b>',
-                                         [gettext('Changes Saved')]))
-                                  .appendTo(parent_div.find('h3').first());
-                        setTimeout(function(){
-                            e.css('opacity', 0);
-                            setTimeout(function(){ e.remove(); }, 200);
-                        }, 2000);
-                    }
-                });
+                if (!hasErrors) {
+                    var e = $(format('<b class="save-badge">{0}</b>',
+                                     [gettext('Changes Saved')]))
+                              .appendTo(parent_div.find('h3').first());
+                    setTimeout(function(){
+                        e.css('opacity', 0);
+                        setTimeout(function(){ e.remove(); }, 200);
+                    }, 2000);
+                }
+            });
         });
         reorderPreviews();
         z.refreshL10n();
@@ -322,16 +509,20 @@ function initEditAddon() {
     $('#edit-addon').delegate('h3 a', 'click', function(e){
         e.preventDefault();
 
-        a = e.target;
+        var a = e.target;
         parent_div = $(a).closest('.edit-addon-section');
 
         (function(parent_div, a){
             parent_div.find(".item").addClass("loading");
             parent_div.load($(a).attr('data-editurl'), function(){
-                if($('#addon-categories-edit').length) {
+                if (parent_div.find('#addon-categories-edit').length) {
                     initCatFields();
                 }
+                if (parent_div.find('#required-addons').length) {
+                    initRequiredAddons();
+                }
                 $(this).each(addonFormSubmit);
+                initInvisibleUploads();
             });
         })(parent_div, a);
 
@@ -343,6 +534,32 @@ function initEditAddon() {
     initUploadIcon();
     initUploadPreview();
 }
+
+
+function initRequiredAddons() {
+    var $req = $('#required-addons');
+    if (!$req.length || !$('input.autocomplete', $req).length) {
+        return;
+    }
+    $.zAutoFormset({
+        delegate: '#required-addons',
+        forms: 'ul.dependencies',
+        prefix: 'dependencies',
+        hiddenField: 'dependent_addon',
+        addedCB: function(emptyForm, item) {
+            var f = template(emptyForm)({
+                icon: item.icon,
+                name: item.name || ''
+            });
+            // Firefox automatically escapes the contents of `href`, borking
+            // the curly braces in the {url} placeholder, so let's do this.
+            var $f = $(f);
+            $f.find('div a').attr('href', item.url);
+            return $f;
+        }
+    });
+}
+
 
 function create_new_preview_field() {
     var forms_count = $('#id_files-TOTAL_FORMS').val(),
@@ -361,7 +578,7 @@ function create_new_preview_field() {
         });
     });
     $(last).after(last_clone);
-    $('#id_files-TOTAL_FORMS').val(parseInt(forms_count) + 1);
+    $('#id_files-TOTAL_FORMS').val(parseInt(forms_count, 10) + 1);
 
     return last;
 }
@@ -424,7 +641,7 @@ function initUploadPreview() {
 
     function upload_success(e, file, upload_hash) {
         form = forms['form_' + file.instance];
-        form.find('[name$=upload_hash]').val(upload_hash);
+        form.find('[name$="upload_hash"]').val(upload_hash);
     }
 
     function upload_errors(e, file, errors) {
@@ -449,15 +666,17 @@ function initUploadPreview() {
         renumberPreviews();
     }
 
-    $f.delegate('#screenshot_upload', "upload_finished", upload_finished)
-      .delegate('#screenshot_upload', "upload_success", upload_success)
-      .delegate('#screenshot_upload', "upload_start", upload_start)
-      .delegate('#screenshot_upload', "upload_errors", upload_errors)
-      .delegate('#screenshot_upload', "upload_start_all", upload_start_all)
-      .delegate('#screenshot_upload', "upload_finished_all", upload_finished_all)
-      .delegate('#screenshot_upload', 'change', function(e){
-        $(this).imageUploader();
-      });
+    if (z.capabilities.fileAPI) {
+        $f.delegate('#screenshot_upload', "upload_finished", upload_finished)
+          .delegate('#screenshot_upload', "upload_success", upload_success)
+          .delegate('#screenshot_upload', "upload_start", upload_start)
+          .delegate('#screenshot_upload', "upload_errors", upload_errors)
+          .delegate('#screenshot_upload', "upload_start_all", upload_start_all)
+          .delegate('#screenshot_upload', "upload_finished_all", upload_finished_all)
+          .delegate('#screenshot_upload', 'change', function(e){
+                $(this).imageUploader();
+          });
+    }
 
     $("#edit-addon-media, #submit-media").delegate("#file-list .remove", "click", function(e){
         e.preventDefault();
@@ -467,7 +686,15 @@ function initUploadPreview() {
     });
 }
 
+function initInvisibleUploads() {
+    if (!z.capabilities.fileAPI) {
+        $('.invisible-upload').addClass('legacy');
+    }
+}
+
 function initUploadIcon() {
+    initInvisibleUploads();
+
     $('#edit-addon-media, #submit-media').delegate('#icons_default a', 'click', function(e){
         e.preventDefault();
 
@@ -479,6 +706,7 @@ function initUploadIcon() {
         $(this).addClass('active');
 
         $("#id_icon_upload").val("");
+        $('#icon_preview').show();
 
         $('#icon_preview_32 img').attr('src', $('img', $parent).attr('src'));
         $('#icon_preview_64 img').attr('src', $('img',
@@ -500,10 +728,11 @@ function initUploadIcon() {
         upload_success = function(e, file, upload_hash) {
             $('#id_icon_upload_hash').val(upload_hash)
             $('#icons_default a.active').removeClass('active');
+
             $('#icon_preview img').attr('src', file.dataURL);
 
             $('#icons_default input:checked').attr('checked', false);
-            $('input[name=icon_type][value='+file.type+']', $('#icons_default'))
+            $('input[name="icon_type"][value="'+file.type+'"]', $('#icons_default'))
                     .attr('checked', true);
         },
 
@@ -525,15 +754,19 @@ function initUploadIcon() {
       .delegate('#id_icon_upload', "upload_start", upload_start)
       .delegate('#id_icon_upload', "upload_finished", upload_finished)
       .delegate('#id_icon_upload', "upload_errors", upload_errors)
-      .delegate('#id_icon_upload', 'change', function(e){
-        $(this).imageUploader();
+      .delegate('#id_icon_upload', 'change', function(e) {
+        if (z.capabilities.fileAPI) {
+            $(this).imageUploader();
+        } else {
+            $('#icon_preview').hide();
+        }
       });
 }
 
 function fixPasswordField($context) {
     // This is a hack to prevent password managers from automatically
     // deleting add-ons.  See bug 630126.
-    $context.find('input[type=password]').each(function(){
+    $context.find('input[type="password"]').each(function(){
         var $this = $(this);
         if($this.attr('data-name')) {
             $this.attr('name', $this.attr('data-name'));
@@ -567,23 +800,18 @@ function initVersions() {
             return true;
         }});
 
-    $('#modal-cancel').modal('#cancel-review', {width: 400});
-    $('#modal-delete').modal('#delete-addon', {width: 400,
-                                callback: function(obj) {
-                                    return fixPasswordField(this);
-                                }});
-    $('#modal-disable').modal('#disable-addon',
-        {width: 400,
-         callback: function(d){
-               $('.version_id', this).val($(d.click_target).attr('data-version'));
-                return true;
-         }});
+    $('#upload-file-finish').click(function() {
+        var $button = $(this);
+        setTimeout(function() { // Chrome fix
+            $button.attr('disabled', true);
+        }, 50);
+    });
 
 }
 
 function initSubmit() {
     var dl = $('body').attr('data-default-locale');
-    var el = format('#trans-name [lang={0}]', dl);
+    var el = format('#trans-name [lang="{0}"]', dl);
     $(el).attr('id', "id_name");
     $('#submit-describe').delegate(el, 'keyup', slugify)
         .delegate(el, 'blur', slugify)
@@ -680,7 +908,8 @@ function initEditVersions() {
 
 }
 
-function initPayments() {
+function initPayments(delegate) {
+  var $delegate = $(delegate || document.body);
     if (z.noEdit) return;
     var previews = [
         "img/zamboni/contributions/passive.png",
@@ -690,7 +919,7 @@ function initPayments() {
         media_url = $("body").attr("data-media-url"),
         to = false,
         img = $("<img id='contribution-preview'/>");
-        moz = $("input[value=moz]");
+        moz = $("input[value='moz']");
     img.hide().appendTo($("body"));
     moz.parent().after(
         $("<a class='extra' target='_blank' href='http://www.mozilla.org/foundation/'>"+gettext('Learn more')+"</a>"));
@@ -718,16 +947,22 @@ function initPayments() {
     .delegate("a.extra", "click", function(e) {
         e.preventDefault();
     });
-    $("#do-setup").click(function (e) {
-        e.preventDefault();
+    $("#do-setup").click(_pd(function (e) {
         $("#setup").removeClass("hidden").show();
-        $(".intro").hide();
-    });
-    $("#setup-cancel").click(function (e) {
-        e.preventDefault();
-        $(".intro").show();
+        $(".intro, .intro-blah").hide();
+    }));
+    $("#setup-cancel").click(_pd(function (e) {
+        $(".intro, .intro-blah").show();
         $("#setup").hide();
-    });
+    }));
+    $("#do-marketplace").click(_pd(function (e) {
+        $("#marketplace-confirm").removeClass("hidden").show();
+        $(".intro, .intro-blah").hide();
+    }));
+    $("#marketplace-cancel").click(_pd(function (e) {
+        $(".intro, .intro-blah").show();
+        $("#marketplace-confirm").hide();
+    }));
     $(".recipient").change(function (e) {
         var v = $(this).val();
         $(".paypal").hide(200);
@@ -740,14 +975,18 @@ function initPayments() {
             $(".thankyou-note").hide();
         }
     }).change();
+    $delegate.find('#id_text, #id_free').focus(function(e) {
+        $delegate.find('#id_do_upsell_1').attr('checked', true);
+    });
 }
 
-function initCatFields() {
-    $(".select-addon-cats").each(function() {
+function initCatFields(delegate) {
+    var $delegate = $(delegate || '#addon-categories-edit');
+    $delegate.find('div.addon-app-cats').each(function() {
         var $parent = $(this).closest("[data-max-categories]"),
             $main = $(this).find(".addon-categories"),
             $misc = $(this).find(".addon-misc-category"),
-            maxCats = parseInt($parent.attr("data-max-categories"));
+            maxCats = parseInt($parent.attr("data-max-categories"), 10);
         var checkMainDefault = function() {
             var checkedLength = $("input:checked", $main).length,
                 disabled = checkedLength >= maxCats;
@@ -762,8 +1001,8 @@ function initCatFields() {
             $("input", $main).attr("checked", false).attr("disabled", false);
         };
         checkMainDefault();
-        $("input", $main).live("change", checkMain);
-        $("input", $misc).live("change", checkOther);
+        $('input', $main).live('change', checkMain);
+        $('input', $misc).live('change', checkOther);
     });
 }
 
@@ -873,7 +1112,7 @@ function initAuthorFields() {
         }
         if (tgt.val().length > 2) {
             if (timeout) clearTimeout(timeout);
-            timeout = setTimeout(function () {
+            timeout = setTimeout(function() {
                 tgt.addClass("ui-autocomplete-loading")
                    .removeClass("invalid")
                    .removeClass("valid");
@@ -881,8 +1120,17 @@ function initAuthorFields() {
                     url: tgt.attr("data-src"),
                     data: {q: tgt.val()},
                     success: function(data) {
-                        tgt.removeClass("ui-autocomplete-loading")
-                           .addClass("valid");
+                        tgt.removeClass('ui-autocomplete-loading tooltip')
+                           .removeClass('formerror')
+                           .removeAttr('title')
+                           .removeAttr('data-oldtitle');
+                        $('#tooltip').hide();
+                        if (data.status == 1) {
+                            tgt.addClass("valid");
+                        } else {
+                            tgt.addClass("invalid tooltip formerror")
+                               .attr('title', data.message);
+                        }
                     },
                     error: function() {
                         tgt.removeClass("ui-autocomplete-loading")
@@ -896,8 +1144,7 @@ function initAuthorFields() {
 
 
 function initCompatibility() {
-    $('p.add-app a').live('click', function(e) {
-        e.preventDefault();
+    $('p.add-app a').live('click', _pd(function(e) {
         var outer = $(this).closest('form');
 
         $('tr.app-extra', outer).each(function() {
@@ -906,31 +1153,30 @@ function initCompatibility() {
 
         $('.new-apps', outer).toggle();
 
-        $('.new-apps ul').delegate('a', 'click', function(e) {
-            e.preventDefault();
-            var extraAppRow = $('tr.app-extra td[class=' + $(this).attr('class') + ']', outer);
-            extraAppRow.parents('tr.app-extra').find('input:checkbox').removeAttr('checked')
-                       .closest('tr').removeClass('app-extra');
-
-            $(this).closest('li').remove();
-
-            if (!$('tr.app-extra', outer).length)
+        $('.new-apps ul').delegate('a', 'click', _pd(function(e) {
+            var $this = $(this),
+                sel = format('tr.app-extra td[class="{0}"]', [$this.attr('class')]),
+                $row = $(sel, outer);
+            $row.parents('tr.app-extra').find('input:checkbox')
+                .removeAttr('checked').closest('tr').removeClass('app-extra');
+            $this.closest('li').remove();
+            if (!$('tr.app-extra', outer).length) {
                 $('p.add-app', outer).hide();
-        });
-    });
+            }
+        }));
+    }));
 
-    $('.compat-versions .remove').live('click', function(e) {
-        e.preventDefault();
-        var appRow = $(this).closest('tr');
 
-        appRow.addClass('app-extra');
-
-        if (!appRow.hasClass('app-extra-orig'))
-            appRow.find('input:checkbox').attr('checked', true);
-
-        $('p.add-app:hidden', $(this).closest('form')).show();
-        addAppRow(appRow);
-    });
+    $('.compat-versions .remove').live('click', _pd(function(e) {
+        var $this = $(this),
+            $row = $this.closest('tr');
+        $row.addClass('app-extra');
+        if (!$row.hasClass('app-extra-orig')) {
+            $row.find('input:checkbox').attr('checked', true);
+        }
+        $('p.add-app:hidden', $this.closest('form')).show();
+        addAppRow($row);
+    }));
 
     $('.compat-update-modal').modal('a.compat-update', {
         delegate: $('.item-actions'),
@@ -1072,7 +1318,7 @@ function multipartUpload(form, onreadystatechange) {
     xhr.setRequestHeader("Content-Type", "multipart/form-data;" +
                                          "boundary=" + boundary);
 
-    $('input[type=file]', form).each(function(){
+    $('input[type="file"]', form).each(function(){
         var files = $(this)[0].files,
             file_field = $(this);
 
@@ -1128,13 +1374,16 @@ function hideSameSizedIcons() {
 function addAppRow(obj) {
     var outer = $(obj).closest('form'),
         appClass = $('td.app', obj).attr('class');
-    if (!$('.new-apps ul', outer).length)
+    if (!$('.new-apps ul', outer).length) {
         $('.new-apps', outer).html('<ul></ul>');
-    if ($('.new-apps ul a[class=' + appClass + ']', outer).length)
-        return;
-    var appLabel = $('td.app', obj).text(),
-        appHTML = '<li><a href="#" class="' + appClass + '">' + appLabel + '</a></li>';
-    $('.new-apps ul', outer).append(appHTML);
+    }
+    var sel = format('.new-apps ul a[class="{0}"]', [appClass]);
+    if (!$(sel, outer).length) {
+        // Append app to <ul> if it's not already listed.
+        var appLabel = $('td.app', obj).text(),
+            appHTML = '<li><a href="#" class="' + appClass + '">' + appLabel + '</a></li>';
+        $('.new-apps ul', outer).append(appHTML);
+    }
 }
 
 
@@ -1172,4 +1421,169 @@ function compatModalCallback(obj) {
     });
 
     return {pointTo: ct};
+}
+
+function initAddonCompatCheck($doc) {
+    var $elem = $('#id_application', $doc),
+        $form = $doc.closest('form');
+
+    $elem.change(function(e) {
+        var $appVer = $('#id_app_version', $form),
+            $sel = $(e.target),
+            appId = $('option:selected', $sel).val();
+
+        if (!appId) {
+            $('option', $appVer).remove();
+            $appVer.append(format('<option value="{0}">{1}</option>',
+                                  ['', gettext('Select an application first')]));
+            return;
+        }
+        $.post($sel.attr('data-url'),
+               {application_id: appId,
+                csrfmiddlewaretoken: $("input[name='csrfmiddlewaretoken']", $form).val()},
+            function(d) {
+                $('option', $appVer).remove();
+                $.each(d.choices, function(i, ch) {
+                    $appVer.append(format('<option value="{0}">{1}</option>',
+                                          [ch[0], ch[1]]));
+                });
+            });
+    });
+
+    if ($elem.children('option:selected').val() &&
+        !$('#id_app_version option:selected', $form).val()) {
+        // If an app is selected when page loads and it's not a form post.
+        $elem.trigger('change');
+    }
+}
+
+function initPerfTests(doc) {
+    $('.perf-test-listing .start-perf-tests', doc).click(function(ev) {
+        var $start = $(ev.target),
+            start_url = $start.attr('href'),
+            $results = $('.perf-results', $start.closest('ul'));
+        ev.preventDefault();
+        $results.text(gettext('Starting tests...'));
+        $.ajax({type: 'GET',
+                url: start_url,
+                success: function(data) {
+                    // TODO(Kumar) poll for results and display message
+                    $results.attr('data-got-response', 1);
+                    if (data.success) {
+                        $results.text(gettext('Waiting for test results...'));
+                    } else {
+                        $results.text(gettext('Internal Server Error'));
+                    }
+                },
+                error: function(XMLHttpRequest, textStatus, errorThrown) {
+                    $results.attr('data-got-response', 1);
+                    $results.text(gettext('Internal Server Error'));
+                },
+                dataType: 'json'});
+    });
+}
+
+function initMerchantAccount() {
+    var ajax = false,
+        $paypal_field = $('#id_paypal_id'),
+        $paypal_verify = $('#paypal-id-verify'),
+        $paypal_support = $('#id_support_email'),
+        current = $paypal_field.val(),
+        keyup = true;
+
+    $paypal_field.bind('keyup', function(e) {
+        if($paypal_field.val() != current) {
+            if(ajax) {
+                ajax.abort();
+            }
+            $paypal_verify.removeAttr('class');
+            keyup = true;
+        }
+        current = $paypal_field.val();
+    }).blur(function() {
+        // `keyup` makes sure we don't re-fetch without changes.
+        if(! keyup || current == "") return;
+        keyup = false;
+
+        if(ajax) {
+            ajax.abort();
+        }
+        $paypal_verify.attr('class', 'pp-unknown');
+
+        if(!$paypal_field.val().match(/.+@.+\..+/)) {
+            $paypal_verify.attr('class', 'pp-error');
+            $('#paypal-id-error').text(gettext('Must be a valid e-mail address.'));
+            return;
+        }
+
+        // Update support email to match
+        if(!$paypal_support.val() || $paypal_support.data('auto')) {
+          $paypal_support.val($paypal_field.val());
+          $paypal_support.data('auto', true);
+        }
+
+        ajax = $.post($paypal_verify.attr('data-url'), {'email': $paypal_field.val()}, function(d) {
+            $paypal_verify.attr('class', d.valid ? 'pp-success' : 'pp-error');
+            $('#paypal-id-error').text(d.message);
+        });
+    }).trigger('blur');
+
+    // If support has been changed, don't auto-fill
+    $('#id_support_email').change(function() {
+      $('#id_support_email').data('auto', false);
+    });
+}
+
+function initTruncateSummary() {
+    // If the summary from a manifest is too long, truncate it!
+    // EN-US only, since it'll be way too hard to accomodate all languages properly.
+    var $submit_describe = $('#submit-describe'),
+        $summary = $('textarea[name=summary_en-us]', $submit_describe),
+        $desc = $('textarea[name=description_en-us]', $submit_describe);
+
+    if($summary.length && $desc.length) {
+        var max_length = parseInt($('.char-count', $submit_describe).attr('data-maxlength'), 10),
+            text = $summary.val(),
+            submitted = ($('.errorlist li', $submit_describe).length > 0);
+
+        if($desc.val() == "" && text.length > max_length && !submitted) {
+            var new_text = text.substr(0, max_length),
+                // New line or punctuation followed by a space
+                punctuation = new_text.match(/\n|[.?!]\s/g);
+
+            if(punctuation.length) {
+                var d = punctuation[punctuation.length - 1];
+                new_text = new_text.substr(0, new_text.lastIndexOf(d)+1).trim();
+                if(new_text.length > 0) {
+                    $desc.val(text);
+                    $summary.val(new_text).trigger('keyup');
+                }
+            }
+        }
+    }
+}
+
+function initInAppConfig($dom) {
+    $('#in-app-private-key .generator', $dom).click(_pd(function() {
+        var $generator = $(this),
+            url = $generator.attr('data-url'),
+            $secret = $('#in-app-private-key .secret', $dom);
+        $.ajax({type: 'GET',
+                url: url,
+                success: function(privateKey) {
+                    $generator.hide();
+                    $secret.show().val(privateKey);
+                    // Hide the secret key after 2 minutes.
+                    setTimeout(function() {
+                        $secret.val('').hide();
+                        $generator.show();
+                    }, 1000 * 60 * 2);
+                },
+                error: function(XMLHttpRequest, textStatus, errorThrown) {
+                    if (typeof console !== 'undefined') {
+                        console.log(XMLHttpRequest, textStatus, errorThrown);
+                    }
+                },
+                dataType: 'text'});
+    }));
 }

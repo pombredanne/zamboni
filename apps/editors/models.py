@@ -1,18 +1,25 @@
 import copy
+import datetime
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db import models
+from django.db.models import Sum
 from django.template import Context, loader
 from django.utils.datastructures import SortedDict
 
+from tower import ugettext_lazy as _lazy
+
 import amo
 import amo.models
+from access.models import Group
 from amo.helpers import absolutify
 from amo.urlresolvers import reverse
-from amo.utils import send_mail
-from addons.models import Addon
+from amo.utils import cache_ns_key, send_mail
+from addons.models import Addon, Persona
+from devhub.models import ActivityLog
 from editors.sql_model import RawSQLModel
-from translations.fields import TranslatedField
+from translations.fields import save_signal, TranslatedField
 from users.models import UserProfile
 from versions.models import version_uploaded
 
@@ -25,14 +32,32 @@ user_log = commonware.log.getLogger('z.users')
 class CannedResponse(amo.models.ModelBase):
 
     name = TranslatedField()
-    response = TranslatedField()
+    response = TranslatedField(short=False)
     sort_group = models.CharField(max_length=255)
+    type = models.PositiveIntegerField(
+        choices=amo.CANNED_RESPONSE_CHOICES.items(), db_index=True, default=0)
 
     class Meta:
         db_table = 'cannedresponses'
 
     def __unicode__(self):
         return unicode(self.name)
+
+models.signals.pre_save.connect(save_signal, sender=CannedResponse,
+                                dispatch_uid='cannedresponses_translations')
+
+
+class AddonCannedResponseManager(amo.models.ManagerBase):
+    def get_query_set(self):
+        qs = super(AddonCannedResponseManager, self).get_query_set()
+        return qs.filter(type=amo.CANNED_RESPONSE_ADDON)
+
+
+class AddonCannedResponse(CannedResponse):
+    objects = AddonCannedResponseManager()
+
+    class Meta:
+        proxy = True
 
 
 class EventLog(models.Model):
@@ -51,16 +76,15 @@ class EventLog(models.Model):
 
     @staticmethod
     def new_editors():
-        items = (EventLog.objects.values('added', 'created')
-                                 .filter(type='admin',
-                                         action='group_addmember',
-                                         changed_id=2)
-                                 .order_by('-created')[:5])
+        action = amo.LOG.GROUP_USER_ADDED
+        group = Group.objects.get(name='Add-on Reviewers')
+        items = (ActivityLog.objects.for_group(group)
+                            .filter(action=action.id)
+                            .order_by('-created')[:5])
 
-        users = UserProfile.objects.filter(id__in=[i['added'] for i in items])
-        names = dict((u.id, u.display_name) for u in users)
-
-        return [dict(display_name=names[int(i['added'])], **i) for i in items]
+        return [dict(user=i.arguments[1],
+                     created=i.created)
+                for i in items]
 
 
 class ViewQueue(RawSQLModel):
@@ -73,12 +97,14 @@ class ViewQueue(RawSQLModel):
     is_site_specific = models.BooleanField()
     external_software = models.BooleanField()
     binary = models.BooleanField()
-    _no_restart = models.CharField(max_length=255)
-    _jetpack_versions = models.CharField(max_length=255)
-    _latest_versions = models.CharField(max_length=255)
-    _latest_version_ids = models.CharField(max_length=255)
+    binary_components = models.BooleanField()
+    premium_type = models.IntegerField()
+    is_restartless = models.BooleanField()
+    is_jetpack = models.BooleanField()
+    latest_version = models.CharField(max_length=255)
     _file_platform_ids = models.CharField(max_length=255)
-    _file_platform_vers = models.CharField(max_length=255)
+    has_info_request = models.BooleanField()
+    has_editor_comment = models.BooleanField()
     _application_ids = models.CharField(max_length=255)
     waiting_time_days = models.IntegerField()
     waiting_time_hours = models.IntegerField()
@@ -96,60 +122,40 @@ class ViewQueue(RawSQLModel):
                 ('admin_review', 'addons.adminreview'),
                 ('is_site_specific', 'addons.sitespecific'),
                 ('external_software', 'addons.externalsoftware'),
-                ('binary', 'addons.binary'),
-                ('_latest_version_ids', """GROUP_CONCAT(versions.id
-                                           ORDER BY versions.created DESC)"""),
-                ('_latest_versions', """GROUP_CONCAT(versions.version
-                                        ORDER BY versions.created
-                                        DESC SEPARATOR '&&&&')"""),
-                ('_file_platform_vers', """GROUP_CONCAT(DISTINCT CONCAT(CONCAT(
-                                           files.platform_id, '-'),
-                                           files.version_id))"""),
+                ('binary', 'files.binary'),
+                ('binary_components', 'files.binary_components'),
+                ('premium_type', 'addons.premium_type'),
+                ('latest_version', 'versions.version'),
+                ('has_editor_comment', 'versions.has_editor_comment'),
+                ('has_info_request', 'versions.has_info_request'),
                 ('_file_platform_ids', """GROUP_CONCAT(DISTINCT
                                           files.platform_id)"""),
-                ('_jetpack_versions', """GROUP_CONCAT(DISTINCT
-                                         files.jetpack_version)"""),
-                ('_no_restart', """GROUP_CONCAT(DISTINCT files.no_restart)"""),
+                ('is_jetpack', 'MAX(files.jetpack_version IS NOT NULL)'),
+                ('is_restartless', 'MAX(files.no_restart)'),
                 ('_application_ids', """GROUP_CONCAT(DISTINCT
                                         apps.application_id)"""),
             ]),
             'from': [
-                'files',
-                'JOIN versions ON (files.version_id = versions.id)',
-                'JOIN addons ON (versions.addon_id = addons.id)',
-                """JOIN files AS version_files ON (
-                            version_files.version_id = versions.id)""",
+                'addons',
+                'JOIN versions ON (versions.id = addons.latest_version)',
+                'JOIN files ON (files.version_id = versions.id)',
                 """LEFT JOIN applications_versions as apps
                             ON versions.id = apps.version_id""",
+
+                #  Translations
                 """JOIN translations AS tr ON (
                             tr.id = addons.name
                             AND tr.locale = addons.defaultlocale)"""
             ],
             'where': [
                 'NOT addons.inactive',  # disabled_by_user
+                'addons.addontype_id <> 11',  # No webapps for AMO.
             ],
             'group_by': 'id'}
 
     @property
-    def latest_version(self):
-        return self._explode_concat(self._latest_versions, sep='&&&&',
-                                    cast=unicode)[0]
-
-    @property
-    def latest_version_id(self):
-        return self._explode_concat(self._latest_version_ids)[0]
-
-    @property
-    def is_restartless(self):
-        return any(self._explode_concat(self._no_restart))
-
-    @property
-    def is_jetpack(self):
-        return bool(self._jetpack_versions)
-
-    @property
-    def file_platform_vers(self):
-        return self._explode_concat(self._file_platform_vers, cast=str)
+    def is_premium(self):
+        return self.premium_type in amo.ADDON_PREMIUMS
 
     @property
     def file_platform_ids(self):
@@ -158,6 +164,25 @@ class ViewQueue(RawSQLModel):
     @property
     def application_ids(self):
         return self._explode_concat(self._application_ids)
+
+    @property
+    def is_traditional_restartless(self):
+        return self.is_restartless and not self.is_jetpack
+
+    @property
+    def flags(self):
+        props = (
+            ('admin_review', 'admin-review', _lazy('Admin Review')),
+            ('is_jetpack', 'jetpack', _lazy('Jetpack Add-on')),
+            ('is_traditional_restartless', 'restartless',
+             _lazy('Restartless Add-on')),
+            ('is_premium', 'premium', _lazy('Premium Add-on')),
+            ('has_info_request', 'info', _lazy('More Information Requested')),
+            ('has_editor_comment', 'editor', _lazy('Contains Editor Comment')),
+        )
+
+        return [(cls, title) for (prop, cls, title) in props
+                if getattr(self, prop)]
 
 
 class ViewFullReviewQueue(ViewQueue):
@@ -174,8 +199,8 @@ class ViewFullReviewQueue(ViewQueue):
         })
         q['where'].extend(['files.status <> %s' % amo.STATUS_BETA,
                            'addons.status IN (%s, %s)' % (
-                                            amo.STATUS_NOMINATED,
-                                            amo.STATUS_LITE_AND_NOMINATED)])
+                               amo.STATUS_NOMINATED,
+                               amo.STATUS_LITE_AND_NOMINATED)])
         return q
 
 
@@ -210,8 +235,24 @@ class ViewPreliminaryQueue(VersionSpecificQueue):
         q = super(ViewPreliminaryQueue, self).base_query()
         q['where'].extend(['files.status = %s' % amo.STATUS_UNREVIEWED,
                            'addons.status IN (%s, %s)' % (
-                                            amo.STATUS_LITE,
-                                            amo.STATUS_UNREVIEWED)])
+                               amo.STATUS_LITE,
+                               amo.STATUS_UNREVIEWED)])
+        return q
+
+
+class ViewFastTrackQueue(VersionSpecificQueue):
+
+    def base_query(self):
+        q = super(ViewFastTrackQueue, self).base_query()
+        # Fast track includes jetpack-based addons that do not require chrome.
+        q['where'].extend(['files.no_restart = 1',
+                           'files.jetpack_version IS NOT NULL',
+                           'files.requires_chrome = 0',
+                           'files.status = %s' % amo.STATUS_UNREVIEWED,
+                           'addons.status IN (%s, %s, %s, %s)' % (
+                               amo.STATUS_LITE, amo.STATUS_UNREVIEWED,
+                               amo.STATUS_NOMINATED,
+                               amo.STATUS_LITE_AND_NOMINATED)])
         return q
 
 
@@ -238,7 +279,7 @@ class PerformanceGraph(ViewQueue):
                 'LEFT JOIN `users` ON (`users`.`id`=`log_activity`.`user_id`)'],
             'where': ['log_activity.action in (%s)' % ','.join(review_ids)],
             'group_by': 'yearmonth, user_id'
-            }
+        }
 
 
 class EditorSubscription(amo.models.ModelBase):
@@ -253,10 +294,12 @@ class EditorSubscription(amo.models.ModelBase):
                       (self.user.email, self.addon.pk))
         context = Context({
             'name': self.addon.name,
-            'url': absolutify(reverse('addons.detail', args=[self.addon.pk])),
+            'url': absolutify(reverse('addons.detail', args=[self.addon.pk],
+                                      add_prefix=False)),
             'number': version.version,
             'review': absolutify(reverse('editors.review',
-                                         args=[self.addon.pk])),
+                                         args=[self.addon.pk],
+                                         add_prefix=False)),
             'SITE_URL': settings.SITE_URL,
         })
         # Not being localised because we don't know the editors locale.
@@ -272,7 +315,14 @@ def send_notifications(signal=None, sender=None, **kw):
     if sender.is_beta:
         return
 
+    # See bug 741679 for implementing this in Marketplace. This is deactivated
+    # in the meantime because EditorSubscription.send_notification() uses
+    # AMO-specific code.
+    if settings.MARKETPLACE:
+        return
+
     subscribers = sender.addon.editorsubscription_set.all()
+
     if not subscribers:
         return
 
@@ -282,3 +332,388 @@ def send_notifications(signal=None, sender=None, **kw):
 
 
 version_uploaded.connect(send_notifications, dispatch_uid='send_notifications')
+
+
+class ReviewerScore(amo.models.ModelBase):
+    user = models.ForeignKey(UserProfile, related_name='_reviewer_scores')
+    addon = models.ForeignKey(Addon, blank=True, null=True, related_name='+')
+    score = models.SmallIntegerField()
+    # For automated point rewards.
+    note_key = models.SmallIntegerField(choices=amo.REVIEWED_CHOICES.items(),
+                                        default=0)
+    # For manual point rewards with a note.
+    note = models.CharField(max_length=255)
+
+    class Meta:
+        db_table = 'reviewer_scores'
+        ordering = ('-created',)
+
+    @classmethod
+    def get_key(cls, key=None, invalidate=False):
+        namespace = 'riscore'
+        if not key:  # Assuming we're invalidating the namespace.
+            cache_ns_key(namespace, invalidate)
+            return
+        else:
+            # Using cache_ns_key so each cache val is invalidated together.
+            ns_key = cache_ns_key(namespace, invalidate)
+            return '%s:%s' % (ns_key, key)
+
+    @classmethod
+    def get_event(cls, addon, status, **kwargs):
+        """Return the review event type constant.
+
+        This is determined by the addon.type and the queue the addon is
+        currently in (which is determined from the status).
+
+        Note: We're not using addon.status because this is called after the
+        status has been updated by the reviewer action.
+
+        """
+        queue = ''
+        if status in [amo.STATUS_UNREVIEWED, amo.STATUS_LITE]:
+            queue = 'PRELIM'
+        elif status in [amo.STATUS_NOMINATED, amo.STATUS_LITE_AND_NOMINATED]:
+            queue = 'FULL'
+        elif status == amo.STATUS_PUBLIC:
+            queue = 'UPDATE'
+
+        if (addon.type in [amo.ADDON_EXTENSION, amo.ADDON_PLUGIN,
+                           amo.ADDON_API] and queue):
+            return getattr(amo, 'REVIEWED_ADDON_%s' % queue)
+        elif addon.type == amo.ADDON_DICT and queue:
+            return getattr(amo, 'REVIEWED_DICT_%s' % queue)
+        elif addon.type in [amo.ADDON_LPAPP, amo.ADDON_LPADDON] and queue:
+            return getattr(amo, 'REVIEWED_LP_%s' % queue)
+        elif addon.type == amo.ADDON_PERSONA:
+            return amo.REVIEWED_PERSONA
+        elif addon.type == amo.ADDON_SEARCH and queue:
+            return getattr(amo, 'REVIEWED_SEARCH_%s' % queue)
+        elif addon.type == amo.ADDON_THEME and queue:
+            return getattr(amo, 'REVIEWED_THEME_%s' % queue)
+        elif addon.type == amo.ADDON_WEBAPP:
+            if addon.is_packaged:
+                if status == amo.STATUS_PUBLIC:
+                    return amo.REVIEWED_WEBAPP_UPDATE
+                else:  # If it's not PUBLIC, assume it's a new submission.
+                    return amo.REVIEWED_WEBAPP_PACKAGED
+            else:  # It's a hosted app.
+                in_rereview = kwargs.pop('in_rereview', False)
+                if status == amo.STATUS_PUBLIC and in_rereview:
+                    return amo.REVIEWED_WEBAPP_REREVIEW
+                else:
+                    return amo.REVIEWED_WEBAPP_HOSTED
+        else:
+            return None
+
+    @classmethod
+    def award_points(cls, user, addon, status, **kwargs):
+        """Awards points to user based on an event and the queue.
+
+        `event` is one of the `REVIEWED_` keys in constants.
+        `status` is one of the `STATUS_` keys in constants.
+
+        """
+        event = cls.get_event(addon, status, **kwargs)
+        score = amo.REVIEWED_SCORES.get(event)
+        if score:
+            cls.objects.create(user=user, addon=addon, score=score,
+                               note_key=event)
+            cls.get_key(invalidate=True)
+            user_log.info(
+                u'Awarding %s points to user %s for "%s" for addon %s' % (
+                    score, user, amo.REVIEWED_CHOICES[event], addon.id))
+        return score
+
+    @classmethod
+    def award_moderation_points(cls, user, addon, review_id):
+        """Awards points to user based on moderated review."""
+        event = amo.REVIEWED_ADDON_REVIEW
+        if addon.type == amo.ADDON_WEBAPP:
+            event = amo.REVIEWED_APP_REVIEW
+        score = amo.REVIEWED_SCORES.get(event)
+
+        cls.objects.create(user=user, addon=addon, score=score, note_key=event)
+        cls.get_key(invalidate=True)
+        user_log.info(
+            u'Awarding %s points to user %s for "%s" for review %s' % (
+                score, user, amo.REVIEWED_CHOICES[event], review_id))
+
+    @classmethod
+    def get_total(cls, user):
+        """Returns total points by user."""
+        key = cls.get_key('get_total:%s' % user.id)
+        val = cache.get(key)
+        if val is not None:
+            return val
+
+        val = (ReviewerScore.objects.no_cache().filter(user=user)
+                                    .aggregate(total=Sum('score'))
+                                    .values())[0]
+        if val is None:
+            val = 0
+
+        cache.set(key, val, 0)
+        return val
+
+    @classmethod
+    def get_recent(cls, user, limit=5, addon_type=None):
+        """Returns most recent ReviewerScore records."""
+        key = cls.get_key('get_recent:%s' % user.id)
+        val = cache.get(key)
+        if val is not None:
+            return val
+
+        val = ReviewerScore.objects.no_cache().filter(user=user)
+        if addon_type is not None:
+            val.filter(addon__type=addon_type)
+
+        val = list(val[:limit])
+        cache.set(key, val, 0)
+        return val
+
+    @classmethod
+    def get_breakdown(cls, user):
+        """Returns points broken down by addon type."""
+        key = cls.get_key('get_breakdown:%s' % user.id)
+        val = cache.get(key)
+        if val is not None:
+            return val
+
+        sql = """
+             SELECT `reviewer_scores`.*,
+                    SUM(`reviewer_scores`.`score`) AS `total`,
+                    `addons`.`addontype_id` AS `atype`
+             FROM `reviewer_scores`
+             LEFT JOIN `addons` ON (`reviewer_scores`.`addon_id`=`addons`.`id`)
+             WHERE `reviewer_scores`.`user_id` = %s
+             GROUP BY `addons`.`addontype_id`
+             ORDER BY `total` DESC
+        """
+        with amo.models.skip_cache():
+            val = list(ReviewerScore.objects.raw(sql, [user.id]))
+        cache.set(key, val, 0)
+        return val
+
+    @classmethod
+    def get_breakdown_since(cls, user, since):
+        """
+        Returns points broken down by addon type since the given datetime.
+        """
+        key = cls.get_key('get_breakdown:%s:%s' % (user.id, since.isoformat()))
+        val = cache.get(key)
+        if val is not None:
+            return val
+
+        sql = """
+             SELECT `reviewer_scores`.*,
+                    SUM(`reviewer_scores`.`score`) AS `total`,
+                    `addons`.`addontype_id` AS `atype`
+             FROM `reviewer_scores`
+             LEFT JOIN `addons` ON (`reviewer_scores`.`addon_id`=`addons`.`id`)
+             WHERE `reviewer_scores`.`user_id` = %s AND
+                   `reviewer_scores`.`created` >= %s
+             GROUP BY `addons`.`addontype_id`
+             ORDER BY `total` DESC
+        """
+        with amo.models.skip_cache():
+            val = list(ReviewerScore.objects.raw(sql, [user.id, since]))
+        cache.set(key, val, 3600)
+        return val
+
+    @classmethod
+    def _leaderboard_query(cls, since=None, types=None, addon_type=None):
+        """
+        Returns common SQL to leaderboard calls.
+        """
+        query = (cls.objects
+                    .values_list('user__id', 'user__display_name')
+                    .annotate(total=Sum('score'))
+                    .exclude(user__groups__name__in=('No Reviewer Incentives',
+                                                     'Staff', 'Admins'))
+                    .order_by('-total'))
+
+        if since is not None:
+            query = query.filter(created__gte=since)
+
+        if types is not None:
+            query = query.filter(note_key__in=types)
+
+        if addon_type is not None:
+            query = query.filter(addon__type=addon_type)
+
+        return query
+
+    @classmethod
+    def get_leaderboards(cls, user, days=7, types=None, addon_type=None):
+        """Returns leaderboards with ranking for the past given days.
+
+        This will return a dict of 3 items::
+
+            {'leader_top': [...],
+             'leader_near: [...],
+             'user_rank': (int)}
+
+        If the user is not in the leaderboard, or if the user is in the top 5,
+        'leader_near' will be an empty list and 'leader_top' will contain 5
+        elements instead of the normal 3.
+
+        """
+        key = cls.get_key('get_leaderboards:%s' % user.id)
+        val = cache.get(key)
+        if val is not None:
+            return val
+
+        week_ago = datetime.date.today() - datetime.timedelta(days=days)
+
+        leader_top = []
+        leader_near = []
+
+        query = cls._leaderboard_query(since=week_ago, types=types,
+                                       addon_type=addon_type)
+        scores = []
+
+        user_rank = 0
+        in_leaderboard = False
+        for rank, row in enumerate(query, 1):
+            user_id, name, total = row
+            scores.append({
+                'user_id': user_id,
+                'name': name,
+                'rank': rank,
+                'total': int(total),
+            })
+            if user_id == user.id:
+                user_rank = rank
+                in_leaderboard = True
+
+        if not in_leaderboard:
+            leader_top = scores[:5]
+        else:
+            if user_rank <= 5:  # User is in top 5, show top 5.
+                leader_top = scores[:5]
+            else:
+                leader_top = scores[:3]
+                leader_near = [scores[user_rank - 2], scores[user_rank - 1]]
+                try:
+                    leader_near.append(scores[user_rank])
+                except IndexError:
+                    pass  # User is last on the leaderboard.
+
+        val = {
+            'leader_top': leader_top,
+            'leader_near': leader_near,
+            'user_rank': user_rank,
+        }
+        cache.set(key, val, 0)
+        return val
+
+    @classmethod
+    def all_users_by_score(cls):
+        """
+        Returns reviewers ordered by highest total points first.
+        """
+        query = cls._leaderboard_query()
+        scores = []
+
+        for row in query:
+            user_id, name, total = row
+            user_level = len(amo.REVIEWED_LEVELS) - 1
+            for i, level in enumerate(amo.REVIEWED_LEVELS):
+                if total < level['points']:
+                    user_level = i - 1
+                    break
+
+            # Only show level if it changes.
+            if user_level < 0:
+                level = ''
+            else:
+                level = amo.REVIEWED_LEVELS[user_level]['name']
+
+            scores.append({
+                'user_id': user_id,
+                'name': name,
+                'total': int(total),
+                'level': level,
+            })
+
+        prev = None
+        for score in reversed(scores):
+            if score['level'] == prev:
+                score['level'] = ''
+            else:
+                prev = score['level']
+
+        return scores
+
+
+class EscalationQueue(amo.models.ModelBase):
+    addon = models.ForeignKey(Addon)
+
+    class Meta:
+        db_table = 'escalation_queue'
+
+
+class RereviewQueue(amo.models.ModelBase):
+    addon = models.ForeignKey(Addon)
+
+    class Meta:
+        db_table = 'rereview_queue'
+
+    @classmethod
+    def flag(cls, addon, event, message=None):
+        cls.objects.get_or_create(addon=addon)
+        if message:
+            amo.log(event, addon, addon.current_version,
+                    details={'comments': message})
+        else:
+            amo.log(event, addon, addon.current_version)
+
+
+class RereviewQueueThemeManager(amo.models.ManagerBase):
+
+    def __init__(self, include_deleted=False):
+        amo.models.ManagerBase.__init__(self)
+        self.include_deleted = include_deleted
+
+    def get_query_set(self):
+        qs = super(RereviewQueueThemeManager, self).get_query_set()
+        if self.include_deleted:
+            return qs
+        else:
+            return qs.exclude(theme__addon__status=amo.STATUS_DELETED)
+
+
+class RereviewQueueTheme(amo.models.ModelBase):
+    theme = models.ForeignKey(Persona)
+    header = models.CharField(max_length=72, blank=True, default='')
+    footer = models.CharField(max_length=72, blank=True, default='')
+
+    # Holds whether this reuploaded theme is a duplicate.
+    dupe_persona = models.ForeignKey(Persona, null=True,
+                                     related_name='dupepersona')
+
+    objects = RereviewQueueThemeManager()
+    with_deleted = RereviewQueueThemeManager(include_deleted=True)
+
+    class Meta:
+        db_table = 'rereview_queue_theme'
+
+    def __str__(self):
+        return str(self.id)
+
+    @property
+    def header_path(self):
+        return self.theme._image_path(self.header or self.theme.header)
+
+    @property
+    def footer_path(self):
+        return self.theme._image_path(self.footer or self.theme.footer)
+
+    @property
+    def header_url(self):
+        return self.theme._image_url(self.header or self.theme.header)
+
+    @property
+    def footer_url(self):
+        return self.theme._image_url(self.footer or self.theme.footer)

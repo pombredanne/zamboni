@@ -4,9 +4,9 @@ from datetime import datetime, timedelta
 import mock
 from nose.tools import eq_
 from pyquery import PyQuery as pq
-import test_utils
 
 import amo
+import amo.tests
 from amo.urlresolvers import reverse
 from amo.tests import formset, initial
 from addons.models import Addon
@@ -17,21 +17,24 @@ from users.models import UserProfile
 from versions.models import ApplicationsVersions, Version
 
 
-class TestVersion(test_utils.TestCase):
+class TestVersion(amo.tests.TestCase):
     fixtures = ['base/users', 'base/addon_3615']
 
     def setUp(self):
         assert self.client.login(username='del@icio.us', password='password')
         self.user = UserProfile.objects.get(email='del@icio.us')
-        self.addon = Addon.objects.get(id=3615)
+        self.addon = self.get_addon()
         self.version = Version.objects.get(id=81551)
-        self.url = reverse('devhub.versions', args=['a3615'])
+        self.url = self.addon.get_dev_url('versions')
 
-        self.disable_url = reverse('devhub.addons.disable', args=['a3615'])
-        self.enable_url = reverse('devhub.addons.enable', args=['a3615'])
+        self.disable_url = self.addon.get_dev_url('disable')
+        self.enable_url = self.addon.get_dev_url('enable')
         self.delete_url = reverse('devhub.versions.delete', args=['a3615'])
         self.delete_data = {'addon_id': self.addon.pk,
                             'version_id': self.version.pk}
+
+    def get_addon(self):
+        return Addon.objects.get(id=3615)
 
     def get_doc(self):
         res = self.client.get(self.url)
@@ -42,14 +45,18 @@ class TestVersion(test_utils.TestCase):
         doc = self.get_doc()
         assert doc('#version-status')
 
-        self.addon.status = amo.STATUS_DISABLED
-        self.addon.save()
+        self.addon.update(status=amo.STATUS_DISABLED, disabled_by_user=True)
         doc = self.get_doc()
         assert doc('#version-status .status-admin-disabled')
         eq_(doc('#version-status strong').text(),
             'This add-on has been disabled by Mozilla .')
 
-        self.addon.update(disabled_by_user=True)
+        self.addon.update(disabled_by_user=False)
+        doc = self.get_doc()
+        eq_(doc('#version-status strong').text(),
+            'This add-on has been disabled by Mozilla .')
+
+        self.addon.update(status=amo.STATUS_PUBLIC, disabled_by_user=True)
         doc = self.get_doc()
         eq_(doc('#version-status strong').text(),
             'You have disabled this add-on.')
@@ -98,7 +105,7 @@ class TestVersion(test_utils.TestCase):
         r = self.client.get(self.url)
         doc = pq(r.content)
         # Normally 2 paragraphs, one is the warning which we should take out.
-        eq_(len(doc('#modal-delete p')), 1, 'We might be lying to our users.')
+        eq_(doc('#modal-delete p.warning').length, 0)
 
     def test_delete_version(self):
         self.client.post(self.delete_url, self.delete_data)
@@ -168,12 +175,14 @@ class TestVersion(test_utils.TestCase):
         msg = entry.to_string()
         assert self.addon.name.__unicode__() in msg, ("Unexpected: %r" % msg)
 
+    def test_user_get(self):
+        eq_(self.client.get(self.enable_url).status_code, 405)
+
     def test_user_can_enable_addon(self):
-        self.addon.update(status=amo.STATUS_PUBLIC,
-                          disabled_by_user=True)
-        res = self.client.get(self.enable_url)
-        eq_(res.status_code, 302)
-        addon = Addon.objects.get(id=3615)
+        self.addon.update(status=amo.STATUS_PUBLIC, disabled_by_user=True)
+        res = self.client.post(self.enable_url)
+        self.assertRedirects(res, self.url, 302)
+        addon = self.get_addon()
         eq_(addon.disabled_by_user, False)
         eq_(addon.status, amo.STATUS_PUBLIC)
 
@@ -232,10 +241,14 @@ class TestVersion(test_utils.TestCase):
         assert not doc('#modal-disable')
         assert not doc('#disable-addon')
 
+    def test_cancel_get(self):
+        cancel_url = reverse('devhub.addons.cancel', args=['a3615'])
+        eq_(self.client.get(cancel_url).status_code, 405)
+
     def test_cancel_wrong_status(self):
         cancel_url = reverse('devhub.addons.cancel', args=['a3615'])
         for status in amo.STATUS_CHOICES:
-            if status in amo.STATUS_UNDER_REVIEW:
+            if status in amo.STATUS_UNDER_REVIEW + (amo.STATUS_DELETED,):
                 continue
 
             self.addon.update(status=status)
@@ -289,6 +302,19 @@ class TestVersion(test_utils.TestCase):
         buttons = doc('.version-status-actions form button').text()
         eq_(buttons, 'Request Preliminary Review Request Full Review')
 
+    def test_incomplete_request_review(self):
+        self.addon.update(status=amo.STATUS_NULL)
+        doc = pq(self.client.get(self.url).content)
+        buttons = doc('.version-status-actions form button').text()
+        eq_(buttons, 'Request Preliminary Review Request Full Review')
+
+    def test_rejected_request_review(self):
+        self.addon.update(status=amo.STATUS_NULL)
+        self.addon.latest_version.files.update(status=amo.STATUS_OBSOLETE)
+        doc = pq(self.client.get(self.url).content)
+        buttons = doc('.version-status-actions form button').text()
+        eq_(buttons, None)
+
     def test_days_until_full_nomination(self):
         f = File.objects.create(status=amo.STATUS_LITE, version=self.version)
         f.update(datestatuschanged=datetime.now() - timedelta(days=4))
@@ -308,7 +334,7 @@ class TestVersion(test_utils.TestCase):
             set(['checkbox']))
 
 
-class TestVersionEdit(test_utils.TestCase):
+class TestVersionEdit(amo.tests.TestCase):
     fixtures = ['base/apps', 'base/users', 'base/addon_3615',
                 'base/thunderbird', 'base/platforms']
 
@@ -409,7 +435,7 @@ class TestVersionEditDetails(TestVersionEdit):
 
     def test_add_not(self):
         Application(id=52).save()
-        for id in [18, 52, 59, 60]:
+        for id in [18, 52, 59, 60, 61]:
             av = AppVersion(application_id=id, version='1')
             av.save()
             ApplicationsVersions(application_id=id, min=av, max=av,
@@ -632,11 +658,20 @@ class TestPlatformSearch(TestVersionEdit):
                            approvalnotes='yy')
         response = self.client.post(self.url, dd)
         eq_(response.status_code, 302)
-        uncached = Version.uncached.get(id=42352).files.all()[0]
-        eq_(amo.PLATFORM_ALL.id, uncached.platform.id)
+        version = Version.objects.no_cache().get(id=42352).files.all()[0]
+        eq_(amo.PLATFORM_ALL.id, version.platform.id)
 
 
 class TestVersionEditCompat(TestVersionEdit):
+
+    def get_form(self, url=None):
+        if not url:
+            url = self.url
+        av = self.version.apps.get()
+        eq_(av.min.version, '2.0')
+        eq_(av.max.version, '4.0')
+        f = self.client.get(url).context['compat_form'].initial_forms[0]
+        return initial(f)
 
     def formset(self, *args, **kw):
         defaults = formset(prefix='files')
@@ -651,13 +686,11 @@ class TestVersionEditCompat(TestVersionEdit):
         eq_(r.status_code, 302)
         apps = self.get_version().compatible_apps.keys()
         eq_(sorted(apps), sorted([amo.FIREFOX, amo.THUNDERBIRD]))
+        eq_(list(ActivityLog.objects.all().values_list('action')),
+            [(amo.LOG.MAX_APPVERSION_UPDATED.id,)])
 
     def test_update_appversion(self):
-        av = self.version.apps.get()
-        eq_(av.min.version, '2.0')
-        eq_(av.max.version, '3.7a1pre')
-        f = self.client.get(self.url).context['compat_form'].initial_forms[0]
-        d = initial(f)
+        d = self.get_form()
         d.update(min=self.v1.id, max=self.v4.id)
         r = self.client.post(self.url,
                              self.formset(d, initial_count=1))
@@ -665,6 +698,21 @@ class TestVersionEditCompat(TestVersionEdit):
         av = self.version.apps.get()
         eq_(av.min.version, '1.0')
         eq_(av.max.version, '4.0')
+        eq_(list(ActivityLog.objects.all().values_list('action')),
+            [(amo.LOG.MAX_APPVERSION_UPDATED.id,)])
+
+    def test_ajax_update_appversion(self):
+        url = reverse('devhub.ajax.compat.update',
+                      args=['a3615', self.version.id])
+        d = self.get_form(url)
+        d.update(min=self.v1.id, max=self.v4.id)
+        r = self.client.post(url, self.formset(d, initial_count=1))
+        eq_(r.status_code, 200)
+        av = self.version.apps.get()
+        eq_(av.min.version, '1.0')
+        eq_(av.max.version, '4.0')
+        eq_(list(ActivityLog.objects.all().values_list('action')),
+            [(amo.LOG.MAX_APPVERSION_UPDATED.id,)])
 
     def test_delete_appversion(self):
         # Add thunderbird compat so we can delete firefox.
@@ -676,6 +724,8 @@ class TestVersionEditCompat(TestVersionEdit):
         eq_(r.status_code, 302)
         apps = self.get_version().compatible_apps.keys()
         eq_(apps, [amo.THUNDERBIRD])
+        eq_(list(ActivityLog.objects.all().values_list('action')),
+            [(amo.LOG.MAX_APPVERSION_UPDATED.id,)])
 
     def test_unique_apps(self):
         f = self.client.get(self.url).context['compat_form'].initial_forms[0]

@@ -3,24 +3,27 @@ import json as jsonlib
 import random
 import re
 from operator import attrgetter
+from urlparse import urljoin
 
 from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist
+from django.forms import CheckboxInput
 from django.utils import translation
 from django.utils.encoding import smart_unicode
 from django.template import defaultfilters
 
-from babel import Locale
 from babel.support import Format
 import caching.base as caching
 import jinja2
 from jingo import register, env
-from tower import ugettext as _
+from tower import ugettext as _, strip_whitespace
 
 import amo
 from amo import utils, urlresolvers
-from addons.models import Category, AddonType
+from constants.licenses import PERSONA_LICENSES_IDS
 from translations.query import order_by_translation
 from translations.helpers import truncate
+from versions.models import License
 
 # Yanking filters from Django.
 register.filter(defaultfilters.slugify)
@@ -53,12 +56,14 @@ def xssafe(value):
 
 @register.filter
 def babel_datetime(t, format='medium'):
-    return _get_format().datetime(t, format=format)
+    return _get_format().datetime(t, format=format) if t else ''
 
 
 @register.function
 def locale_url(url):
     """Take a URL and give it the locale prefix."""
+    if settings.MARKETPLACE:
+        return url
     prefixer = urlresolvers.get_url_prefix()
     script = prefixer.request.META['SCRIPT_NAME']
     parts = [script, prefixer.locale, url.lstrip('/')]
@@ -89,6 +94,35 @@ def url(viewname, *args, **kwargs):
 
 
 @register.function
+def shared_url(viewname, addon, *args, **kwargs):
+    """
+    Helper specifically for addons or apps to get urls. Requires
+    the viewname, addon (or app). It's assumed that we'll pass the
+    slug into the args and we'll look up the right slug (addon or app)
+    for you.
+
+    Viewname should be a normal view eg: `addons.details` or `apps.details`.
+    `addons.details` becomes `apps.details`, if we've passed an app, etc.
+
+    A viewname such as `details` becomes `addons.details` or `apps.details`,
+    depending on the add-on type.
+    """
+    slug = addon.app_slug if addon.is_webapp() else addon.slug
+    prefix = 'apps' if addon.is_webapp() else 'addons'
+
+    namespace, dot, latter = viewname.partition('.')
+
+    # If `viewname` is prefixed with `addons.` but we're linking to a
+    # webapp, the `viewname` magically gets prefixed with `apps.`.
+    if namespace in ('addons', 'apps'):
+        viewname = latter
+
+    # Otherwise, we just slap the appropriate prefix in front of `viewname`.
+    viewname = '.'.join([prefix, viewname])
+    return url(viewname, *([slug] + list(args)), **kwargs)
+
+
+@register.function
 def services_url(viewname, *args, **kwargs):
     """Helper for ``url`` with host=SERVICES_URL."""
     kwargs.update({'host': settings.SERVICES_URL})
@@ -101,8 +135,21 @@ def paginator(pager):
 
 
 @register.filter
+def impala_paginator(pager):
+    t = env.get_template('amo/impala/paginator.html')
+    return jinja2.Markup(t.render(pager=pager))
+
+
+@register.filter
 def mobile_paginator(pager):
     t = env.get_template('amo/mobile/paginator.html')
+    return jinja2.Markup(t.render(pager=pager))
+
+
+@register.filter
+def mobile_impala_paginator(pager):
+    # Impala-style paginator that is easier to mobilefy.
+    t = env.get_template('amo/mobile/impala_paginator.html')
     return jinja2.Markup(t.render(pager=pager))
 
 
@@ -114,6 +161,7 @@ def is_mobile(app):
 @register.function
 def sidebar(app):
     """Populates the sidebar with (categories, types)."""
+    from addons.models import Category
     if app is None:
         return [], []
 
@@ -131,7 +179,6 @@ def sidebar(app):
         amo.ADDON_PERSONA: urlresolvers.reverse('browse.personas'),
         amo.ADDON_DICT: urlresolvers.reverse('browse.language-tools'),
         amo.ADDON_SEARCH: urlresolvers.reverse('browse.search-tools'),
-        amo.ADDON_PLUGIN: base + 'browse/type:7',
         amo.ADDON_THEME: urlresolvers.reverse('browse.themes'),
     }
     titles = dict(amo.ADDON_TYPES,
@@ -181,8 +228,7 @@ class Paginator(object):
 
 def _get_format():
     lang = translation.get_language()
-    locale = Locale(translation.to_locale(lang))
-    return Format(locale)
+    return Format(utils.get_locale_from_lang(lang))
 
 
 @register.filter
@@ -221,9 +267,15 @@ def login_link(context):
 
 @register.function
 @jinja2.contextfunction
-def page_title(context, title):
-    app = context['request'].APP
-    return u'%s :: %s' % (smart_unicode(title), page_name(app))
+def page_title(context, title, force_webapps=False):
+    title = smart_unicode(title)
+    if settings.APP_PREVIEW:
+        base_title = _('Firefox Marketplace')
+    elif context.get('WEBAPPS') or force_webapps:
+        base_title = _('Firefox Marketplace')
+    else:
+        base_title = page_name(context['request'].APP)
+    return u'%s :: %s' % (title, base_title)
 
 
 @register.function
@@ -260,8 +312,11 @@ def impala_breadcrumbs(context, items=list(), add_default=True, crumb_size=40):
     Accepts: [(url, label)]
     """
     if add_default:
-        app = context['request'].APP
-        crumbs = [(urlresolvers.reverse('home'), page_name(app))]
+        if context.get('WEBAPPS'):
+            base_title = _('Apps Marketplace')
+        else:
+            base_title = page_name(context['request'].APP)
+        crumbs = [(urlresolvers.reverse('home'), base_title)]
     else:
         crumbs = []
 
@@ -273,7 +328,7 @@ def impala_breadcrumbs(context, items=list(), add_default=True, crumb_size=40):
             crumbs.append(items)
 
     crumbs = [(url, truncate(label, crumb_size)) for (url, label) in crumbs]
-    c = {'breadcrumbs': crumbs}
+    c = {'breadcrumbs': crumbs, 'has_home': add_default}
     t = env.get_template('amo/impala/breadcrumbs.html').render(**c)
     return jinja2.Markup(t)
 
@@ -284,9 +339,12 @@ def json(s):
 
 
 @register.filter
-def absolutify(url):
+def absolutify(url, site=None):
     """Takes a URL and prepends the SITE_URL"""
-    return settings.SITE_URL + url
+    if url.startswith('http'):
+        return url
+    else:
+        return urljoin(site or settings.SITE_URL, url)
 
 
 @register.filter
@@ -296,7 +354,8 @@ def strip_controls(s):
     """
     # Translation table of control characters.
     control_trans = dict((n, None) for n in xrange(32) if n not in [10, 13])
-    return unicode(s).translate(control_trans)
+    rv = unicode(s).translate(control_trans)
+    return jinja2.Markup(rv) if isinstance(s, jinja2.Markup) else rv
 
 
 @register.filter
@@ -327,13 +386,25 @@ def shuffle(sequence):
 
 @register.function
 def license_link(license):
-    """Link to a code license, incl. icon where applicable."""
-    if not license:
+    """Link to a code license, including icon where applicable."""
+    # If passed in an integer, try to look up the License.
+    if isinstance(license, (long, int)):
+        if license in PERSONA_LICENSES_IDS:
+            # Grab built-in license.
+            license = PERSONA_LICENSES_IDS[license]
+        else:
+            # Grab custom license.
+            license = License.objects.filter(id=license)
+            if not license.exists():
+                return ''
+            license = license[0]
+    elif not license:
         return ''
-    if not license.builtin:
+
+    if not getattr(license, 'builtin', True):
         return _('Custom License')
 
-    t = env.get_template('amo/license_link.html').render({'license': license})
+    t = env.get_template('amo/license_link.html').render(license=license)
     return jinja2.Markup(t)
 
 
@@ -357,6 +428,8 @@ def category_arrow(context, key, prefix):
 
 @register.filter
 def timesince(time):
+    if not time:
+        return u''
     ago = defaultfilters.timesince(time)
     # L10n: relative time in the past, like '4 days ago'
     return _(u'{0} ago').format(ago)
@@ -370,9 +443,30 @@ def recaptcha(context, form):
     return d
 
 
+@register.filter
+def is_choice_field(value):
+    try:
+        return isinstance(value.field.widget, CheckboxInput)
+    except AttributeError:
+        pass
+
+
 @register.inclusion_tag('amo/mobile/sort_by.html')
-def mobile_sort_by(base_url, options, selected):
-    current = [title for key, title in options if key == selected][0]
+def mobile_sort_by(base_url, options=None, selected=None, extra_sort_opts=None,
+                   search_filter=None):
+    if search_filter:
+        selected = search_filter.field
+        options = search_filter.opts
+        if hasattr(search_filter, 'extras'):
+            options += search_filter.extras
+    if extra_sort_opts:
+        options_dict = dict(options + extra_sort_opts)
+    else:
+        options_dict = dict(options)
+    if selected in options_dict:
+        current = options_dict[selected]
+    else:
+        selected, current = options[0]  # Default to the first option.
     return locals()
 
 
@@ -386,7 +480,7 @@ def media(context, url, key='MEDIA_URL'):
         build = context['BUILD_ID_CSS']
     else:
         build = context['BUILD_ID_IMG']
-    return context[key] + utils.urlparams(url, b=build)
+    return urljoin(context[key], utils.urlparams(url, b=build))
 
 
 @register.function
@@ -394,7 +488,6 @@ def media(context, url, key='MEDIA_URL'):
 def static(context, url):
     """Get a STATIC_URL link with a cache buster querystring."""
     return media(context, url, 'STATIC_URL')
-
 
 
 @register.function
@@ -405,19 +498,28 @@ def attrs(ctx, *args, **kw):
 
 @register.function
 @jinja2.contextfunction
-def side_nav(context, addon_type):
+def side_nav(context, addon_type, category=None):
     app = context['request'].APP.id
-    return caching.cached(lambda: _side_nav(context, addon_type),
-                          'side-nav-%s' % app)
+    cat = str(category.id) if category else 'all'
+    return caching.cached(lambda: _side_nav(context, addon_type, category),
+                          'side-nav-%s-%s-%s' % (app, addon_type, cat))
 
 
-def _side_nav(context, addon_type):
+def _side_nav(context, addon_type, cat):
+    # Prevent helpers generating circular imports.
+    from addons.models import Category, AddonType
     request = context['request']
-    qs = Category.objects.filter(application=request.APP.id, weight__gte=0)
+    qs = Category.objects.filter(weight__gte=0)
+    if addon_type not in (amo.ADDON_PERSONA, amo.ADDON_WEBAPP):
+        qs = qs.filter(application=request.APP.id)
     sort_key = attrgetter('weight', 'name')
     categories = sorted(qs.filter(type=addon_type), key=sort_key)
-    ctx = dict(request=request, base_url=AddonType(addon_type).get_url_path(),
-               categories=categories, addon_type=addon_type)
+    if cat:
+        base_url = cat.get_url_path()
+    else:
+        base_url = AddonType(addon_type).get_url_path()
+    ctx = dict(request=request, base_url=base_url, categories=categories,
+               addon_type=addon_type, amo=amo)
     return jinja2.Markup(env.get_template('amo/side_nav.html').render(ctx))
 
 
@@ -429,15 +531,59 @@ def site_nav(context):
 
 
 def _site_nav(context):
+    # Prevent helpers from generating circular imports.
+    from addons.models import Category
     request = context['request']
-    types = amo.ADDON_EXTENSION, amo.ADDON_PERSONA, amo.ADDON_THEME
-    qs = Category.objects.filter(application=request.APP.id, weight__gte=0,
-                                 type__in=types)
-    groups = utils.sorted_groupby(qs, key=attrgetter('type'))
-    cats = dict((key, sorted(cs, key=attrgetter('weight', 'name')))
-                for key, cs in groups)
-    ctx = dict(request=request,
-               extensions=cats.get(amo.ADDON_EXTENSION, []),
-               personas=cats.get(amo.ADDON_PERSONA, []),
-               themes=cats.get(amo.ADDON_THEME, []))
+
+    sorted_cats = lambda qs: sorted(qs, key=attrgetter('weight', 'name'))
+
+    extensions = Category.objects.filter(application=request.APP.id,
+        weight__gte=0, type=amo.ADDON_EXTENSION)
+    personas = Category.objects.filter(weight__gte=0, type=amo.ADDON_PERSONA)
+
+    ctx = dict(request=request, amo=amo,
+               extensions=sorted_cats(extensions),
+               personas=sorted_cats(personas))
     return jinja2.Markup(env.get_template('amo/site_nav.html').render(ctx))
+
+
+@register.filter
+def premium_text(type):
+    return amo.ADDON_PREMIUM_TYPES[type]
+
+
+@register.function
+def loc(s):
+    """A noop function for strings that are not ready to be localized."""
+    return strip_whitespace(s)
+
+
+@register.function
+def site_event_type(type):
+    return amo.SITE_EVENT_CHOICES[type]
+
+
+@register.function
+@jinja2.contextfunction
+def remora_url(context, url, lang=None, app=None, prefix=''):
+    """Wrapper for urlresolvers.remora_url"""
+    if lang is None:
+        _lang = context['LANG']
+        if _lang:
+            lang = translation.to_locale(_lang).replace('_', '-')
+    if app is None:
+        try:
+            app = context['APP'].short
+        except (AttributeError, KeyError):
+            pass
+    return urlresolvers.remora_url(url=url, lang=lang, app=app, prefix=prefix)
+
+
+@register.function
+@jinja2.contextfunction
+def hasOneToOne(context, obj, attr):
+    try:
+        getattr(obj, attr)
+        return True
+    except ObjectDoesNotExist:
+        return False

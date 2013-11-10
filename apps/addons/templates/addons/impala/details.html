@@ -1,8 +1,9 @@
-{% extends "impala/base.html" %}
+{% extends "impala/base_shared.html" %}
+{% set is_author = request.check_ownership(addon, require_owner=False) %}
 
 {% block title %}{{ page_title(addon.name) }}{% endblock %}
 {% block js %}{% include("amo/recaptcha_js.html") %}{% endblock %}
-{% block bodyclass %}gutter addon-details{% endblock %}
+{% block bodyclass %}gutter addon-details {{ super() }}{% endblock %}
 
 {% block extrahead %}
   {% if settings.ENGAGE_ROBOTS and addon.status == amo.STATUS_UNREVIEWED %}
@@ -11,57 +12,107 @@
   {% for preview in addon.all_previews %}
     <link rel="prefetch" href="{{ preview.image_url }}">
   {% endfor %}
+  <meta property="og:title" content="{{ addon.name }}">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="{{ addon.get_icon_url(64)|absolutify }}">
+  <meta property="og:url" content="{{ addon.get_url_path()|absolutify }}">
 {% endblock %}
 
 {% block content %}
 {{ impala_breadcrumbs([(addon.type_url(), amo.ADDON_TYPES[addon.type]),
-                (None, addon.name)]) }}
+                       (None, addon.name)]) }}
+<div itemscope itemtype="http://schema.org/WebApplication">
+  <link itemprop="SoftwareApplicationCategory" href="http://schema.org/OtherApplication" />
+  <aside class="secondary addon-vitals">
 
-<aside class="secondary addon-vitals">
-  {{ addon.average_rating|stars(large=True) }}
-  <div><a id="reviews-link" href="{{ url('reviews.list', addon.slug) }}">{{ _('{0} user reviews')|f(addon.total_reviews|numberfmt) }}</a></div>
-  <div id="daily-users">
-    {% if addon.public_stats %}
-      {# TODO real reverse URL #}
-      <a class='stats' title='View statistics' href="{{ locale_url('/statistics/addon/{0}'|f(addon.id)) }}">
-        {{ _('<b>{0}</b> users')|f(addon.average_daily_users|numberfmt)|safe }}
+  {# This assumes we'll never charge for add-ons. Ha. #}
+  <span itemprop="offers" itemscope itemtype="http://schema.org/Offer">
+    <meta itemprop="price" content="$0" />
+    <meta itemprop="priceCurrency" content="USD" />
+    <link itemprop="availability" href="http://schema.org/InStock" />
+  </span>
+
+  <div itemprop="aggregateRating" itemscope="" itemtype="http://schema.org/AggregateRating">
+    <meta content="{{ addon.average_rating }}" itemprop="ratingValue">
+    {{ addon.average_rating|stars(large=True) }}
+
+    <div>
+      <a id="reviews-link" href="{{ addon.reviews_url }}">
+      {% trans cnt=addon.total_reviews, num=addon.total_reviews|numberfmt %}
+        <span itemprop="ratingCount">{{ num }}</span> user review
+      {% pluralize %}
+        <span itemprop="ratingCount">{{ num }}</span> user reviews
+      {% endtrans %}
       </a>
-    {% else %}
-      {{ _('<b>{0}</b> users')|f(addon.average_daily_users|numberfmt)|safe }}
+    </div>
+  </div>
+
+  {% if addon.show_adu() %}
+    {% set cnt = addon.average_daily_users %}
+    {% if cnt %}
+      {% set cnt_id = 'daily-users' %}
+      {% set cnt_pretty = ngettext('{0} user', '{0} users',
+                                   cnt)|f(cnt|numberfmt) %}
+    {% endif %}
+  {% else %}
+    {% set cnt = addon.weekly_downloads %}
+    {% if cnt %}
+      {% set cnt_id = 'weekly-downloads' %}
+      {% set cnt_pretty = ngettext('{0} weekly download',
+                                   '{0} weekly downloads',
+                                   cnt)|f(cnt|numberfmt) %}
+    {% endif %}
+  {% endif %}
+  {% if cnt %}
+    <div id="{{ cnt_id }}">
+      {% if not webapp and (addon.public_stats or is_author) %}
+        <a class="stats" title="{{ _('View statistics') }}"
+           href="{{ url('stats.overview', addon.slug) }}">{{ cnt_pretty }}</a>
+      {% else %}
+        {{ cnt_pretty }}
+      {% endif %}
+      <meta itemprop="interactionCount" content="UserDownloads:{{ addon.total_downloads }}" />
+    </div>
+  {% endif %}
+
+  <div class="widgets">
+    {% if not settings.APP_PREVIEW %}
+      {{ favorites_widget(addon) }}
+      {% include 'addons/includes/collection_add_widget.html' %}
+      {{ sharing_widget(addon) }}
     {% endif %}
   </div>
-  <div class="widgets">
-    {{ favorites_widget(addon) }}
-    {% include 'addons/includes/collection_add_widget.html' %}
-    {{ sharing_widget(addon) }}
-  </div>
-  {% if request.check_ownership(addon, require_owner=False) %}
-    <a href="{{ url('devhub.addons.edit', addon.slug) }}" class="button developer prominent"><span>{{ _('Manage') }}</span></a>
+  {% if is_author %}
+    <p><a href="{{ addon.get_dev_url() }}" class="button developer prominent"><span>{{ _('Manage') }}</span></a></p>
+    {% if waffle.switch('marketplace') and addon.is_premium() and not addon.is_webapp() %}
+        <p><a href="{{ url('downloads.latest', addon.slug) }}" class="button developer prominent"><span>{{ _('Download') }}</span></a></p>
+    {% endif %}
   {% endif %}
-</aside>
+  </aside>
 
-{% set version = addon.current_version %}
+{% set version = addon.current_version if not addon.is_webapp() else None %}
 
 {# All this depends on the addon or version, and nothing needs the user,
    so we can cache it all against the addon. #}
-{% cache addon %}
 <section class="primary">
   <div id="addon" class="island c" role="main" data-id="{{ addon.id }}">
     <hgroup>
-      <img id="addon-icon" src="{{ addon.get_icon_url(64) }}" class="icon">
-      <h2 class="addon"{{ addon.name|locale_html }}>
-        {{ addon.name }}
-        <span class="version-number">{{ version.version }}</span>
-        {%- with files = addon.current_version.all_files %}
-          {%- if files and files[0].no_restart -%}
-            &nbsp;<span class="no-restart">{{ _('No Restart') }}</span>
-          {% endif %}
-        {% endwith %}
-      </h2>
+      <img id="addon-icon" itemprop="image" src="{{ addon.get_icon_url(64) }}" class="icon">
+      <h1 class="addon"{{ addon.name|locale_html }}>
+        <span itemprop="name">{{ addon.name }}</span>
+        {% if version %}
+          <span class="version-number" itemprop="version">{{ version.version }}</span>
+        {% endif %}
+        {% if addon.is_no_restart() %}
+          &nbsp;<span class="no-restart">{{ _('No Restart') }}</span>
+        {% endif %}
+      </h1>
       <h4 class="author">{{ _('by') }} {{ users_list(addon.listed_authors) }}</h4>
     </hgroup>
-    <p id="addon-summary" {{ addon.summary|locale_html }}>{{ addon.summary|nl2br }}</p>
-    {{ big_install_button(addon, show_warning=False, impala=True) }}
+    <p id="addon-summary" itemprop="description" {{ addon.summary|locale_html }}>{{ addon.summary|nl2br }}</p>
+    {% if version or addon.is_webapp() %}
+      {{ big_install_button(addon, show_warning=False, impala=True) }}
+    {% endif %}
     {% if addon.is_featured(APP, LANG) %}
       <div class="banner-box">
         <div class="banner featured">{{ _('Featured') }}</div>
@@ -73,26 +124,55 @@
     {{ impala_performance_note(amount=addon.ts_slowness) }}
   {% endif %}
 
+  {{ dependencies_note(addon) }}
+
+  {{ upsell_note(addon) }}
+
   {% if addon.takes_contributions %}
-    {{ impala_contribution(addon=addon, src='addon-detail') }}
+    {{ impala_contribution(addon=addon, src='dp-btn-primary') }}
+  {% elif addon.has_profile() and addon.listed_authors %}
+    <div class="notice c author">
+      {% with single_dev = addon.listed_authors|random %}
+        <h3>
+          {% trans count=addon.listed_authors|length,
+                   name=single_dev.name,
+                   url=addon.meet_the_dev_url() %}
+            Meet the Developer: <a href="{{ url }}">{{ name }}</a>
+          {% pluralize %}
+            <a href="{{ url }}">Meet the Developers</a>
+          {% endtrans %}
+        </h3>
+        <img class="avatar" alt="{{ single_dev.name }}" height="64"
+             width="64" src="{{ single_dev.picture_url }}"/>
+        {% if addon.is_webapp() %}
+          <p>{{ _("Learn why {0} was created and find out what's next for this "
+                  'app.')|f(addon.name) }}</p>
+        {% else %}
+          <p>{{ _("Learn why {0} was created and find out what's next for this "
+                  'add-on.')|f(addon.name) }}</p>
+        {% endif %}
+      {% endwith %}
+    </div>
   {% endif %}
 </section>
 
 {% if addon.type != amo.ADDON_PERSONA %}
   {% if addon.all_previews|length > 0 %}
-    <section class="previews carousel">
-      <a href="#" class="control prev">&laquo;</a>
-      <a href="#" class="control next">&raquo;</a>
-      <ul id="preview" class="slider">
-        {%- for preview in addon.all_previews -%}
-          <li class="panel">
-            <a class="screenshot thumbnail" rel="jquery-lightbox"
-               href="{{ preview.image_url }}" title="{{ preview.caption }}">
-              <img src="{{ preview.thumbnail_url }}">
-            </a>
-          </li>
-        {%- endfor -%}
-      </ul>
+    <section class="previews">
+      <div class="carousel">
+        <a href="#" class="control prev">&laquo;</a>
+        <a href="#" class="control next">&raquo;</a>
+        <ul id="preview" class="slider">
+          {%- for preview in addon.all_previews -%}
+            <li class="panel">
+              <a class="screenshot thumbnail" rel="jquery-lightbox"
+                 href="{{ preview.image_url }}" title="{{ preview.caption }}">
+                <img src="{{ preview.thumbnail_url }}">
+              </a>
+            </li>
+          {%- endfor -%}
+        </ul>
+      </div>
     </section>
     <div id="lightbox">
       <section>
@@ -112,7 +192,8 @@
 <aside class="secondary metadata c">
   <ul class="links">
     {% if addon.homepage %}
-      <li><a class="home" href="{{ addon.homepage|external_url }}">{{ _('Add-on home page') }}</a></li>
+      <li><a class="home" href="{{ addon.homepage|external_url }}">
+        {{ _('App home page') if addon.is_webapp() else _('Add-on home page') }}</a></li>
     {% endif %}
     {% if addon.support_url %}
       <li><a class="support" href="{{ addon.support_url|external_url }}">{{ _('Support site') }}</a></li>
@@ -121,40 +202,50 @@
       <li>{{ emaillink(addon.support_email.localized_string,
                        _('Support E-mail')) }}</li>
     {% endif %}
-    {% if addon.has_satisfaction %}
-      {# get satisfaction only supports en-US so no L10n here #}
-      <li><a href="#" id="feedback_btn" class="support-gs"
-           data-company="{{ addon.get_satisfaction_company }}"
-           data-product="{{ addon.get_satisfaction_product }}">Get Satisfaction</a>
+  </ul>
+  {% if version %}
+    <ul>
+      <li>{{ _('Version {0}')|f(version.version) }} <a class="scrollto" href="#detail-relnotes">{{ _('Info') }}</a></li>
+      <li>{{ version.created|datetime }}</li>
+      <li class="source-license">
+        {% set license = version.license %}
+        {% if license %}
+          {% if license.url %}
+            {% trans url = license.url,
+                     name = license.name if license.builtin else _('Custom License') %}
+              Released under <a target="_blank" href="{{ url }}">{{ name }}</a>
+            {% endtrans %}
+          {% else %}
+            {% trans url = version.license_url(),
+                     name = license.name if license.builtin else _('Custom License') %}
+              Released under <a href="{{ url }}">{{ name }}</a>
+            {% endtrans %}
+          {% endif %}
+        {% endif %}
       </li>
-    {% endif %}
-  </ul>
-  <ul>
-    <li>{{ _('Version {0}')|f(version.version) }} <a class="scrollto" href="#detail-relnotes">{{ _('Info') }}</a></li>
-    <li>{{ version.created|datetime }}</li>
-    <li>
-      {% if version.license %}
-        {% trans url = version.license_url(),
-           name = version.license if version.license.builtin else _('Custom License') %}
-          Released under <a href="{{ url }}">{{ name }}</a>
-        {% endtrans %}
-      {% endif %}
-    </li>
-  </ul>
+    </ul>
+  {% endif %}
 </aside>
 
 <section class="primary island c">
-  <h2>{{ _('About this Add-on') }}</h2>
-  {% if addon.description %}
-    <p id="addon-description" {{ addon.description|locale_html }}>{{ addon.description|nl2br }}</p>
+  {% if addon.is_webapp() %}
+    <h2>{{ _('About this App') }}</h2>
   {% else %}
-    <p id="addon-description" {{ addon.description|locale_html }}>{{ addon.summary|nl2br }}</p>
+    <h2>{{ _('About this Add-on') }}</h2>
   {% endif %}
+  <div class="prose">
+  {% if addon.description %}
+    <div id="addon-description" class="prose" {{ addon.description|locale_html }}>{{ addon.description|nl2br }}</div>
+  {% else %}
+    <div id="addon-description" class="prose" {{ addon.description|locale_html }}>{{ addon.summary|nl2br }}</div>
+  {% endif %}
+  </div>
 </section>
 
-<div id="more-webpage" class="primary c" data-more-url="{{ addon.get_url_path(impala=True) }}"></div>
+<div id="more-webpage" class="primary c" data-more-url="{{ addon.get_url_path(more=True) }}"></div>
 
-<section class="primary island c">
+{% if version or addon.developer_comments or addon.show_beta %}
+<section class="primary island more-island">
   {% if addon.developer_comments %}
     <section class="expando" id="developer-comments">
       <h2>{{ _('Developer’s Comments') }}<a class="toggle" href="#developer-comments"><b></b></a></h2>
@@ -164,12 +255,22 @@
       </div>
     </section>
   {% endif %}
-  <section id="detail-relnotes" class="expando">
-    <h2>{{ _('Version Information') }}<a class="toggle" href="#detail-relnotes"><b></b></a></h2>
-    <div class="content">
-      {{ version_detail(addon, version, src="addon-detail-version", impala=True) }}
-    </div>
-  </section>
+
+  {% if version %}
+    <section id="detail-relnotes" class="expando">
+      <h2>{{ _('Version Information') }}<a class="toggle" href="#detail-relnotes"><b></b></a></h2>
+      <div class="content listing">
+        <div class="items">
+          {{ version_detail(addon, version, src=version_src, impala=True) }}
+        </div>
+        <p class="more c">
+          <a class="more-info" href="{{ url('addons.versions', addon.slug) }}">
+            {{ _('See complete version history') }}
+          </a>
+        </p>
+      </div>
+    </section>
+  {% endif %}
 
   {% if addon.show_beta %}
     <section id="beta-channel" class="expando">
@@ -195,7 +296,8 @@
             <dt class="beta-version">{{ _('Version {0}:')|f(
               addon.current_beta_version.version) }}</dt>
             <dd>{{ install_button(addon, version=addon.current_beta_version,
-                                  show_warning=False, impala=True) }}</dd>
+                                  show_warning=False, impala=True,
+                                  src=request.GET.get('src', 'dp-btn-devchannel')) }}</dd>
           </dl>
         </div>
       </div>
@@ -203,8 +305,9 @@
   {% endif %}
 </section>
 
-{% endcache %} {# cache addon #}
+{% endif %}
 
+</div>
 {# The rest of the detail page content is in details-more.html.
    We want above-the-fold to return and render really fast so we pull
    in reviews and links to other add-ons with js. #}
@@ -215,7 +318,7 @@
     <div class="modal" id="privacy-policy">
       <a href="#" class="close">{{ _('close') }}</a>
       <h2>{{ _('Privacy Policy') }}</h2>
-      <div class="copy">
+      <div class="prose">
         {{ addon.privacy_policy|nl2br }}
       </div>
     </div>
@@ -231,4 +334,3 @@
     </div>
   {% endif %}
 {% endblock %}
-

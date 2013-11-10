@@ -40,6 +40,37 @@
         }
     };
 
+    var data_purchases = $('body').attr('data-purchases') || "",
+        addons_purchased = $.map(data_purchases.split(','),
+                                 function(v) { return parseInt(v, 10); });
+
+    z.startPurchase = function(manifest_url, opt) {
+        $.ajax({
+            url: opt.url,
+            type: 'post',
+            dataType: 'json',
+            /* false so that the action is considered within bounds of
+             * user interaction and does not trigger the Firefox popup blocker.
+             */
+            async: false,
+            data: {'result_type': 'json'},
+            success: function(json) {
+                $('.modal').trigger('close'); // Hide all modals
+                if (json.status == 'COMPLETED') {
+                    // Bounce back to the details page.
+                    window.location = window.location.pathname + '?status=complete';
+                } else if (json.paykey) {
+                    /* This is supposed to be a global */
+                    //dgFlow = new PAYPAL.apps.DGFlow({expType:'mini'});
+                    dgFlow = new PAYPAL.apps.DGFlow({clicked: opt.el.id});
+                    dgFlow.startFlow(json.url);
+                } else {
+                    $('.apps-error-msg').text(json.error).show();
+                }
+            }
+        });
+    };
+
     var messages = {
         'tooNew': format(gettext("Not Updated for {0} {1}"), z.appName, z.browserVersion),
         'tooOld': format(gettext("Requires Newer Version of {0}"), z.appName),
@@ -48,8 +79,8 @@
         'badApp': format(gettext("Not Available for {0}"), z.appName),
         'badPlatform': format(gettext("Not Available for {0}"), z.platformName),
         'experimental': gettext("Experimental"),
-        'personasTooOld': format(gettext("Personas Require Newer Version of {0}"), z.appName),
-        'personasLearnMore': format(gettext("Personas Require {0}"), z.appName)
+        'personasTooOld': format(gettext("Themes Require Newer Version of {0}"), z.appName),
+        'personasLearnMore': format(gettext("Themes Require {0}"), z.appName)
     };
 
     function Button(el) {
@@ -91,11 +122,35 @@
                 if (self.classes.persona) {
                     return;
                 }
-                var href = activeInstaller.attr('href'),
+                var href = activeInstaller[0].href,
                     hash = hashes[href],
                     attr = self.attr,
-                    install = attr.search ? z.installSearch : z.installAddon;
-                install(attr.name, href, attr.icon, hash);
+                    processing_text = gettext('Installing...'),
+                    classes = self.classes,
+                    install;
+                if (attr.search) {
+                    install = z.installSearch;
+                } else if (classes.webapp) {
+                    if (classes.premium && !attr.purchased) {
+                        install = z.startPurchase;
+                        processing_text = gettext('Purchasing...');
+                    } else {
+                        install = apps.install;
+                    }
+                } else {
+                    install = z.installAddon;
+                }
+                if (classes.webapp) {
+                    dom.buttons.addClass('waiting');
+                    dom.buttons.text(processing_text);
+                    install(attr.manifest_url, {
+                        url: href,
+                        el: el,
+                        mobile: true
+                    });
+                } else {
+                    install(attr.name, href, attr.icon, hash);
+                }
                 return true;
             }]);
 
@@ -159,18 +214,22 @@
                 'icon'        : b.attr('data-icon'),
                 'after'       : b.attr('data-after'),
                 'search'      : b.hasattr('data-search'),
-                'accept_eula' : b.hasClass('accept')
+                'accept_eula' : b.hasClass('accept'),
+                'manifest_url': b.attr('data-manifest-url')
             };
 
+            self.attr.purchased = $.inArray(parseInt(self.attr.addon, 10), addons_purchased) >= 0;
+
             self.classes = {
-                'selfhosted'  : b.hasClass('selfhosted'),
                 'beta'        : b.hasClass('beta'),
                 'lite'        : b.hasClass('lite'),
                 'unreviewed'  : b.hasClass('unreviewed'), // && !beta,
                 'persona'     : b.hasClass('persona'),
                 'contrib'     : b.hasClass('contrib'),
                 'search'      : b.hasattr('data-search'),
-                'eula'        : b.hasClass('eula')
+                'eula'        : b.hasClass('eula'),
+                'webapp'      : b.hasClass('webapp'),
+                'premium'     : b.hasClass('premium')
             };
 
             dom.buttons.each(function() {
@@ -205,7 +264,7 @@
                     if (self.tooOld) errors.push("tooOld");
                     if (self.tooNew) errors.push("tooNew");
                 } else {
-                    if (!z.appMatchesUserAgent && !z.badBrowser) {
+                    if (!z.appMatchesUserAgent && !(z.badBrowser || !(z.capabilities.webApps && self.classes.webapp))) {
                         errors.push("badApp");
                         canInstall = false;
                     }
@@ -253,7 +312,7 @@
                 }
             }
 
-            if (z.badBrowser) {
+            if (z.badBrowser && !(z.capabilities.webApps && self.classes.webapp)) {
                 canInstall = false;
             }
 
@@ -266,6 +325,11 @@
                     this.removeAttribute("href");
                 });
             } else {
+                // If app has already been purchased the "Install" button
+                // should be green.
+                if (self.attr.purchased && classes.premium) {
+                    dom.buttons.removeClass('premium');
+                }
                 dom.buttons.click(startInstall);
             }
         }

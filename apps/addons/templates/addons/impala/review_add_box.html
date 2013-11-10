@@ -1,7 +1,7 @@
 <div id="review-add-box" class="modal">
 {# TODO(jbalogh): make this a global fix: bug 551748 #}
 {% set amo_user = user.get_profile() if user.is_authenticated() else None %}
-{% if not addon.has_author(amo_user) %}
+{% if addon.can_review(amo_user) %}
   <a class="close" href="#">{{ _('close') }}</a>
   <h2>{{ _('What do you think?') }}</h2>
   <div id="review-box" class="c">
@@ -13,34 +13,50 @@
       </p>
     {% endif %}
 
-    <form disabled method="post" action="{{ url('reviews.add', addon.slug) }}">
+    <form method="post" action="{{ shared_url('reviews.add', addon) }}">
       {% set attrs = {} if user.is_authenticated() else {'disabled': 'disabled'} %}
       {{ csrf() }}
       {{ field(review_form.body, _('Review:'), **attrs) }}
       {{ field(review_form.rating, _('Rating:'), **attrs) }}
-      <input type="submit" value="{{ _('Submit review') }}" {{ attrs|xmlattr }}>
+      <p><input type="submit" value="{{ _('Submit review') }}" {{ attrs|xmlattr }}></p>
     </form>
 
     <div>
       <p>
-        {% trans %}
-          Please do not post bug reports in reviews. We do not make your email
-          address available to add-on developers and they may need to contact
-          you to help resolve your issue.
-        {% endtrans %}
+        {% if webapp %}
+          {{ loc('Please do not post bug reports in reviews. We do not make
+                  your email address available to app developers and they may
+                  need to contact you to help resolve your issue.') }}
+        {% else %}
+          {% trans %}
+            Please do not post bug reports in reviews. We do not make your email
+            address available to add-on developers and they may need to contact
+            you to help resolve your issue.
+          {% endtrans %}
+        {% endif %}
       </p>
       {% if addon.support_url or addon.support_email %}
-      <p>
-        {% trans support='#support' %}
-          See the <a href="{{ support }}">support section</a> to find out
-          where to get assistance for this add-on.
-        {% endtrans %}
-      </p>
+        <p>
+          {% with support=request.path + '#support' %}
+            {% if webapp %}
+              {{ loc('See the <a href="{support}">support section</a> to
+                      find out where to get assistance for this app.')|f(
+                      support=support)|safe }}
+            {% else %}
+              {% trans %}
+                See the <a href="{{ support }}">support section</a> to find out
+                where to get assistance for this add-on.
+              {% endtrans %}
+            {% endif %}
+          {% endwith %}
+        </p>
       {% endif %}
-      <p><a href="{{ remora_url('/pages/review_guide') }}" target="_blank">{{ _('Review Guidelines') }}</a></p>
+      {% if not webapp %}
+        <p><a href="{{ remora_url('/pages/review_guide') }}" target="_blank">{{ _('Review Guidelines') }}</a></p>
+      {% endif %}
       <p>
-        <a href="{{ url('reviews.add', addon.slug) }}">
-          {{ _('Detailed Review') }}</a>
+        <a href="{{ shared_url('reviews.add', addon) }}"
+           id="detail-review-link">{{ _('Detailed Review') }}</a>
       </p>
     </div>
 

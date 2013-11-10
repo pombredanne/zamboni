@@ -1,5 +1,3 @@
-from django.conf import settings
-
 import jinja2
 
 from jingo import register, env
@@ -23,10 +21,8 @@ def statusflags(context, addon):
     lang = context['LANG']
     if addon.is_unreviewed():
         return 'unreviewed'
-    elif addon.is_featured(app, lang) or addon.is_category_featured(app, lang):
+    elif addon.is_featured(app, lang):
         return 'featuredaddon'
-    elif addon.is_selfhosted():
-        return 'selfhosted'
     else:
         return ''
 
@@ -36,19 +32,11 @@ def statusflags(context, addon):
 def flag(context, addon):
     """unreviewed/recommended flag heading."""
     status = statusflags(context, addon)
-    msg = {'unreviewed': _('Not Reviewed'), 'featuredaddon': _('Featured'),
-           'selfhosted': _('Self Hosted')}
+    msg = {'unreviewed': _('Not Reviewed'), 'featuredaddon': _('Featured')}
     if status:
         return jinja2.Markup(u'<h5 class="flag">%s</h5>' % msg[status])
     else:
         return ''
-
-
-@register.function
-def support_addon(addon):
-    t = env.get_template('addons/support_addon.html')
-    return jinja2.Markup(t.render(addon=addon, amo=amo,
-                                  use_embedded=settings.PAYPAL_USE_EMBEDDED))
 
 
 @register.inclusion_tag('addons/performance_note.html')
@@ -60,6 +48,18 @@ def performance_note(context, amount, listing=False):
 @register.inclusion_tag('addons/impala/performance_note.html')
 @jinja2.contextfunction
 def impala_performance_note(context, amount, listing=False):
+    return new_context(**locals())
+
+
+@register.inclusion_tag('addons/impala/upsell_note.html')
+@jinja2.contextfunction
+def upsell_note(context, addon, module_context='impala'):
+    return new_context(**locals())
+
+
+@register.inclusion_tag('addons/impala/dependencies_note.html')
+@jinja2.contextfunction
+def dependencies_note(context, addon, module_context='impala'):
     return new_context(**locals())
 
 
@@ -163,6 +163,17 @@ def addon_listing_items(context, addons, show_date=False,
     return new_context(**locals())
 
 
+@register.inclusion_tag('addons/impala/listing/items.html')
+@jinja2.contextfunction
+def impala_addon_listing_items(context, addons, field=None, src=None,
+                               dl_src=None, notes={}):
+    if not src:
+        src = context.get('src')
+    if not dl_src:
+        dl_src = context.get('dl_src', src)
+    return new_context(**locals())
+
+
 @register.inclusion_tag('addons/listing/items_compact.html')
 @jinja2.contextfunction
 def addon_listing_items_compact(context, addons, show_date=False, src=None):
@@ -171,7 +182,8 @@ def addon_listing_items_compact(context, addons, show_date=False, src=None):
 
 @register.inclusion_tag('addons/listing/items_mobile.html')
 @jinja2.contextfunction
-def addon_listing_items_mobile(context, addons, sort=None, src=None):
+def addon_listing_items_mobile(context, addons, sort=None, src=None,
+                               show_refunds=False):
     return new_context(**locals())
 
 
@@ -181,10 +193,69 @@ def addon_listing_header(context, url_base, sort_opts, selected):
     return new_context(**locals())
 
 
+@register.inclusion_tag('addons/impala/listing/sorter.html')
+@jinja2.contextfunction
+def impala_addon_listing_header(context, url_base, sort_opts={}, selected=None,
+                                extra_sort_opts={}, search_filter=None):
+    if search_filter:
+        selected = search_filter.field
+        sort_opts = search_filter.opts
+        if hasattr(search_filter, 'extras'):
+            extra_sort_opts = search_filter.extras
+    # When an "extra" sort option becomes selected, it will appear alongside
+    # the normal sort options.
+    old_extras = extra_sort_opts
+    sort_opts, extra_sort_opts = list(sort_opts), []
+    for k, v in old_extras:
+        if k == selected:
+            sort_opts.append((k, v, True))
+        else:
+            extra_sort_opts.append((k, v))
+    return new_context(**locals())
+
+
+@register.filter
+@jinja2.contextfilter
+@register.inclusion_tag('addons/impala/sidebar_listing.html')
+def sidebar_listing(context, addon):
+    return new_context(**locals())
+
+
+@register.filter
+@jinja2.contextfilter
+@register.inclusion_tag('addons/impala/addon_hovercard.html')
+def addon_hovercard(context, addon, lazyload=False, src=None, dl_src=None):
+    if not src:
+        src = context.get('src')
+    if not dl_src:
+        dl_src = context.get('dl_src', src)
+    vital_summary = context.get('vital_summary') or 'rating'
+    vital_more_default = 'downloads' if addon.is_webapp() else 'adu'
+    vital_more = context.get('vital_more')
+    if 'vital_more' not in context:
+        vital_more = vital_more_default
+    return new_context(**locals())
+
+
 @register.filter
 @jinja2.contextfilter
 @register.inclusion_tag('addons/impala/addon_grid.html')
-def addon_grid(context, addons, src=None, dl_src=None, pagesize=6, cols=2):
+def addon_grid(context, addons, src=None, dl_src=None, pagesize=6, cols=2,
+               vital_summary='rating', vital_more='adu'):
+    if not src:
+        src = context.get('src')
+    # dl_src is an optional src parameter just for the download links
+    if not dl_src:
+        dl_src = context.get('dl_src', src)
+    pages = chunked(addons, pagesize)
+    columns = 'cols-%d' % cols
+    return new_context(**locals())
+
+
+@register.filter
+@jinja2.contextfilter
+@register.inclusion_tag('addons/impala/featured_grid.html')
+def featured_grid(context, addons, src=None, dl_src=None, pagesize=3, cols=3):
     if not src:
         src = context.get('src')
     # dl_src is an optional src paramater just for the download links
@@ -250,8 +321,19 @@ def persona_grid(context, addons):
 @register.filter
 @jinja2.contextfilter
 @register.inclusion_tag('addons/impala/persona_grid.html')
-def impala_persona_grid(context, personas, src=None, pagesize=6):
-    pages = chunked(personas, pagesize)
+def impala_persona_grid(context, personas, src=None, pagesize=6, cols=3):
+    c = dict(context.items())
+    return dict(pages=chunked(personas, pagesize),
+                columns='cols-%d' % cols, **c)
+
+
+@register.filter
+@jinja2.contextfilter
+@register.inclusion_tag('addons/impala/theme_grid.html')
+def theme_grid(context, themes, src=None, dl_src=None):
+    src = context.get('src', src)
+    if not dl_src:
+        dl_src = context.get('dl_src', src)
     return new_context(**locals())
 
 

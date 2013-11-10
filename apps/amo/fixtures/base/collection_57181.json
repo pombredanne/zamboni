@@ -3,7 +3,6 @@
         "pk": 5189612,
         "model": "users.userprofile",
         "fields": {
-            "sandboxshown": false,
             "display_collections_fav": false,
             "display_collections": false,
             "occupation": "",
@@ -15,9 +14,7 @@
             "email": "dd+fe1175df5@davedash.com",
             "notifycompat": true,
             "bio": null,
-            "firstname": "denis",
             "deleted": false,
-            "lastname": "smailin",
             "emailhidden": true,
             "user": null,
             "password": "",

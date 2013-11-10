@@ -3,10 +3,11 @@ import jingo
 import jinja2
 from tower import ugettext_lazy as _
 
+import amo
 from addons.models import Addon
 from api.views import addon_filter
-from bandwagon.models import Collection
-from .models import BlogCacheRyf
+from bandwagon.models import Collection, MonthlyPick as MP
+from versions.compare import version_int
 
 
 # The global registry for promo modules.  Managed through PromoModuleMeta.
@@ -38,6 +39,9 @@ class PromoModule(object):
         self.request = request
         self.platform = platform
         self.version = version
+        self.compat_mode = 'strict'
+        if version_int(self.version) >= version_int('10.0'):
+            self.compat_mode = 'ignore'
 
     def render(self):
         raise NotImplementedError
@@ -57,26 +61,19 @@ class TemplatePromo(PromoModule):
         return jinja2.Markup(r)
 
 
-class RockYourFirefox(TemplatePromo):
-    slug = 'Rock Your Firefox'
-    template = 'discovery/modules/ryf.html'
-
-    def context(self):
-        return {'ryf': BlogCacheRyf.objects.get()}
-
-
 class MonthlyPick(TemplatePromo):
     slug = 'Monthly Pick'
     template = 'discovery/modules/monthly.html'
 
-    # TODO A bit of hardcoding here to support an alternative locale.  This
-    # will all be redone with the mango bugs: http://bugzil.la/[t:mango]
     def context(self):
-        return {
-                'addon': Addon.objects.get(id=6416),
-                'addon_de': Addon.objects.get(id=146384),
-                'module_context': 'discovery'
-               }
+        try:
+            pick = MP.objects.filter(locale=self.request.LANG)[0]
+        except IndexError:
+            try:
+                pick = MP.objects.filter(locale='')[0]
+            except IndexError:
+                pick = None
+        return {'pick': pick, 'module_context': 'discovery'}
 
 
 class GoMobile(TemplatePromo):
@@ -89,36 +86,57 @@ class CollectionPromo(PromoModule):
     template = 'discovery/modules/collection.html'
     title = None
     subtitle = None
+    cls = 'promo'
     limit = 3
     linkify_title = False
 
     def __init__(self, *args, **kw):
         super(CollectionPromo, self).__init__(*args, **kw)
-        self.collection = Collection.objects.get(pk=self.pk)
+        self.collection = None
+        if hasattr(self, 'pk'):
+            try:
+                self.collection = Collection.objects.get(pk=self.pk)
+            except Collection.DoesNotExist:
+                pass
+        elif (hasattr(self, 'collection_author') and
+              hasattr(self, 'collection_slug')):
+            try:
+                self.collection = Collection.objects.get(
+                    author__username=self.collection_author,
+                    slug=self.collection_slug)
+            except Collection.DoesNotExist:
+                pass
 
     def get_descriptions(self):
         return {}
 
     def get_addons(self):
-        addons = self.collection.addons.all()
+        addons = self.collection.addons.filter(status=amo.STATUS_PUBLIC)
         kw = dict(addon_type='ALL', limit=self.limit, app=self.request.APP,
-                  platform=self.platform, version=self.version, shuffle=True)
+                  platform=self.platform, version=self.version,
+                  compat_mode=self.compat_mode)
         f = lambda: addon_filter(addons, **kw)
         return caching.cached_with(addons, f, repr(kw))
 
     def render(self, module_context='discovery'):
-        c = dict(promo=self, addons=self.get_addons(),
-                 module_context=module_context,
+        if module_context == 'home':
+            self.platform = 'ALL'
+            self.version = None
+        c = dict(promo=self, module_context=module_context,
                  descriptions=self.get_descriptions())
+        if self.collection:
+            c.update(addons=self.get_addons())
         return jinja2.Markup(
             jingo.render_to_string(self.request, self.template, c))
 
 
 class ShoppingCollection(CollectionPromo):
     slug = 'Shopping Collection'
-    pk = 16651
-    cls = 'shopping'
-    title = _(u'Save cash and have fun with these shopping add-ons')
+    collection_author, collection_slug = 'mozilla', 'onlineshopping'
+    cls = 'promo promo-purple'
+    title = _(u'Shopping Made Easy')
+    subtitle = _(u'Save on your favorite items '
+                  'from the comfort of your browser.')
 
 
 class WebdevCollection(CollectionPromo):
@@ -165,11 +183,11 @@ class Fx4Collection(CollectionPromo):
 
 
 class StPatricksPersonas(CollectionPromo):
-    slug = 'St. Pat Personas'
+    slug = 'St. Pat Themes'
     pk = 666627
     id = 'st-patricks'
     cls = 'promo'
-    title = _(u'St. Patrick&rsquo;s Day Personas')
+    title = _(u'St. Patrick&rsquo;s Day Themes')
     subtitle = _(u'Decorate your browser to celebrate '
                  'St. Patrick&rsquo;s Day.')
 
@@ -190,3 +208,138 @@ class ThunderbirdCollection(CollectionPromo):
     cls = 'promo'
     title = _(u'Thunderbird Collection')
     subtitle = _(u'Here are some great add-ons for Thunderbird.')
+
+
+class TravelCollection(CollectionPromo):
+    slug = 'Travelers Pack'
+    pk = 4
+    id = 'travel'
+    cls = 'promo'
+    title = _(u'Sit Back and Relax')
+    subtitle = _(u'Add-ons that help you on your travels!')
+
+    def get_descriptions(self):
+        return {
+            5791: _(u"Displays a country flag depicting the location of the "
+                    "current website's server and more."),
+            1117: _(u'FoxClocks let you keep an eye on the time around the '
+                    'world.'),
+            11377: _(u'Automatically get the lowest price when you shop '
+                     'online or search for flights.')
+        }
+
+
+class SchoolCollection(CollectionPromo):
+    slug = 'School'
+    pk = 2133887
+    id = 'school'
+    cls = 'promo'
+    title = _(u'A+ add-ons for School')
+    subtitle = _(u'Add-ons for teachers, parents, and students heading back '
+                 'to school.')
+
+    def get_descriptions(self):
+        return {
+            3456: _(u'Would you like to know which websites you can trust?'),
+            2410: _(u'Xmarks is the #1 bookmarking add-on.'),
+            2444: _(u'Web page and text translator, dictionary, and more!')
+        }
+
+
+# The add-ons that go with the promo modal. Not an actual PromoModule
+class PromoVideoCollection():
+    items = (349111, 349155, 349157, 52659, 5579, 252539, 11377, 2257)
+
+    def get_items(self):
+        items = Addon.objects.in_bulk(self.items)
+        return [items[i] for i in self.items if i in items]
+
+
+class NewYearCollection(CollectionPromo):
+    slug = 'New Year'
+    collection_author, collection_slug = 'mozilla', 'newyear_2012'
+    id = 'new-year'
+    title = _(u'Add-ons to help you on your way in 2012')
+
+
+class ValentinesDay(CollectionPromo):
+    slug = 'Valentines Day'
+    collection_author, collection_slug = 'amoteam', 'va'
+    id = 'valentines'
+    title = _(u'Love is in the Air')
+    subtitle = _(u'Add some romance to your Firefox.')
+
+
+class MobileThemes(CollectionPromo):
+    slug = 'Mobile Themes'
+    cls = 'promo promo-grey'
+    collection_author, collection_slug = 'mozilla', 'mobilethemes'
+    title = _(u'Put a Theme on It!')
+    subtitle = _(u'Visit addons.mozilla.org from Firefox for Android and '
+                  'dress up your mobile browser to match your style, mood, '
+                  'or the season.')
+
+
+class Fitness(CollectionPromo):
+    slug = 'Fitness'
+    cls = 'promo promo-yellow'
+    collection_author, collection_slug = 'mozilla', 'fitness'
+    title = _(u'Get up and move!')
+    subtitle = _(u'Install these fitness add-ons to keep you active and '
+                  'healthy.')
+
+
+class UpAndComing(CollectionPromo):
+    slug = 'Up & Coming'
+    cls = 'promo promo-blue'
+    collection_author, collection_slug = 'mozilla', 'up_coming'
+    title = _(u'New &amp; Now')
+    subtitle = _(u'Get the latest, must-have add-ons of the moment.')
+
+
+class Olympics(TemplatePromo):
+    slug = 'Olympics'
+    template = 'discovery/modules/olympics.html'
+
+
+class ContestWinners(TemplatePromo):
+    slug = 'Contest Winners'
+    template = 'discovery/modules/contest-winners.html'
+
+    def render(self, module_context='discovery'):
+        # Hide on discovery pane.
+        if module_context == 'home':
+            return super(ContestWinners, self).render()
+
+
+class Holiday(TemplatePromo):
+    slug = 'Holiday'
+    template = 'discovery/modules/holiday.html'
+
+    def render(self, module_context='discovery'):
+        # Hide on discovery pane.
+        if module_context == 'home':
+            return super(Holiday, self).render()
+
+
+class Privacy(CollectionPromo):
+    slug = 'Privacy Collection'
+    cls = 'promo promo-purple'
+    collection_author, collection_slug = 'mozilla', 'privacy'
+    title = _(u'Worry-free browsing')
+    subtitle = _(u'Protect your privacy online with the add-ons in this '
+                  'collection.')
+
+
+class Featured(CollectionPromo):
+    slug = 'Featured Add-ons Collection'
+    cls = 'promo promo-yellow'
+    collection_author, collection_slug = 'mozilla', 'featured-add-ons'
+    title = _(u'Featured Add-ons')
+    subtitle = _(u'Great add-ons for work, fun, privacy, productivity&hellip; '
+                  'just about anything!')
+
+
+class AmpYourFirefoxWinner(CollectionPromo):
+    slug = 'Amp Your Firefox Best Overall Add-on'
+    template = 'discovery/modules/amp-your-firefox-winner.html'

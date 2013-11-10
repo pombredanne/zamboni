@@ -7,7 +7,7 @@
 {% block bodyclass %}inverse{% endblock %}
 
 {% block breadcrumbs %}
-{{ editors_breadcrumbs(queue_id=addon.status, items=[(None, addon.name)]) }}
+{{ editors_breadcrumbs(addon_queue=addon, items=[(None, addon.name)]) }}
 {% endblock %}
 
 {% block content %}
@@ -19,27 +19,20 @@
     <span>
       {{ _('Review {0}')|f(addon.name) }}
     </span>
-    {% if version and not addon.is_selfhosted() %}
+    {% if version %}
       <span class="version">{{ version.version }}</span>
     {% endif %}
   </h2>
   <h4 class="author">{{ _('by') }} {{ users_list(addon.listed_authors) }}</h4>
 </hgroup>
 
-<div id="addon" class="primary" role="main" data-id="{{ addon.id }}">
-{% include "addons/details_box.html" %}
+<div id="addon" class="primary" role="main" data-id="{{ addon.id }}" data-url="{{ url('editors.review_viewing') }}">
+
+{% include 'addons/details_box.html' %}
 
 <div id="review-files-header">
   <h3 id="history">
     {{ _('Add-on History') }}
-    <span>
-      {% trans %}
-      open:
-      <a class="eh_open" data-num="1" href="#">1</a> &middot;
-      <a class="eh_open" data-num="3" href="#">3</a> &middot;
-      <a class="eh_open" data-num="20" href="#">all</a>
-      {% endtrans %}
-    </span>
   </h3>
   <div id="review-files-paginate">
     {% include "editors/includes/paginator_history.html"  %}
@@ -48,8 +41,7 @@
 <div class="results">
   <div class="results-inner">
     <table id="review-files" class="item-history">
-      {% for i in range(pager.object_list.count(), 0, -1) %}
-      {% set version = pager.object_list[i-1] %}
+      {% for version in pager.object_list|reverse %}
       <tr class="listing-header">
         <th colspan="2">
           {% trans version = version.version, created = version.created|datetime, version_status = version.status|join(',') %}
@@ -59,57 +51,62 @@
       </tr>
       <tr class="listing-body">
         <td class="files">
-          <div><strong>{{ _('Files in this version:') }}</strong></div>
-          <ul>
-          {% for file in version.all_files %}
-          <li>
-            <span class="light">
-              <strong><a href="{{ file.get_url_path(addon.app, 'editor') }}" class="install"
-                  data-type="{{ amo.ADDON_SLUGS[addon.type] }}">{{ file.platform }}</a></strong>
-              <div>
-                {{ file_review_status(addon, file) }}
-              </div>
-              <a href="{{ url('devhub.file_validation', addon.slug, file.id) }}">{{ _('Validation') }}</a>
-              &middot;
-              {% if waffle.switch('zamboni-file-viewer') %}
-              <a href="{{ url('files.list', file.id) }}">{{ _('Contents') }}</a>
-              {% else %}
-              <a href="{{ remora_url('/files/browse/%d/1' % file.id) }}">{{ _('Contents') }}</a>
-              {% endif %}
-              {% if show_diff %}
-              &middot;
-              {% if waffle.switch('zamboni-file-viewer') %}
-              <a href="{{ url('files.compare', file.id, file_compare(file, show_diff)) }}">{{ _('Compare') }}</a>
-              {% else %}
-              <a href="{{ remora_url('/files/diff/%d/' % file.id) }}">{{ _('Compare') }}</a>
-              {% endif %}
-              {% endif %}
-            </span>
-          </li>
-          {% endfor %}
-          </ul>
-          <div><strong>{{ _('Compatibility:') }}</strong></div>
-          <ul>
-            {% for app, compat in version.compatible_apps.items() %}
-            <li>
-              <div class="app-icon ed-sprite-{{ app.short }}" title="{{ app.pretty }}"></div>
-              {{ compat }}
+          {% set version_files = version.all_files %}
+          {% if version_files %}
+            <div><strong>{{ _('Files in this version:') }}</strong></div>
+            <ul>
+            {% for file in version_files %}
+            <li class="file-info">
+              <span class="light">
+                <strong><a href="{{ file.get_url_path('editor') }}" class="editors-install"
+                    data-type="{{ amo.ADDON_SLUGS[addon.type] }}">{{ file.platform }}</a></strong>
+                <div>
+                  {{ file_review_status(addon, file) }}
+                </div>
+                <a href="{{ url('devhub.file_validation', addon.slug, file.id) }}">{{ _('Validation') }}</a>
+                &middot;
+                <a href="{{ url('files.list', file.id) }}">{{ _('Contents') }}</a>
+                {% if show_diff and version == addon.latest_version %}
+                &middot;
+                <a class="compare" href="{{ url('files.compare', file.id, file_compare(file, show_diff)) }}">{{ _('Compare') }}</a>
+                {% endif %}
+              </span>
             </li>
             {% endfor %}
-          </ul>
+            </ul>
+          {% endif %}
+          {% if version.compatible_apps_ordered %}
+            <div><strong>{{ _('Compatibility:') }}</strong></div>
+            <ul>
+              {% for app, compat in version.compatible_apps_ordered %}
+              <li>
+                <div class="app-icon ed-sprite-{{ app.short }}" title="{{ app.pretty }}"></div>
+                {{ compat }}
+              </li>
+              {% endfor %}
+            </ul>
+          {% endif %}
         </td>
         <td>
           <table class="activity">
             {% if version.releasenotes %}
             <tr>
               <th>{{ _('Version Notes') }}</th>
-              <td class="activity_version">{{ version.releasenotes|nl2br }}</td>
+              <td class="activity_version">
+                <div class="history-notes">
+                  {{ version.releasenotes|nl2br }}
+                </div>
+              </td>
             </tr>
             {% endif %}
             {% if version.approvalnotes %}
             <tr>
-              <th>{{ _('Approval Notes') }}</th>
-              <td class="activity_approval">{{ version.approvalnotes|nl2br }}</td>
+              <th>{{ _('Notes for Reviewers') }}</th>
+              <td class="activity_approval">
+                <div class="history-notes">
+                  {{ version.approvalnotes|nl2br|urlize(100) }}
+                </div>
+              </td>
             </tr>
             {% endif %}
             {% set records = version.all_activity %}
@@ -204,6 +201,15 @@
         </label>
         {{ form.notify.errors }}
       </div>
+      {% if addon.admin_review and is_admin %}
+      <div class="review-actions-section">
+        {{ form.adminflag }}
+        <label for="{{ form.adminflag.auto_id }}">
+          {{ form.adminflag.label }}
+        </label>
+        {{ form.adminflag.errors }}
+      </div>
+      {% endif %}
       <div class="review-actions-section review-actions-save">
         <span class="currently_viewing_warning">
           {% trans %}
@@ -232,12 +238,12 @@
   </div>
   {% endif %}
 
-  <strong>{{ _('Add-on Actions ') }}</strong>
+  <strong>{{ _('Actions') }}</strong>
   <ul id="actions-addon">
-    <li><a href="{{ addon.get_url_path() }}">{{ _('View Add-on Listing') }}</a></li>
+    <li><a href="{{ addon.get_url_path() }}">{{ _('View Listing') }}</a></li>
     {% if is_admin %}
-    <li><a href="{{ url('devhub.addons.edit', addon.slug) }}">{{ _('Edit Add-on') }}</a> <em>{{ _('(admin)') }}</em></li>
-    <li><a href="{{ remora_url('admin/addons/status/%s' % addon.id) }}">{{ _('Admin Page') }}</a> <em>{{ _('(admin)') }}</em></li>
+    <li><a href="{{ addon.get_dev_url() }}">{{ _('Edit') }}</a> <em>{{ _('(admin)') }}</em></li>
+    <li><a href="{{ url('zadmin.addon_manage', addon.id) }}">{{ _('Admin Page') }}</a> <em>{{ _('(admin)') }}</em></li>
     {% endif %}
   </ul>
 
@@ -246,12 +252,13 @@
   <ul>
     <li><a href="#more-about">{{ _('More Information') }}</a></li>
     <li><a href="#history">{{ _('Add-on History') }}</a></li>
+    <li><a href="#review-actions">{{ _('Resolution') }}</a></li>
   </ul>
 
   <strong>{{ _('Authors') }}</strong>
   <ul>
     {% for author in addon.authors.all() %}
-    <li><a href="{{ url('users.profile', author.id) }}">{{ author.name }}</a></li>
+    <li><a href="{{ author.get_url_path() }}">{{ author.name }}</a></li>
     {% endfor %}
   </ul>
 
@@ -262,12 +269,18 @@
     {% endfor %}
   </ul>
 
+  {% if waffle.switch('marketplace') %}
+  <strong>{{ _('Premium type') }}</strong>
+  <ul id="premium-type">
+      <li>{{ addon.premium_type|premium_text }}</li>
+  </ul>
+  {% endif %}
+
   {% if flags: %}
   <strong>{{ _('Flags') }}</strong>
   <ul>
-    {% for flag in flags %}
-    {# TODO(andym): not sure what goes here #}
-    <li>{{ flag }}</li>
+    {% for cls, title in flags %}
+      <li>{{ title }}</li>
     {% endfor %}
   </ul>
   {% endif %}

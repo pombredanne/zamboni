@@ -1,19 +1,8 @@
-{% extends 'base.html' %}
-{% block title %}{{ page_title(title) }}{% endblock %}
+{% extends "impala/base_shared.html" %}
+
 {% block content %}
-<div role="main" class="primary wide">
-  <div class="featured listing results">
-    <div class="featured-inner">
-      <div class="listing-header">
-        <p class="no-results">
-        {% if settings.DEBUG %}
-          Consider starting the search daemon!
-        {% else %}
-          {{ _('Search is temporarily unavailable.') }}
-        {% endif %}
-        </p>
-      </div>
-    </div>
-  </div>
-</div>
+<section id="search-down" class="main">
+  <h1>{{ _('Search Unavailable') }}</h1>
+  <p>{{ _('Search is temporarily unavailable. Please try again in a few minutes.') }}</p>
+</section>
 {% endblock %}

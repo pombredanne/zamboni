@@ -1,25 +1,25 @@
 """Tests related to the ``devhub.addons.owner`` view."""
-import test_utils
 from nose.tools import eq_
 from pyquery import PyQuery as pq
+import waffle
 
 import amo
+import amo.tests
 from amo.tests import formset
-from amo.urlresolvers import reverse
 from addons.models import Addon, AddonUser
 from devhub.forms import LicenseForm
 from devhub.models import ActivityLog
 from versions.models import License, Version
 
 
-class TestOwnership(test_utils.TestCase):
+class TestOwnership(amo.tests.TestCase):
     fixtures = ['base/apps', 'base/users', 'base/addon_3615']
 
     def setUp(self):
-        self.url = reverse('devhub.addons.owner', args=['a3615'])
-        assert self.client.login(username='del@icio.us', password='password')
         self.addon = Addon.objects.get(id=3615)
         self.version = self.addon.current_version
+        self.url = self.addon.get_dev_url('owner')
+        assert self.client.login(username='del@icio.us', password='password')
 
     def formset(self, *args, **kw):
         defaults = {'builtin': License.OTHER, 'text': 'filler'}
@@ -54,6 +54,13 @@ class TestEditPolicy(TestOwnership):
         r = self.client.post(self.url, self.formset(has_eula=False))
         eq_(r.status_code, 302)
         eq_(self.get_addon().eula, None)
+
+    def test_edit_eula_locale(self):
+        self.addon.eula = {'de': 'some eula', 'en-US': ''}
+        self.addon.save()
+        res = self.client.get(self.url.replace('en-US', 'it'))
+        doc = pq(res.content)
+        eq_(doc('#id_has_eula').attr('checked'), 'checked')
 
 
 class TestEditLicense(TestOwnership):
@@ -155,7 +162,7 @@ class TestEditLicense(TestOwnership):
 
     def test_license_details_links(self):
         # Check that builtin licenses get details links.
-        doc = pq(unicode(LicenseForm()))
+        doc = pq(unicode(LicenseForm(addon=self.version.addon)))
         for license in License.objects.builtins():
             radio = 'input.license[value=%s]' % license.builtin
             eq_(doc(radio).parent().text(), unicode(license.name) + ' Details')
@@ -178,6 +185,7 @@ class TestEditLicense(TestOwnership):
 
 
 class TestEditAuthor(TestOwnership):
+
     def test_reorder_authors(self):
         """
         Re-ordering authors should not generate role changes in the
@@ -197,10 +205,10 @@ class TestEditAuthor(TestOwnership):
         u2 = f.initial
         data = self.formset(u1, u2)
 
-        eq_(ActivityLog.objects.all().count(), 2)
+        orig = ActivityLog.objects.all().count()
         r = self.client.post(self.url, data)
-        eq_(r.status_code, 302)
-        eq_(ActivityLog.objects.all().count(), 2)
+        self.assertRedirects(r, self.url, 302)
+        eq_(ActivityLog.objects.all().count(), orig)
 
     def test_success_add_user(self):
         q = (AddonUser.objects.no_cache().filter(addon=3615)
@@ -212,7 +220,7 @@ class TestEditAuthor(TestOwnership):
                  role=amo.AUTHOR_ROLE_DEV, position=0)
         data = self.formset(f.initial, u, initial_count=1)
         r = self.client.post(self.url, data)
-        eq_(r.status_code, 302)
+        self.assertRedirects(r, self.url, 302)
         eq_(list(q.all()), [55021, 999])
 
     def test_success_edit_user(self):
@@ -231,7 +239,7 @@ class TestEditAuthor(TestOwnership):
         empty = dict(user='', listed=True, role=5, position=0)
         data = self.formset(one.initial, two.initial, empty, initial_count=2)
         r = self.client.post(self.url, data)
-        eq_(r.status_code, 302)
+        self.assertRedirects(r, self.url, 302)
         eq_(AddonUser.objects.no_cache().get(addon=3615, user=999).listed,
             False)
 
@@ -313,3 +321,22 @@ class TestEditAuthor(TestOwnership):
         r = self.client.post(self.url, data)
         eq_(r.context['user_form'].non_form_errors(),
             ['Must have at least one owner.'])
+
+    def test_author_support_role(self):
+        # Tests that the support role shows up when the allow-refund switch
+        # is active.
+        switch = waffle.models.Switch.objects.create(name='allow-refund',
+                                                     active=True)
+        res = self.client.get(self.url)
+        eq_(res.status_code, 200)
+        doc = pq(res.content)
+        role_str = doc('#id_form-0-role').text()
+        assert 'Support' in role_str, ('Support not in roles. Contained: %s' %
+                                       role_str)
+        switch.active = False
+        switch.save()
+        res = self.client.get(self.url)
+        eq_(res.status_code, 200)
+        doc = pq(res.content)
+        assert not 'Support' in doc('#id_form-0-role').text(), (
+            "Hey, the Support role shouldn't be here!")

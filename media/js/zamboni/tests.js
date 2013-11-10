@@ -29,8 +29,8 @@ tests.waitFor = function(checkCondition, config) {
     if (typeof(config) === 'undefined') {
         config = {};
     }
-    var interval = config.interval || 5,
-        timeout = config.timeout || 300,
+    var interval = config.interval || 20,
+        timeout = config.timeout || 1000,
         run,
         runWhenReady,
         timeSpent = 0;
@@ -149,3 +149,19 @@ tests.lacksClass = function($sel, cls) {
     equals($sel.hasClass(cls), false,
            'Should not have ' + cls + ', got: ' + $sel.attr('class'));
 };
+
+tests.equalObjects = function(a, b) {
+    /*
+        Asserts that two objects are equal by comparing serialized strings.
+        deepEqual is stupid and flaky.
+    */
+    equal(JSON.stringify(a), JSON.stringify(b));
+}
+
+tests.notEqualObjects = function(a, b) {
+    /*
+        Asserts that two objects are unequal by comparing serialized strings.
+        notDeepEqual is stupid and flaky.
+    */
+    notEqual(JSON.stringify(a), JSON.stringify(b));
+}

@@ -1,6 +1,4 @@
 import amo
-from addons.models import Addon
-from bandwagon.models import Collection
 
 
 def match_rules(rules, app, action):
@@ -24,28 +22,30 @@ def action_allowed(request, app, action):
     'Admin:%' is true if the user has any of:
     ('Admin:*', 'Admin:%s'%whatever, '*:*',) as rules.
     """
-
-    return any(match_rules(group.rules, app, action)
-        for group in getattr(request, 'groups', ()))
+    allowed = any(match_rules(group.rules, app, action) for group in
+                  getattr(request, 'groups', ()))
+    return allowed
 
 
 def action_allowed_user(user, app, action):
     """Similar to action_allowed, but takes user instead of request."""
-    return any(match_rules(group.rules, app, action)
-        for group in user.groups.all())
+    allowed = any(match_rules(group.rules, app, action) for group in
+                  user.groups.all())
+    return allowed
 
 
-def check_ownership(request, obj, require_owner=False):
+def check_ownership(request, obj, require_owner=False, require_author=False,
+                    ignore_disabled=False, admin=True):
     """
     A convenience function.  Check if request.user has permissions
     for the object.
     """
-    if isinstance(obj, Addon):
-        return check_addon_ownership(request, obj, viewer=not require_owner)
-    elif isinstance(obj, Collection):
-        return check_collection_ownership(request, obj, require_owner)
-    else:
-        return False
+    if hasattr(obj, 'check_ownership'):
+        return obj.check_ownership(request, require_owner=require_owner,
+                                   require_author=require_author,
+                                   ignore_disabled=ignore_disabled,
+                                   admin=admin)
+    return False
 
 
 def check_collection_ownership(request, collection, require_owner=False):
@@ -53,6 +53,8 @@ def check_collection_ownership(request, collection, require_owner=False):
         return False
 
     if action_allowed(request, 'Admin', '%'):
+        return True
+    elif action_allowed(request, 'Collections', 'Edit'):
         return True
     elif request.amo_user.id == collection.author_id:
         return True
@@ -62,7 +64,8 @@ def check_collection_ownership(request, collection, require_owner=False):
         return False
 
 
-def check_addon_ownership(request, addon, viewer=False, dev=False, ignore_disabled=False):
+def check_addon_ownership(request, addon, viewer=False, dev=False,
+                          support=False, admin=True, ignore_disabled=False):
     """
     Check request.amo_user's permissions for the addon.
 
@@ -71,11 +74,15 @@ def check_addon_ownership(request, addon, viewer=False, dev=False, ignore_disabl
     If they're an add-on owner they can do anything.
     dev=True checks that the user has an owner or developer role.
     viewer=True checks that the user has an owner, developer, or viewer role.
+    support=True checks that the user has a support role.
     """
     if not request.user.is_authenticated():
         return False
-    # Admins can do anything.
-    if action_allowed(request, 'Admin', 'EditAnyAddon'):
+    # Deleted addons can't be edited at all.
+    if addon.is_deleted:
+        return False
+    # Users with 'Addons:Edit' can do anything.
+    if admin and action_allowed(request, 'Addons', 'Edit'):
         return True
     # Only admins can edit admin-disabled addons.
     if addon.status == amo.STATUS_DISABLED and not ignore_disabled:
@@ -86,6 +93,23 @@ def check_addon_ownership(request, addon, viewer=False, dev=False, ignore_disabl
         roles += (amo.AUTHOR_ROLE_DEV,)
     # Viewer privs are implied for devs.
     elif viewer:
-        roles += (amo.AUTHOR_ROLE_DEV, amo.AUTHOR_ROLE_VIEWER)
+        roles += (amo.AUTHOR_ROLE_DEV, amo.AUTHOR_ROLE_VIEWER,
+                  amo.AUTHOR_ROLE_SUPPORT)
+    # Support can do support.
+    elif support:
+        roles += (amo.AUTHOR_ROLE_SUPPORT,)
     return addon.authors.filter(user=request.amo_user,
                                 addonuser__role__in=roles).exists()
+
+
+def check_reviewer(request, only=None):
+    addon = action_allowed(request, 'Addons', 'Review')
+    app = action_allowed(request, 'Apps', 'Review')
+    persona = action_allowed(request, 'Personas', 'Review')
+    if only == 'addon':
+        return addon
+    elif only == 'app':
+        return app
+    elif only == 'persona':
+        return persona
+    return addon or app or persona

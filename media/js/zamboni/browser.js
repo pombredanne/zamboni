@@ -8,7 +8,7 @@ function BrowserUtils() {
     var userAgentStrings = {
             'firefox' : /Mozilla.*(Firefox|Minefield|Namoroka|Shiretoko|GranParadiso|BonEcho|Iceweasel|Fennec|MozillaDeveloperPreview)\/([^\s]*).*$/,
             'seamonkey': /Mozilla.*(SeaMonkey|Iceape)\/([^\s]*).*$/,
-            'mobile': /Mozilla.*(Fennec)\/([^\s]*)$/,
+            'mobile': /Mozilla.*(Fennec|Mobile)\/([^\s]*)$/,
             'thunderbird': /Mozilla.*(Thunderbird|Shredder|Lanikai)\/([^\s*]*).*$/
         },
         osStrings = {
@@ -34,6 +34,12 @@ function BrowserUtils() {
                 badBrowser = false;
             }
         }
+    }
+
+    // Seamonkey looks like Firefox but Firefox doesn't look like Seamonkey.
+    // If both are true, set Firefox to false.
+    if (browser.firefox && browser.seamonkey) {
+        browser.firefox = false;
     }
 
     var os = {},

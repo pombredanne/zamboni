@@ -30,7 +30,7 @@ def _install_button(context, addon, version=None, show_eula=True,
                    or request.GET.get('collection_uuid'))
     button = install_button_factory(addon, app, lang, version,
                                     show_eula, show_contrib, show_warning,
-                                    src, collection, size, detailed)
+                                    src, collection, size, detailed, impala)
     installed = (request.user.is_authenticated() and
                  addon.id in request.amo_user.mobile_addons)
     c = {'button': button, 'addon': addon, 'version': button.version,
@@ -39,7 +39,7 @@ def _install_button(context, addon, version=None, show_eula=True,
         template = 'addons/impala/button.html'
     elif mobile:
         template = 'addons/mobile/button.html'
-    else: 
+    else:
         template = 'addons/button.html'
     t = jingo.render_to_string(request, template, c)
     return jinja2.Markup(t)
@@ -93,7 +93,6 @@ def install_button_factory(*args, **kwargs):
     classes = (('is_persona', PersonaInstallButton),
                ('lite', LiteInstallButton),
                ('unreviewed', UnreviewedInstallButton),
-               ('self_hosted', SelfHostedInstallButton),
                ('featured', FeaturedInstallButton))
     for pred, cls in classes:
         if getattr(button, pred, False):
@@ -110,7 +109,7 @@ class InstallButton(object):
 
     def __init__(self, addon, app, lang, version=None, show_eula=True,
                  show_contrib=True, show_warning=True, src='', collection=None,
-                 size='', detailed=False):
+                 size='', detailed=False, impala=False):
         self.addon, self.app, self.lang = addon, app, lang
         self.latest = version is None
         self.version = version or addon.current_version
@@ -118,28 +117,28 @@ class InstallButton(object):
         self.collection = collection
         self.size = size
         self.detailed = detailed
+        self.impala = impala
 
         self.is_beta = self.version and self.version.is_beta
         version_unreviewed = self.version and self.version.is_unreviewed
         self.lite = self.version and self.version.is_lite
         self.unreviewed = (addon.is_unreviewed() or version_unreviewed or
                            self.is_beta)
-        self.self_hosted = addon.status == amo.STATUS_LISTED
         self.featured = (not self.unreviewed
                          and not self.lite
-                         and not self.self_hosted
                          and not self.is_beta
-                         and addon.is_featured(app, lang)
-                         or addon.is_category_featured(app, lang))
+                         and addon.is_featured(app, lang))
         self.is_persona = addon.type == amo.ADDON_PERSONA
 
+        self.can_be_purchased = addon.can_be_purchased()
+        self.is_premium = addon.is_premium()
+        self.is_webapp = addon.is_webapp()
         self.accept_eula = addon.has_eula and not show_eula
         self._show_contrib = show_contrib
         self.show_contrib = (show_contrib and addon.takes_contributions
                              and addon.annoying == amo.CONTRIB_ROADBLOCK)
         self.show_eula = not self.show_contrib and show_eula and addon.has_eula
-        self.show_warning = show_warning and (self.unreviewed or
-                                              self.self_hosted)
+        self.show_warning = show_warning and self.unreviewed
 
     def prepare(self):
         """Called after the class is set to manage eulas, contributions."""
@@ -161,8 +160,13 @@ class InstallButton(object):
             self.install_class.append('accept')
         if self.size:
             self.button_class.append(self.size)
+        if self.can_be_purchased:
+            self.install_class.append('premium')
+            self.button_class.append('premium')
         if self.is_beta:
             self.install_class.append('beta')
+        if self.is_webapp:
+            self.install_class.append('webapp')
 
     def attrs(self):
         rv = {}
@@ -176,6 +180,8 @@ class InstallButton(object):
 
     def links(self):
         if not self.version:
+            return []
+        if self.is_premium and not self.can_be_purchased:
             return []
         rv = []
         files = [f for f in self.version.all_files
@@ -191,7 +197,7 @@ class InstallButton(object):
             self.addon.status == file.status == amo.STATUS_PUBLIC):
             url = file.latest_xpi_url()
         else:
-            url = file.get_url_path(self.app, self.src)
+            url = file.get_url_path(self.src, self.addon)
 
         if platform == amo.PLATFORM_ALL.id:
             text, os = _('Download Now'), None
@@ -201,6 +207,7 @@ class InstallButton(object):
         if self.show_eula:
             # L10n: please keep &nbsp; in the string so &rarr; does not wrap.
             text = jinja2.Markup(_('Continue to Download&nbsp;&rarr;'))
+            self.xpiurl = url
             url = file.eula_url()
         elif self.accept_eula:
             text = _('Accept and Download')
@@ -210,6 +217,9 @@ class InstallButton(object):
             text = jinja2.Markup(_('Continue to Download&nbsp;&rarr;'))
             roadblock = reverse('addons.roadblock', args=[self.addon.id])
             url = urlparams(roadblock, eula='', version=self.version.version)
+
+        if self.addon.is_webapp():
+            text = _(u'Install App')
 
         return text, url, os
 
@@ -230,17 +240,6 @@ class UnreviewedInstallButton(InstallButton):
     install_class = ['unreviewed']
     install_text = _lazy(u'Not Reviewed', 'install_button')
     button_class = 'download caution'.split()
-
-
-class SelfHostedInstallButton(InstallButton):
-    install_class = ['selfhosted']
-    install_text = _lazy(u'Self Hosted', 'install_button')
-    button_class = ['go']
-
-    def links(self):
-        # L10n: please keep &nbsp; in the string so the &rarr; does not wrap
-        return [Link(jinja2.Markup(_('Continue to Website&nbsp;&rarr;')),
-                     self.addon.homepage)]
 
 
 class LiteInstallButton(InstallButton):

@@ -34,7 +34,7 @@ time, mark, audio, video {
 }
 /* HTML5 display-role reset for older browsers */
 article, aside, details, figcaption, figure,
-footer, header, hgroup, menu, nav, section {
+footer, header, hgroup, masthead, menu, nav, section {
     display: block;
 }
 body {
@@ -56,6 +56,18 @@ table {
     border-spacing: 0;
 }
 /* end meyer reset */
+
+/* Bold/Strong should be bold and strong! */
+b,
+strong {
+    font-weight: bold;
+}
+
+/* Give abbr and acronym dotted underline. */
+abbr,
+acronym {
+    border-bottom: 1px dotted;
+}
 
 /* >> The Magnificent CLEARFIX <<
    Lifted from html5boilerplate.com

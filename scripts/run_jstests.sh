@@ -22,12 +22,12 @@ find . -name '*.pyc' | xargs rm
 
 if [ ! -d "$VENV/bin" ]; then
   echo "No virtualenv found.  Making one..."
-  virtualenv $VENV
+  virtualenv $VENV --system-site-packages
 fi
 
 source $VENV/bin/activate
 
-pip install -q -r requirements/compiled.txt
+pip install -U --exists-action=w --no-deps -q -r requirements/compiled.txt -r requirements/test.txt
 
 # Create paths we want for addons
 if [ ! -d "/tmp/warez" ]; then
@@ -41,18 +41,18 @@ fi
 
 if [ ! -d "$VENDOR" ]; then
     echo "No vendor lib?  Cloning..."
-    git clone --recursive git://github.com/jbalogh/zamboni-lib.git $VENDOR
+    git clone --recursive git://github.com/mozilla/zamboni-lib.git $VENDOR
 fi
 
 # Update the vendor lib.
 echo "Updating vendor..."
-pushd $VENDOR && git pull && git submodule --quiet sync && git submodule update --init;
-popd
+git submodule --quiet foreach 'git submodule --quiet sync'
+git submodule --quiet sync && git submodule update --init --recursive
 
 cp -f docs/settings/settings_local.dev.py settings_local.py
 cat >> settings_local.py <<SETTINGS
 
-ROOT_URLCONF = '%s.urls' % ROOT_PACKAGE
+ROOT_URLCONF = 'lib.urls_base'
 LOG_LEVEL = logging.ERROR
 
 DATABASES = {
@@ -68,14 +68,13 @@ DATABASES = {
     },
 }
 
-CACHE_BACKEND = 'caching.backends.locmem://'
+CACHES = {
+    'default': {
+        'BACKEND': 'caching.backends.locmem.LocMemCache',
+    }
+}
 CELERY_ALWAYS_EAGER = True
 ADDONS_PATH = '/tmp/warez'
-
-TEST_SPHINX_CATALOG_PATH = TMP_PATH + '/$1/data/sphinx'
-TEST_SPHINX_LOG_PATH = TMP_PATH + '/$1/log/serachd'
-TEST_SPHINXQL_PORT = 340${EXECUTOR_NUMBER}
-TEST_SPHINX_PORT = 341${EXECUTOR_NUMBER}
 
 # Activate Qunit:
 INSTALLED_APPS += (
@@ -92,7 +91,9 @@ echo "Starting JS tests..." `date`
 
 rm $LOG
 cd scripts
-# These env vars are set in the Jenkins build step.
-python run_jstests.py -v --with-xunit --with-django-serv --django-host "$DJANGO_HOST" --django-port "$DJANGO_PORT" --django-log $LOG --with-jstests --jstests-server http://jstestnet.farmdev.com/ --jstests-suite zamboni --jstests-token "$JSTESTS_TOKEN" --jstests-url http://$DJANGO_HOST:$DJANGO_PORT/en-US/qunit --jstests-browsers firefox --debug nose.plugins.jstests
+# Some of these env vars are set in the Jenkins build step.
+BROWSERS=firefox
+XARGS="-v --with-xunit --with-django-serv --django-host $DJANGO_HOST --django-port $DJANGO_PORT --django-log $LOG --django-startup-uri /robots.txt --django-root-dir $WORKSPACE --with-jstests --jstests-server http://jstestnet.farmdev.com/ --jstests-suite zamboni --jstests-token $JSTESTS_TOKEN --jstests-browsers $BROWSERS --debug nose.plugins.jstests"
+python run_jstests.py --jstests-url http://$DJANGO_HOST:$DJANGO_PORT/en-US/qunit/ --xunit-file=nosetests.xml $XARGS
 
 echo 'shazam!'

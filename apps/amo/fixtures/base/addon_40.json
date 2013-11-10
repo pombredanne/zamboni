@@ -6,7 +6,7 @@
             "localized_string": "MozEX",
             "created": "2007-03-05 13:10:18",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2007-03-05 13:10:18",
             "id": 1295,
             "localized_string_clean": null
         }
@@ -29,7 +29,6 @@
             "guid": "{7c07e56e-b2f0-4932-bbe2-857a91b69f45}",
             "trusted": false,
             "locale_disambiguation": null,
-            "binary": false,
             "the_future": null,
             "weekly_downloads": 12,
             "support_url": null,
@@ -39,7 +38,6 @@
             "average_daily_users": 68,
             "bayesian_rating": 4.0337899999999998,
             "share_count": 0,
-            "get_satisfaction_company": null,
             "support_email": null,
             "public_stats": false,
             "status": 1,
@@ -52,7 +50,6 @@
             "admin_review": false,
             "external_software": false,
             "highest_status": 1,
-            "get_satisfaction_product": null,
             "name": 1295,
             "description": 1295,
             "created": "2004-06-12 02:52:33",
@@ -91,7 +88,7 @@
             "filename": "mozex-1.0.7-fx.xpi",
             "platform": 1,
             "version": 42,
-            "size": 18,
+            "size": 18432,
             "datestatuschanged": "2007-03-05 13:11:03"
         }
     },
@@ -99,7 +96,6 @@
         "pk": 41,
         "model": "users.userprofile",
         "fields": {
-            "sandboxshown": false,
             "display_collections_fav": false,
             "display_collections": false,
             "averagerating": "4.00",
@@ -111,20 +107,17 @@
             "email": "dd+b565d0324@davedash.com",
             "location": "",
             "bio": null,
-            "firstname": "Tomas",
             "deleted": false,
-            "lastname": "Styblo",
             "emailhidden": true,
             "user": null,
             "password": "",
-            "nickname": "41",
             "username": "41",
             "display_name": "41 \u0627\u0644\u062a\u0637\u0628",
             "resetcode_expires": null,
             "resetcode": "",
             "created": "2007-03-05 13:09:33",
             "notes": null,
-            "modified": null,
+            "modified": "2007-03-05 13:09:33",
             "notifyevents": true
         }
     },
@@ -136,7 +129,7 @@
             "version": "0.9",
             "created": "2007-03-05 13:10:58",
             "version_int": 90000200100,
-            "modified": null
+            "modified": "2007-03-05 13:10:58"
         }
     },
     {
@@ -147,7 +140,7 @@
             "version": "0.7",
             "created": "2007-03-05 13:09:26",
             "version_int": 70000200100,
-            "modified": null
+            "modified": "2007-03-05 13:10:58"
         }
     },
     {

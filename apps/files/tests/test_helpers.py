@@ -2,24 +2,24 @@
 import os
 import mimetypes
 import shutil
-import tempfile
+import zipfile
 
 from django.conf import settings
 from django.core.cache import cache
+from django.core.files.storage import default_storage as storage
 from django import forms
 
 from mock import Mock, patch
 from nose.tools import eq_
-import test_utils
 
+import amo.tests
 from amo.urlresolvers import reverse
 from files.helpers import FileViewer, DiffHelper
 from files.models import File
+from files.utils import SafeUnzip
 
 root = os.path.join(settings.ROOT, 'apps/files/fixtures/files')
-dictionary = '%s/dictionary-test.xpi' % root
-recurse = '%s/recurse.xpi' % root
-search = '%s/search.xml' % root
+get_file = lambda x: '%s/%s' % (root, x)
 
 
 def make_file(pk, file_path, **kwargs):
@@ -34,17 +34,13 @@ def make_file(pk, file_path, **kwargs):
     return obj
 
 
-class TestFileHelper(test_utils.TestCase):
+class TestFileHelper(amo.tests.TestCase):
 
     def setUp(self):
-        self.old_tmp = settings.TMP_PATH
-        settings.TMP_PATH = tempfile.mkdtemp()
-
-        self.viewer = FileViewer(make_file(1, dictionary))
+        self.viewer = FileViewer(make_file(1, get_file('dictionary-test.xpi')))
 
     def tearDown(self):
         self.viewer.cleanup()
-        settings.TMP_PATH = self.old_tmp
 
     def test_files_not_extracted(self):
         eq_(self.viewer.is_extracted(), False)
@@ -54,12 +50,12 @@ class TestFileHelper(test_utils.TestCase):
         eq_(self.viewer.is_extracted(), True)
 
     def test_recurse_extract(self):
-        self.viewer.src = recurse
+        self.viewer.src = get_file('recurse.xpi')
         self.viewer.extract()
         eq_(self.viewer.is_extracted(), True)
 
     def test_recurse_contents(self):
-        self.viewer.src = recurse
+        self.viewer.src = get_file('recurse.xpi')
         self.viewer.extract()
         files = self.viewer.get_files()
         nm = ['recurse/recurse.xpi/chrome/test-root.txt',
@@ -85,7 +81,7 @@ class TestFileHelper(test_utils.TestCase):
             m, encoding = mimetypes.guess_type(f)
             assert binary(m, f), '%s should be binary' % f
 
-        filename = tempfile.mktemp()
+        filename = os.path.join(settings.TMP_PATH, 'test_isbinary')
         for txt in ['#!/usr/bin/python', '#python', u'\0x2']:
             open(filename, 'w').write(txt)
             m, encoding = mimetypes.guess_type(filename)
@@ -95,6 +91,7 @@ class TestFileHelper(test_utils.TestCase):
             open(filename, 'w').write(txt)
             m, encoding = mimetypes.guess_type(filename)
             assert binary(m, filename), '%s should be binary' % txt
+        os.remove(filename)
 
     def test_truncate(self):
         truncate = self.viewer.truncate
@@ -135,15 +132,18 @@ class TestFileHelper(test_utils.TestCase):
         eq_(files['dictionaries/license.txt']['depth'], 1)
 
     def test_bom(self):
-        dest = tempfile.mkstemp()[1]
+        dest = os.path.join(settings.TMP_PATH, 'test_bom')
         open(dest, 'w').write('foo'.encode('utf-16'))
         self.viewer.select('foo')
         self.viewer.selected = {'full': dest, 'size': 1}
         eq_(self.viewer.read_file(), u'foo')
+        os.remove(dest)
 
     def test_syntax(self):
         for filename, syntax in [('foo.rdf', 'xml'),
                                  ('foo.xul', 'xml'),
+                                 ('foo.json', 'js'),
+                                 ('foo.jsm', 'js'),
                                  ('foo.bar', 'plain')]:
             eq_(self.viewer.get_syntax(filename), syntax)
 
@@ -157,7 +157,7 @@ class TestFileHelper(test_utils.TestCase):
         cache.clear()
         files = self.viewer.get_files().keys()
         rt = files.index(u'chrome')
-        eq_(files[rt:rt + 3], [u'chrome', u'chrome/foo', u'chrome.manifest'])
+        eq_(files[rt:rt + 3], [u'chrome', u'chrome/foo', u'dictionaries'])
 
     @patch.object(settings, 'FILE_VIEWER_SIZE_LIMIT', 5)
     def test_file_size(self):
@@ -167,6 +167,16 @@ class TestFileHelper(test_utils.TestCase):
         res = self.viewer.read_file()
         eq_(res, '')
         assert self.viewer.selected['msg'].startswith('File size is')
+
+    @patch.object(settings, 'FILE_VIEWER_SIZE_LIMIT', 5)
+    def test_file_size_unicode(self):
+        with self.activate(locale='he'):
+            self.viewer.extract()
+            self.viewer.get_files()
+            self.viewer.select('install.js')
+            res = self.viewer.read_file()
+            eq_(res, '')
+            assert self.viewer.selected['msg'].startswith('File size is')
 
     @patch.object(settings, 'FILE_UNZIP_SIZE_LIMIT', 5)
     def test_contents_size(self):
@@ -190,8 +200,8 @@ class TestFileHelper(test_utils.TestCase):
         eq_({}, self.viewer.get_files())
 
 
-class TestSearchEngineHelper(test_utils.TestCase):
-    fixtures = ['base/addon_4594_a9']
+class TestSearchEngineHelper(amo.tests.TestCase):
+    fixtures = ['base/addon_4594_a9', 'base/apps']
 
     def setUp(self):
         self.left = File.objects.get(pk=25753)
@@ -199,7 +209,8 @@ class TestSearchEngineHelper(test_utils.TestCase):
 
         if not os.path.exists(os.path.dirname(self.viewer.src)):
             os.makedirs(os.path.dirname(self.viewer.src))
-            open(self.viewer.src, 'w')
+            with storage.open(self.viewer.src, 'w') as f:
+                f.write('some data\n')
 
     def tearDown(self):
         self.viewer.cleanup()
@@ -221,10 +232,13 @@ class TestSearchEngineHelper(test_utils.TestCase):
         eq_(self.viewer.get_default(None), None)
 
 
-class TestDiffSearchEngine(test_utils.TestCase):
+class TestDiffSearchEngine(amo.tests.TestCase):
 
     def setUp(self):
-        src = os.path.join(settings.ROOT, search)
+        src = os.path.join(settings.ROOT, get_file('search.xml'))
+        if not storage.exists(src):
+            with storage.open(src, 'w') as f:
+                f.write(open(src).read())
         self.helper = DiffHelper(make_file(1, src, filename='search.xml'),
                                  make_file(2, src, filename='search.xml'))
 
@@ -241,10 +255,10 @@ class TestDiffSearchEngine(test_utils.TestCase):
         eq_(len(self.helper.get_deleted_files()), 0)
 
 
-class TestDiffHelper(test_utils.TestCase):
+class TestDiffHelper(amo.tests.TestCase):
 
     def setUp(self):
-        src = os.path.join(settings.ROOT, dictionary)
+        src = os.path.join(settings.ROOT, get_file('dictionary-test.xpi'))
         self.helper = DiffHelper(make_file(1, src), make_file(2, src))
 
     def tearDown(self):
@@ -332,3 +346,42 @@ class TestDiffHelper(test_utils.TestCase):
         data = open(path, 'r').read()
         data += text
         open(path, 'w').write(data)
+
+
+class TestSafeUnzipFile(amo.tests.TestCase, amo.tests.AMOPaths):
+
+    #TODO(andym): get full coverage for existing SafeUnzip methods, most
+    # is covered in the file viewer tests.
+    @patch.object(settings, 'FILE_UNZIP_SIZE_LIMIT', 5)
+    def test_unzip_limit(self):
+        zip = SafeUnzip(self.xpi_path('langpack-localepicker'))
+        self.assertRaises(forms.ValidationError, zip.is_valid)
+
+    def test_unzip_fatal(self):
+        zip = SafeUnzip(self.xpi_path('search.xml'))
+        self.assertRaises(zipfile.BadZipfile, zip.is_valid)
+
+    def test_unzip_not_fatal(self):
+        zip = SafeUnzip(self.xpi_path('search.xml'))
+        assert not zip.is_valid(fatal=False)
+
+    def test_extract_path(self):
+        zip = SafeUnzip(self.xpi_path('langpack-localepicker'))
+        assert zip.is_valid()
+        assert'locale browser de' in zip.extract_path('chrome.manifest')
+
+    def test_not_secure(self):
+        zip = SafeUnzip(self.xpi_path('extension'))
+        zip.is_valid()
+        assert not zip.is_signed()
+
+    def test_is_secure(self):
+        zip = SafeUnzip(self.xpi_path('signed'))
+        zip.is_valid()
+        assert zip.is_signed()
+
+    def test_is_broken(self):
+        zip = SafeUnzip(self.xpi_path('signed'))
+        zip.is_valid()
+        zip.info[2].filename = 'META-INF/foo.sf'
+        assert not zip.is_signed()

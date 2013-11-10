@@ -6,7 +6,7 @@
 
 @font-face {
     font-family: 'MetaBlack';
-    src: url('https://www.mozilla.com/img/fonts/MetaWebPro-Black.woff') format('woff');
+    src: url(../../css/impala/fonts/MetaWebPro-Black.woff) format('woff');
     font-weight: bold;
     font-style: normal;
 }
@@ -18,11 +18,28 @@ body {
     font-size: 13px;
 }
 
+section + h1 {
+    margin: 15px 0;
+}
+
 h1 {
-    font-size: 40px;
-    font-family: MetaBlack;
-    letter-spacing: -1px;
-    text-transform: uppercase;
+    font: italic 24px @serif-stack;
+    color: @red;
+    margin-bottom: 16px;
+}
+
+h2 {
+    font: italic 18px @serif-stack;
+    color: @dark-gray;
+}
+
+hgroup {
+    h2 {
+        color: @medium-gray;
+    }
+    b {
+        font-weight: bold;
+    }
 }
 
 h4 {
@@ -36,6 +53,7 @@ blockquote {
 
 h5 {
     font-weight: bold;
+
     span {
         font-size: 0.857em;
         font-weight: normal;
@@ -47,29 +65,34 @@ pre, code, kbd, tt, samp, tt {
     font-family: @mono-stack;
 }
 
+pre {
+    line-height: 1.4;
+    white-space: pre-wrap;
+}
+
 .primary, .modal {
-    h2 {
-        color: #333;
-        font-family: @serif-stack;
-        font-style: italic;
-    }
-    p {
-        font-size: 14px;
-        margin-top: 1em;
-        color: #666;
+    p, ul, ol {
         line-height: 1.3em;
     }
-}
-.popup h3 {
-    color: #333;
-    font-family: @serif-stack;
-    font-style: italic;
+    p {
+        margin-top: 1em;
+    }
+    > p:first-child {
+        margin: 0;
+    }
+    ul {
+        &.indent {
+            list-style: disc inside;
+            margin-left: 1em;
+            margin-top: 1em;
+        }
+    }
+    em {
+        font-style: italic;
+    }
 }
 
 .gutter {
-    .primary, .secondary {
-        font-family: @serif-stack;
-    }
     .secondary h3 {
         font-style: italic;
     }
@@ -81,27 +104,79 @@ pre, code, kbd, tt, samp, tt {
     margin-left: .5em;
 }
 
+.addon-details {
+    .primary, .secondary {
+        font-family: @serif-stack;
+    }
+}
+
 .island, .modal, .popup {
     h2 {
-        font-size: 18px;
         margin-bottom: .5em;
+
         .seeall {
             .defaultlink
         }
     }
+    &.hero {
+        h1 {
+            margin-bottom: 5px;
+        }
+        hgroup {
+            h3 {
+                color: @medium-gray;
+                font-size: 14px;
+            }
+            b {
+                font-weight: bold;
+            }
+        }
+        header + .item {
+            border-top: 1px dotted @border-blue;
+            margin-top: 1em;
+        }
+    }
 }
 
-.secondary h2 {
-    font-family: @sans-stack;
-    font-style: normal;
-    font-weight: bold;
-    text-transform: uppercase;
-    color: #484848;
-    .seeall {
-        .defaultlink
+.primary {
+    > .seeall {
+        text-align: center;
+        clear: both;
+        font-size: 14px;
+        line-height: 22px;
+    }
+}
+
+.secondary {
+    h2 {
+        font-family: @sans-stack;
+        font-style: normal;
+        font-weight: bold;
+        text-transform: uppercase;
+        color: @dark-gray;
+
+        .seeall {
+            .defaultlink
+        }
+    }
+    h3 {
+        font-family: @sans-stack;
+        color: @dark-gray;
     }
 }
 
 .error {
     color: @red;
+}
+
+caption {
+    display: none;
+}
+
+th {
+    text-align: left;
+}
+
+.html-rtl th {
+    text-align: right;
 }

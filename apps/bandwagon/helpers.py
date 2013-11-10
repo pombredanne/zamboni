@@ -4,27 +4,33 @@ import jinja2
 from jingo import register, env
 from tower import ugettext as _
 
-from amo.helpers import login_link
-from amo.utils import chunked
 from addons.helpers import new_context
-from cake.urlresolvers import remora_url
-from amo.urlresolvers import reverse
+from amo.helpers import login_link
+from amo.urlresolvers import remora_url, reverse
+from amo.utils import chunked
 
 
 @register.inclusion_tag('bandwagon/collection_listing_items.html')
 @jinja2.contextfunction
-def collection_listing_items(context, collections, show_weekly=False,
-                            show_date=None):
+def collection_listing_items(context, collections, field=None):
     c = dict(context.items())
-    c.update(collections=collections, show_weekly=show_weekly,
-             show_date=show_date)
+    c.update(collections=collections, field=field)
+    return c
+
+
+@register.inclusion_tag('bandwagon/impala/collection_listing_items.html')
+@jinja2.contextfunction
+def impala_collection_listing_items(context, collections, field=None):
+    c = dict(context.items())
+    c.update(collections=collections, field=field)
     return c
 
 
 @register.function
-def user_collection_list(collections=[], heading='', link=None):
+def user_collection_list(collections=[], heading='', id='', link=None):
     """list of collections, as used on the user profile page"""
-    c = {'collections': collections, 'heading': heading, 'link': link}
+    c = {'collections': collections, 'heading': heading, 'link': link,
+         'id': id}
     t = env.get_template('bandwagon/users/collection_list.html').render(**c)
     return jinja2.Markup(t)
 
@@ -123,7 +129,7 @@ def collection_add_widget(context, addon, condensed=False):
 @register.inclusion_tag('bandwagon/collection_grid.html')
 def collection_grid(context, collections, src=None, pagesize=4, cols=2):
     pages = chunked(collections, pagesize)
-    columns = '' if cols != 3 else 'three-col'
+    columns = 'cols-%d' % cols
     return new_context(**locals())
 
 

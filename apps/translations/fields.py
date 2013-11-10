@@ -5,6 +5,7 @@ from django.db.models.fields import related
 from django.utils import translation as translation_utils
 from django.utils.translation.trans_real import to_language
 
+from .hold import add_translation, make_key, save_translations
 from .models import Translation, PurifiedTranslation, LinkifiedTranslation
 from .widgets import TransInput, TransTextarea
 
@@ -22,7 +23,8 @@ class TranslatedField(models.ForeignKey):
     def __init__(self, **kwargs):
         # to_field: The field on the related object that the relation is to.
         # Django wants to default to translations.autoid, but we need id.
-        options = dict(null=True, to_field='id', unique=True, blank=True)
+        options = dict(null=True, to_field='id', unique=True, blank=True,
+                       on_delete=models.SET_NULL)
         kwargs.update(options)
         self.short = kwargs.pop('short', True)
         self.require_locale = kwargs.pop('require_locale', True)
@@ -136,7 +138,6 @@ class TranslationDescriptor(related.ReverseSingleRelatedObjectDescriptor):
         elif getattr(instance, self.field.attname, None) is None:
             super(TranslationDescriptor, self).__set__(instance, None)
 
-
     def translation_from_string(self, instance, lang, string):
         """Create, save, and return a Translation from a string."""
         try:
@@ -156,7 +157,11 @@ class TranslationDescriptor(related.ReverseSingleRelatedObjectDescriptor):
         except AttributeError:
             # Create a brand new translation.
             translation = self.model.new(string, lang)
-        save_on_signal(instance, translation)
+
+        # A new translation has been created and it might need to be saved.
+        # This adds the translation to the queue of translation that need
+        # to be saved for this instance.
+        add_translation(make_key(instance), translation)
         return translation
 
     def translation_from_dict(self, instance, lang, dict_):
@@ -165,9 +170,12 @@ class TranslationDescriptor(related.ReverseSingleRelatedObjectDescriptor):
 
         If one of the locales matches lang, that Translation will be returned.
         """
+        from amo.utils import to_language as amo_to_language
+
         rv = None
         for locale, string in dict_.items():
-            if locale.lower() not in settings.LANGUAGES:
+            loc = amo_to_language(locale)
+            if loc not in settings.AMO_LANGUAGES + settings.HIDDEN_LANGUAGES:
                 continue
             # The Translation is created and saved in here.
             trans = self.translation_from_string(instance, locale, string)
@@ -274,3 +282,13 @@ class LocaleList(dict):
 
     def zip(self):
         return zip(self.locales, self.seq)
+
+
+def save_signal(sender, instance, **kw):
+    """
+    Use this signal on a model to iterate through all the translations added
+    to the hold queue and save them all. Hook this up to the pre_save signal
+    on the model.
+    """
+    if not kw.get('raw'):
+        save_translations(make_key(instance))

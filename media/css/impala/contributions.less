@@ -10,9 +10,7 @@
     -moz-box-shadow: 0 0 15px rgba(0,0,0,.5);
     -webkit-box-shadow: 0 0 15px rgba(0,0,0,.5);
     box-shadow: 0 0 15px rgba(0,0,0,.5);
-    -moz-border-radius: 10px;
-    -webkit-border-radius: 10px;
-    border-radius: 10px;
+    .border-radius(10px);
     h2 {
         margin-top: 0;
     }
@@ -52,6 +50,12 @@
         margin: 0;
         float: right;
     }
+    .ajax-loading {
+        background-image: url(../../img/zamboni/loading-white.gif);
+        background-repeat: no-repeat;
+        background-position: left bottom;
+        padding-left: 32px;
+    }
 }
 
 .contrib-overlay {
@@ -73,4 +77,9 @@
 }
 .jqmOverlay {
     background-color: #000;
+}
+
+/** l10n: fix the overlapping "255" counter */
+.html-rtl #contribute-box .commentlen {
+    float: left;
 }

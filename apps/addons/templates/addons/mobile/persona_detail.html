@@ -10,24 +10,31 @@
 {% block page %}
 {% set author = users_list(addon.listed_authors) or persona.display_username %}
 
-<div id="persona" class="persona-previewer infobox item">
-  {{ mobile_persona_preview(persona) }}
-  <h3>{{ addon.name }}</h3>
-  <h4 class="author">{{ _('by') }} {{ author }}</h4>
-  <p id="summary"{{ addon.summary|locale_html }}>{{ addon.summary|nl2br }}</p>
-  {{ mobile_persona_confirm(persona) }}
-</div>
+{% include "addons/includes/persona_pending_notice.html" %}
 
-{{ mobile_reviews_link(addon) }}
+{% if not persona.addon.is_pending() or waffle.flag('submit-personas') and request.check_ownership(addon, require_owner=False) %}
+  {# If theme is pending, only artist should see theme listing. #}
 
-<details>
-  <table>
-    {% include "addons/mobile/persona_detail_table.html" %}
-  </table>
-</details>
+  <div id="persona" class="persona-previewer infobox item">
+    {{ mobile_persona_preview(persona) }}
+    <h3>{{ addon.name }}</h3>
+    <h4 class="author">{{ _('by') }} {{ author }}</h4>
+    <p id="summary"{{ addon.summary|locale_html }}>{{ addon.summary|nl2br }}</p>
+    {{ mobile_persona_confirm(persona) }}
+  </div>
+
+  {{ mobile_reviews_link(addon) }}
+
+  <details>
+    <table>
+      {% with author=author %}
+        {% include "addons/mobile/persona_detail_table.html" %}
+      {% endwith %}
+    </table>
+  </details>
+{% endif %}
 
 <div id="more-personas">
-  {% cache author_personas %}
     {% if author_personas %}
     <div id="more-artist" class="listview">
       <ul>
@@ -37,14 +44,14 @@
             {{ mobile_persona_confirm(other.persona, size='small') }}
           </li>
         {% endfor %}
-        <li><a href="{{ author_gallery }}">
-          {{ _('See all Personas by this Artist') }}</a></li>
+        {% if author_gallery %}
+          <li><a href="{{ author_gallery }}" class="more-link">
+            {{ _('See all Themes by this Artist') }}</a></li>
+        {% endif %}
       </ul>
     </div>
     {% endif %}
-  {% endcache %}
 
-  {% cache category_personas %}
     {% if category_personas %}
     <div id="more-category" class="listview item">
       <ul>
@@ -56,11 +63,10 @@
         {% endfor %}
         {# L10n: {0} is a category name, such as Nature #}
         <li><a href="{{ categories[0].get_url_path() }}">
-          {{ _('See all {0} Personas')|f(categories[0].name) }}</a></li>
+          {{ _('See all {0} Themes')|f(categories[0].name) }}</a></li>
       </ul>
     </div>
     {% endif %}
-  {% endcache %}
 </div>
 
 {% endblock %}

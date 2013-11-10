@@ -1,64 +1,79 @@
 import csv
 import json
-from datetime import datetime
 from decimal import Decimal
 from urlparse import urlparse
 
 from django import http
-# I'm so glad we named a function in here settings...
-from django.conf import settings as site_settings
+from django.conf import settings
 from django.contrib import admin
-from django.shortcuts import redirect, get_object_or_404
+from django.core.cache import cache
+from django.core.exceptions import PermissionDenied
+from django.core.files.storage import default_storage as storage
+from django.db.models.loading import cache as app_cache
+from django.shortcuts import get_object_or_404, redirect
 from django.utils.encoding import smart_str
 from django.views import debug
+from django.views.decorators.cache import never_cache
 
 import commonware.log
-import elasticutils
 import jinja2
 import jingo
 from hera.contrib.django_forms import FlushForm
 from hera.contrib.django_utils import get_hera, flush_urls
 from tower import ugettext as _
 
-import amo.mail
-import amo.models
-import amo.tasks
-import addons.search
-import addons.cron
-import bandwagon.cron
-import files.tasks
-import files.utils
+import amo
+import amo.search
+from addons.decorators import addon_view
+from addons.models import Addon, AddonUser, CompatOverride
 from amo import messages, get_user
-from amo.decorators import login_required, json_view, post_required
+from amo.decorators import (any_permission_required, json_view, login_required,
+                            post_required)
+from amo.mail import FakeEmailBackend
 from amo.urlresolvers import reverse
 from amo.utils import chunked, sorted_groupby
-from addons.models import Addon
-from addons.utils import ReverseNameLookup
 from bandwagon.models import Collection
-from cake.helpers import remora_url
+from compat.models import AppCompat, CompatTotals
+from devhub.models import ActivityLog
 from files.models import Approval, File
+from files.tasks import start_upgrade as start_upgrade_task
+from files.utils import find_jetpacks, JetpackUpgrader
+from market.utils import update_from_csv
+from users.models import UserProfile
+from versions.compare import version_int as vint
 from versions.models import Version
+from zadmin.forms import GenerateErrorForm, PriceTiersForm, SiteEventForm
+from zadmin.models import SiteEvent
 
 from . import tasks
-from .forms import (BulkValidationForm, FeaturedCollectionFormSet, NotifyForm,
-                    OAuthConsumerForm)
-from .models import ValidationJob, EmailPreviewTopic, ValidationJobTally
+from .decorators import admin_required
+from .forms import (AddonStatusForm, BulkValidationForm, CompatForm,
+                    DevMailerForm, FeaturedCollectionFormSet, FileFormSet,
+                    JetpackUpgradeForm, MonthlyPickFormSet, NotifyForm,
+                    OAuthConsumerForm, YesImSure)
+from .models import EmailPreviewTopic, ValidationJob, ValidationJobTally
 
 log = commonware.log.getLogger('z.zadmin')
 
 
-@admin.site.admin_view
+@admin_required(reviewers=True)
 def flagged(request):
-    addons = Addon.objects.filter(admin_review=True).order_by('-created')
+    types = (amo.MARKETPLACE_TYPES if settings.MARKETPLACE
+             else list(set(amo.ADDON_TYPES.keys()) -
+                       set(amo.MARKETPLACE_TYPES)))
+    addons = (Addon.objects.no_cache()
+                           .filter(admin_review=True, type__in=types)
+                           .no_transforms().order_by('-created'))
 
     if request.method == 'POST':
         ids = map(int, request.POST.getlist('addon_id'))
-        addons = list(addons)
-        Addon.objects.filter(id__in=ids).update(admin_review=False)
-        # The sql update doesn't invalidate anything, do it manually.
-        invalid = [addon for addon in addons if addon.pk in ids]
-        Addon.objects.invalidate(*invalid)
+        for addon in addons.filter(id__in=ids):
+            addon.update(admin_review=False)
         return redirect('zadmin.flagged')
+
+    if not addons:
+        return jingo.render(request, 'zadmin/flagged_addon_list.html',
+                            {'addons': addons, 'reverse': reverse})
 
     sql = """SELECT {t}.* FROM {t} JOIN (
                 SELECT addon_id, MAX(created) AS created
@@ -89,13 +104,35 @@ def flagged(request):
                         {'addons': addons})
 
 
+@admin_required(reviewers=True)
+def langpacks(request):
+    if request.method == 'POST':
+        try:
+            tasks.fetch_langpacks.delay(request.POST['path'])
+        except ValueError:
+            messages.error(request, 'Invalid language pack sub-path provided.')
+
+        return redirect('zadmin.langpacks')
+
+    addons = (Addon.objects.no_cache()
+              .filter(addonuser__user__email=settings.LANGPACK_OWNER_EMAIL,
+                      type=amo.ADDON_LPAPP)
+              .order_by('name'))
+
+    data = {'addons': addons, 'base_url': settings.LANGPACK_DOWNLOAD_BASE,
+            'default_path': settings.LANGPACK_PATH_DEFAULT % (
+                'firefox', amo.FIREFOX.latest_version)}
+
+    return jingo.render(request, 'zadmin/langpack_update.html', data)
+
+
 @admin.site.admin_view
 def hera(request):
-    form = FlushForm(initial={'flushprefix': site_settings.SITE_URL})
+    form = FlushForm(initial={'flushprefix': settings.SITE_URL})
 
     boxes = []
     configured = False  # Default to not showing the form.
-    for i in site_settings.HERA:
+    for i in settings.HERA:
         hera = get_hera(i)
         r = {'location': urlparse(i['LOCATION'])[1], 'stats': False}
         if hera:
@@ -123,23 +160,29 @@ def hera(request):
                         {'form': form, 'boxes': boxes})
 
 
-@admin.site.admin_view
-def settings(request):
+@admin_required
+def show_settings(request):
     settings_dict = debug.get_safe_settings()
 
     # sigh
     settings_dict['HERA'] = []
-    for i in site_settings.HERA:
+    for i in settings.HERA:
         settings_dict['HERA'].append(debug.cleanse_setting('HERA', i))
 
-    for i in ['PAYPAL_EMBEDDED_AUTH', 'PAYPAL_CGI_AUTH']:
-        settings_dict[i] = debug.cleanse_setting(i, getattr(site_settings, i))
+    # Retain this so that legacy PAYPAL_CGI_AUTH variables in settings_local
+    # are not exposed.
+    for i in ['PAYPAL_EMBEDDED_AUTH', 'PAYPAL_CGI_AUTH',
+              'GOOGLE_ANALYTICS_CREDENTIALS']:
+        settings_dict[i] = debug.cleanse_setting(i,
+                                                 getattr(settings, i, {}))
+
+    settings_dict['WEBAPPS_RECEIPT_KEY'] = '********************'
 
     return jingo.render(request, 'zadmin/settings.html',
                         {'settings_dict': settings_dict})
 
 
-@admin.site.admin_view
+@admin_required
 def env(request):
     return http.HttpResponse(u'<pre>%s</pre>' % (jinja2.escape(request)))
 
@@ -167,7 +210,10 @@ def application_versions_json(request):
     return {'choices': f.version_choices_for_app_id(app_id)}
 
 
-@admin.site.admin_view
+@any_permission_required([('Admin', '%'),
+                          ('AdminTools', 'View'),
+                          ('ReviewerAdminTools', 'View'),
+                          ('BulkValidationAdminTools', 'View')])
 def validation(request, form=None):
     if not form:
         form = BulkValidationForm()
@@ -190,13 +236,19 @@ def find_files(job):
                         versions__apps__application=job.application.id,
                         versions__apps__max__version_int__gte=current,
                         versions__apps__max__version_int__lt=target)
+                           # Exclude lang packs and themes.
+                           .exclude(type__in=[amo.ADDON_LPAPP,
+                                              amo.ADDON_THEME])
                            .no_transforms().values_list("pk", flat=True)
                            .distinct())
     for pks in chunked(addons, 100):
         tasks.add_validation_jobs.delay(pks, job.pk)
 
 
-@admin.site.admin_view
+@any_permission_required([('Admin', '%'),
+                          ('AdminTools', 'View'),
+                          ('ReviewerAdminTools', 'View'),
+                          ('BulkValidationAdminTools', 'View')])
 def start_validation(request):
     form = BulkValidationForm(request.POST)
     if form.is_valid():
@@ -209,7 +261,10 @@ def start_validation(request):
         return validation(request, form=form)
 
 
-@login_required
+@any_permission_required([('Admin', '%'),
+                          ('AdminTools', 'View'),
+                          ('ReviewerAdminTools', 'View'),
+                          ('BulkValidationAdminTools', 'View')])
 @post_required
 @json_view
 def job_status(request):
@@ -234,8 +289,11 @@ def completed_versions_dirty(job):
                    .values_list('pk', flat=True).distinct())
 
 
+@any_permission_required([('Admin', '%'),
+                          ('AdminTools', 'View'),
+                          ('ReviewerAdminTools', 'View'),
+                          ('BulkValidationAdminTools', 'View')])
 @post_required
-@admin.site.admin_view
 @json_view
 def notify_syntax(request):
     notify_form = NotifyForm(request.POST)
@@ -245,8 +303,11 @@ def notify_syntax(request):
         return {'valid': True, 'error': None}
 
 
+@any_permission_required([('Admin', '%'),
+                          ('AdminTools', 'View'),
+                          ('ReviewerAdminTools', 'View'),
+                          ('BulkValidationAdminTools', 'View')])
 @post_required
-@admin.site.admin_view
 def notify_failure(request, job):
     job = get_object_or_404(ValidationJob, pk=job)
     notify_form = NotifyForm(request.POST, text='failure')
@@ -263,8 +324,11 @@ def notify_failure(request, job):
     return redirect(reverse('zadmin.validation'))
 
 
+@any_permission_required([('Admin', '%'),
+                          ('AdminTools', 'View'),
+                          ('ReviewerAdminTools', 'View'),
+                          ('BulkValidationAdminTools', 'View')])
 @post_required
-@admin.site.admin_view
 def notify_success(request, job):
     job = get_object_or_404(ValidationJob, pk=job)
     notify_form = NotifyForm(request.POST, text='success')
@@ -282,7 +346,8 @@ def notify_success(request, job):
     return redirect(reverse('zadmin.validation'))
 
 
-@admin.site.admin_view
+@any_permission_required([('Admin', '%'),
+                          ('BulkValidationAdminTools', 'View')])
 def email_preview_csv(request, topic):
     resp = http.HttpResponse()
     resp['Content-Type'] = 'text/csv; charset=utf-8'
@@ -296,7 +361,10 @@ def email_preview_csv(request, topic):
     return resp
 
 
-@admin.site.admin_view
+@any_permission_required([('Admin', '%'),
+                          ('AdminTools', 'View'),
+                          ('ReviewerAdminTools', 'View'),
+                          ('BulkValidationAdminTools', 'View')])
 def validation_tally_csv(request, job_id):
     resp = http.HttpResponse()
     resp['Content-Type'] = 'text/csv; charset=utf-8'
@@ -308,43 +376,144 @@ def validation_tally_csv(request, job_id):
               'type', 'addons_affected']
     writer.writerow(fields)
     job = ValidationJobTally(job_id)
+    keys = ['key', 'message', 'long_message', 'type', 'addons_affected']
     for msg in job.get_messages():
-        row = [msg.key, msg.message, msg.long_message, msg.type,
-               msg.addons_affected]
-        writer.writerow([smart_str(r, encoding='utf8', strings_only=True)
-                         for r in row])
+        writer.writerow([smart_str(msg[k], encoding='utf8', strings_only=True)
+                         for k in keys])
     return resp
 
 
 @admin.site.admin_view
 def jetpack(request):
-    upgrader = files.utils.JetpackUpgrader()
+    upgrader = JetpackUpgrader()
     minver, maxver = upgrader.jetpack_versions()
+    form = JetpackUpgradeForm(request.POST)
     if request.method == 'POST':
-        if 'minver' in request.POST:
-            upgrader.jetpack_versions(request.POST['minver'],
-                                      request.POST['maxver'])
-        elif 'upgrade' in request.POST:
-            if upgrader.version(maxver):
-                start_upgrade(minver, maxver)
-        elif 'cancel' in request.POST:
-            upgrader.cancel()
-        return redirect('zadmin.jetpack')
+        if form.is_valid():
+            if 'minver' in request.POST:
+                data = form.cleaned_data
+                upgrader.jetpack_versions(data['minver'], data['maxver'])
+            elif 'upgrade' in request.POST:
+                if upgrader.version(maxver):
+                    start_upgrade(minver, maxver)
+            elif 'cancel' in request.POST:
+                upgrader.cancel()
+            return redirect('zadmin.jetpack')
+        else:
+            messages.error(request, form.errors.as_text())
 
-    jetpacks = files.utils.find_jetpacks(minver, maxver)
+    jetpacks = find_jetpacks(minver, maxver, from_builder_only=True)
+
+    upgrading = upgrader.version()    # Current Jetpack version upgrading to.
+    repack_status = upgrader.files()  # The files being repacked.
+
+    show = request.GET.get('show', upgrading or minver)
+    subset = filter(lambda f: not f.needs_upgrade and
+                              f.jetpack_version == show, jetpacks)
+    need_upgrade = filter(lambda f: f.needs_upgrade, jetpacks)
+    repacked = []
+
+    if upgrading:
+        # Group the repacked files by status for this Jetpack upgrade.
+        grouped_files = sorted_groupby(repack_status.values(),
+                                       key=lambda f: f['status'])
+        for group, rows in grouped_files:
+            rows = sorted(list(rows), key=lambda f: f['file'])
+            for idx, row in enumerate(rows):
+                rows[idx]['file'] = File.objects.get(id=row['file'])
+            repacked.append((group, rows))
+
     groups = sorted_groupby(jetpacks, 'jetpack_version')
     by_version = dict((version, len(list(files))) for version, files in groups)
     return jingo.render(request, 'zadmin/jetpack.html',
-                        dict(jetpacks=jetpacks, upgrader=upgrader,
-                             by_version=by_version))
+                        dict(form=form, upgrader=upgrader,
+                             by_version=by_version, upgrading=upgrading,
+                             need_upgrade=need_upgrade, subset=subset,
+                             show=show, repacked=repacked,
+                             repack_status=repack_status))
 
 
 def start_upgrade(minver, maxver):
-    jetpacks = files.utils.find_jetpacks(minver, maxver)
+    jetpacks = find_jetpacks(minver, maxver, from_builder_only=True)
     ids = [f.id for f in jetpacks if f.needs_upgrade]
     log.info('Starting a jetpack upgrade to %s [%s files].'
              % (maxver, len(ids)))
-    files.tasks.start_upgrade.delay(ids)
+    start_upgrade_task.delay(ids, sdk_version=maxver)
+
+
+def jetpack_resend(request, file_id):
+    maxver = JetpackUpgrader().version()
+    log.info('Starting a jetpack upgrade to %s [1 file].' % maxver)
+    start_upgrade_task.delay([file_id], sdk_version=maxver)
+    return redirect('zadmin.jetpack')
+
+
+@admin_required
+def compat(request):
+    APP = amo.FIREFOX
+    VER = amo.COMPAT[0]['main']  # Default: latest Firefox version.
+    minimum = 10
+    ratio = .8
+    binary = None
+
+    # Expected usage:
+    #     For Firefox 8.0 reports:      ?appver=1-8.0
+    #     For over 70% incompatibility: ?appver=1-8.0&ratio=0.7
+    #     For binary-only add-ons:      ?appver=1-8.0&type=binary
+    initial = {'appver': '%s-%s' % (APP.id, VER), 'minimum': minimum,
+               'ratio': ratio, 'type': 'all'}
+    initial.update(request.GET.items())
+
+    form = CompatForm(initial)
+    if request.GET and form.is_valid():
+        APP, VER = form.cleaned_data['appver'].split('-')
+        APP = amo.APP_IDS[int(APP)]
+        if form.cleaned_data['ratio'] is not None:
+            ratio = float(form.cleaned_data['ratio'])
+        if form.cleaned_data['minimum'] is not None:
+            minimum = int(form.cleaned_data['minimum'])
+        if form.cleaned_data['type'] == 'binary':
+            binary = True
+
+    app, ver = str(APP.id), VER
+    usage_addons, usage_total = compat_stats(request, app, ver, minimum, ratio,
+                                             binary)
+
+    return jingo.render(request, 'zadmin/compat.html', {
+        'app': APP,
+        'version': VER,
+        'form': form,
+        'usage_addons': usage_addons,
+        'usage_total': usage_total,
+    })
+
+
+def compat_stats(request, app, ver, minimum, ratio, binary):
+    # Get the list of add-ons for usage stats.
+    # Show add-ons marked as incompatible with this current version having
+    # greater than 10 incompatible reports and whose average exceeds 80%.
+    ver_int = str(vint(ver))
+    prefix = 'works.%s.%s' % (app, ver_int)
+    qs = (AppCompat.search()
+          .filter(**{'%s.failure__gt' % prefix: minimum,
+                     '%s.failure_ratio__gt' % prefix: ratio,
+                     'support.%s.max__gte' % app: 0})
+          .order_by('-%s.failure_ratio' % prefix,
+                    '-%s.total' % prefix)
+          .values_dict())
+    if binary is not None:
+        qs = qs.filter(binary=binary)
+    addons = amo.utils.paginate(request, qs)
+    for obj in addons.object_list:
+        obj['usage'] = obj['usage'][app]
+        obj['max_version'] = obj['max_version'][app]
+        obj['works'] = obj['works'][app].get(ver_int, {})
+        # Get all overrides for this add-on.
+        obj['overrides'] = CompatOverride.objects.filter(addon__id=obj['id'])
+        # Determine if there is an override for this current app version.
+        obj['has_override'] = obj['overrides'].filter(
+            _compat_ranges__min_app_version=ver + 'a1').exists()
+    return addons, CompatTotals.objects.get(app=app).total
 
 
 @login_required
@@ -356,7 +525,7 @@ def es_collections_json(request):
     try:
         qs = qs.query(id__startswith=int(q))
     except ValueError:
-        qs = qs.query(name__startswith=q)
+        qs = qs.query(name__text=q)
     try:
         qs = qs.filter(app=int(app))
     except ValueError:
@@ -370,8 +539,8 @@ def es_collections_json(request):
     return data
 
 
+@admin_required
 @post_required
-@admin.site.admin_view
 def featured_collection(request):
     try:
         pk = int(request.POST.get('collection', 0))
@@ -382,7 +551,7 @@ def featured_collection(request):
                         dict(collection=c))
 
 
-@admin.site.admin_view
+@admin_required
 def features(request):
     form = FeaturedCollectionFormSet(request.POST or None)
     if request.method == 'POST' and form.is_valid():
@@ -392,41 +561,36 @@ def features(request):
     return jingo.render(request, 'zadmin/features.html', dict(form=form))
 
 
+@admin_required
+def monthly_pick(request):
+    form = MonthlyPickFormSet(request.POST or None)
+    if request.method == 'POST' and form.is_valid():
+        form.save()
+        messages.success(request, 'Changes successfully saved.')
+        return redirect('zadmin.monthly_pick')
+    return jingo.render(request, 'zadmin/monthly_pick.html', dict(form=form))
+
+
 @admin.site.admin_view
 def elastic(request):
-    INDEX = site_settings.ES_INDEX
-    es = elasticutils.get_es()
-    mappings = {'addons': (addons.search.setup_mapping,
-                           addons.cron.reindex_addons),
-                'collections': (addons.search.setup_mapping,
-                                bandwagon.cron.reindex_collections),
-                'compat': (addons.search.setup_mapping, None),
-               }
-    if request.method == 'POST':
-        if request.POST.get('reset') in mappings:
-            name = request.POST['reset']
-            es.delete_mapping(INDEX, name)
-            if mappings[name][0]:
-                mappings[name][0]()
-            messages.info(request, 'Resetting %s.' % name)
-        if request.POST.get('reindex') in mappings:
-            name = request.POST['reindex']
-            mappings[name][1]()
-            messages.info(request, 'Reindexing %s.' % name)
-        return redirect('zadmin.elastic')
+    INDEX = settings.ES_INDEXES['default']
+    es = amo.search.get_es()
 
+    indexes = set(settings.ES_INDEXES.values())
+    es_mappings = es.get_mapping(None, indexes)
     ctx = {
+        'index': INDEX,
         'nodes': es.cluster_nodes(),
         'health': es.cluster_health(),
         'state': es.cluster_state(),
-        'mapping': es.get_mapping(None, INDEX)[INDEX],
+        'mappings': [(index, es_mappings.get(index, {})) for index in indexes],
     }
     return jingo.render(request, 'zadmin/elastic.html', ctx)
 
 
 @admin.site.admin_view
 def mail(request):
-    backend = amo.mail.FakeEmailBackend()
+    backend = FakeEmailBackend()
     if request.method == 'POST':
         backend.clear()
         return redirect('zadmin.mail')
@@ -435,38 +599,83 @@ def mail(request):
 
 
 @admin.site.admin_view
-def celery(request):
-    if request.method == 'POST' and 'reset' in request.POST:
-        amo.tasks.task_stats.clear()
-        return redirect('zadmin.celery')
+def email_devs(request):
+    form = DevMailerForm(request.POST or None)
+    preview = EmailPreviewTopic(topic='email-devs')
+    if preview.filter().count():
+        preview_csv = reverse('zadmin.email_preview_csv',
+                              args=[preview.topic])
+    else:
+        preview_csv = None
+    if request.method == 'POST' and form.is_valid():
+        data = form.cleaned_data
+        qs = (AddonUser.objects.filter(role__in=(amo.AUTHOR_ROLE_DEV,
+                                                 amo.AUTHOR_ROLE_OWNER))
+                               .exclude(user__email=None))
 
-    pending, failures, totals = amo.tasks.task_stats.stats()
-    ctx = dict(pending=pending, failures=failures, totals=totals,
-               now=datetime.now())
-    return jingo.render(request, 'zadmin/celery.html', ctx)
+        if data['recipients'] in ('payments', 'desktop_apps'):
+            qs = qs.exclude(addon__status=amo.STATUS_DELETED)
+        else:
+            qs = qs.filter(addon__status__in=amo.LISTED_STATUSES)
+
+        if data['recipients'] == 'eula':
+            qs = qs.exclude(addon__eula=None)
+        elif data['recipients'] in ('payments',
+                                    'payments_region_enabled',
+                                    'payments_region_disabled'):
+            qs = qs.filter(addon__type=amo.ADDON_WEBAPP)
+            qs = qs.exclude(addon__premium_type__in=(amo.ADDON_FREE,
+                                                     amo.ADDON_OTHER_INAPP))
+            if data['recipients'] == 'payments_region_enabled':
+                qs = qs.filter(addon__enable_new_regions=True)
+            elif data['recipients'] == 'payments_region_disabled':
+                qs = qs.filter(addon__enable_new_regions=False)
+        elif data['recipients'] in ('apps', 'free_apps_region_enabled',
+                                    'free_apps_region_disabled'):
+            qs = qs.filter(addon__type=amo.ADDON_WEBAPP)
+            if data['recipients'] == 'free_apps_region_enabled':
+                qs = qs.filter(addon__enable_new_regions=True)
+            elif data['recipients'] == 'free_apps_region_disabled':
+                qs = qs.filter(addon__enable_new_regions=False)
+        elif data['recipients'] == 'desktop_apps':
+            qs = (qs.filter(addon__type=amo.ADDON_WEBAPP,
+                addon__addondevicetype__device_type=amo.DEVICE_DESKTOP.id))
+        elif data['recipients'] == 'sdk':
+            qs = qs.exclude(addon__versions__files__jetpack_version=None)
+        elif data['recipients'] == 'all_extensions':
+            qs = qs.filter(addon__type=amo.ADDON_EXTENSION)
+        else:
+            raise NotImplementedError('If you want to support emailing other '
+                                      'types of developers, do it here!')
+        if data['preview_only']:
+            # Clear out the last batch of previewed emails.
+            preview.filter().delete()
+        total = 0
+        for emails in chunked(set(qs.values_list('user__email', flat=True)),
+                              100):
+            total += len(emails)
+            tasks.admin_email.delay(emails, data['subject'], data['message'],
+                                    preview_only=data['preview_only'],
+                                    preview_topic=preview.topic)
+        msg = 'Emails queued for delivery: %s' % total
+        if data['preview_only']:
+            msg = '%s (for preview only, emails not sent!)' % msg
+        messages.success(request, msg)
+        return redirect('zadmin.email_devs')
+    return jingo.render(request, 'zadmin/email-devs.html',
+                        dict(form=form, preview_csv=preview_csv))
 
 
-@admin.site.admin_view
-def addon_name_blocklist(request):
-    rn = ReverseNameLookup()
-    addon = None
-    if request.method == 'POST':
-        rn.delete(rn.get(request.GET['addon']))
-    if request.GET.get('addon'):
-        id = rn.get(request.GET.get('addon'))
-        if id:
-            qs = Addon.objects.filter(id=id)
-            addon = qs[0] if qs else None
-    return jingo.render(request, 'zadmin/addon-name-blocklist.html',
-                        dict(rn=rn, addon=addon))
-
-
-@admin.site.admin_view
+@any_permission_required([('Admin', '%'),
+                          ('AdminTools', 'View'),
+                          ('ReviewerAdminTools', 'View'),
+                          ('BulkValidationAdminTools', 'View')])
 def index(request):
-    return jingo.render(request, 'zadmin/index.html')
+    log = ActivityLog.objects.admin_events()[:5]
+    return jingo.render(request, 'zadmin/index.html', {'log': log})
 
 
-@admin.site.admin_view
+@admin_required(reviewers=True)
 def addon_search(request):
     ctx = {}
     if 'q' in request.GET:
@@ -474,10 +683,13 @@ def addon_search(request):
         if q.isdigit():
             qs = Addon.objects.filter(id=int(q))
         else:
-            qs = (Addon.search().query(name=q.lower())
-                  .order_by('name_sort')[:100])
+            qs = (Addon.search()
+                       .query(name__text=q.lower())
+                       .filter(type__in=amo.MARKETPLACE_TYPES if
+                                        settings.MARKETPLACE else
+                                        amo.ADDON_ADMIN_SEARCH_TYPES)[:100])
         if len(qs) == 1:
-            return redirect('/admin/addons?q=[%s]' % qs[0].id)
+            return redirect('zadmin.addon_manage', qs[0].id)
         ctx['addons'] = qs
     return jingo.render(request, 'zadmin/addon-search.html', ctx)
 
@@ -492,4 +704,183 @@ def oauth_consumer_create(request):
         return redirect('admin:piston_consumer_changelist')
 
     return jingo.render(request, 'zadmin/oauth-consumer-create.html',
-                        {'form':form})
+                        {'form': form})
+
+
+@never_cache
+@json_view
+def general_search(request, app_id, model_id):
+    if not admin.site.has_permission(request):
+        raise PermissionDenied
+
+    model = app_cache.get_model(app_id, model_id)
+    if not model:
+        return http.Http404()
+
+    limit = 10
+    obj = admin.site._registry[model]
+    ChangeList = obj.get_changelist(request)
+    # This is a hideous api, but uses the builtin admin search_fields API.
+    # Expecting this to get replaced by ES so soon, that I'm not going to lose
+    # too much sleep about it.
+    cl = ChangeList(request, obj.model, [], [], [], [], obj.search_fields, [],
+                    obj.list_max_show_all, limit, [], obj)
+    qs = cl.get_query_set(request)
+    # Override search_fields_response on the ModelAdmin object
+    # if you'd like to pass something else back to the front end.
+    lookup = getattr(obj, 'search_fields_response', None)
+    return [{'value': o.pk, 'label': getattr(o, lookup) if lookup else str(o)}
+            for o in qs[:limit]]
+
+
+@admin_required(reviewers=True)
+@addon_view
+def addon_manage(request, addon):
+
+    form = AddonStatusForm(request.POST or None, instance=addon)
+    pager = amo.utils.paginate(request, addon.versions.all(), 30)
+    # A list coercion so this doesn't result in a subquery with a LIMIT which
+    # MySQL doesn't support (at this time).
+    versions = list(pager.object_list)
+    files = File.objects.filter(version__in=versions).select_related('version')
+    formset = FileFormSet(request.POST or None, queryset=files)
+
+    if form.is_valid() and formset.is_valid():
+        if 'status' in form.changed_data:
+            amo.log(amo.LOG.CHANGE_STATUS, addon, form.cleaned_data['status'])
+            log.info('Addon "%s" status changed to: %s' % (
+                addon.slug, form.cleaned_data['status']))
+            form.save()
+        if 'highest_status' in form.changed_data:
+            log.info('Addon "%s" highest status changed to: %s' % (
+                addon.slug, form.cleaned_data['highest_status']))
+            form.save()
+
+        if 'outstanding' in form.changed_data:
+            log.info('Addon "%s" changed to%s outstanding' % (addon.slug,
+                     '' if form.cleaned_data['outstanding'] else ' not'))
+            form.save()
+
+        for form in formset:
+            if 'status' in form.changed_data:
+                log.info('Addon "%s" file (ID:%d) status changed to: %s' % (
+                    addon.slug, form.instance.id, form.cleaned_data['status']))
+                form.save()
+        return redirect('zadmin.addon_manage', addon.slug)
+
+    # Build a map from file.id to form in formset for precise form display
+    form_map = dict((form.instance.id, form) for form in formset.forms)
+    # A version to file map to avoid an extra query in the template
+    file_map = {}
+    for file in files:
+        file_map.setdefault(file.version_id, []).append(file)
+
+    return jingo.render(request, 'zadmin/addon_manage.html', {
+        'addon': addon,
+        'pager': pager,
+        'versions': versions,
+        'form': form,
+        'formset': formset,
+        'form_map': form_map,
+        'file_map': file_map,
+    })
+
+
+@admin.site.admin_view
+@post_required
+@json_view
+def recalc_hash(request, file_id):
+
+    file = get_object_or_404(File, pk=file_id)
+    file.size = storage.size(file.file_path)
+    file.hash = file.generate_hash()
+    file.save()
+
+    log.info('Recalculated hash for file ID %d' % file.id)
+    messages.success(request,
+                     'File hash and size recalculated for file %d.' % file.id)
+    return {'success': 1}
+
+
+@admin.site.admin_view
+def memcache(request):
+    form = YesImSure(request.POST or None)
+    if form.is_valid():
+        cache.clear()
+        form = YesImSure()
+        messages.success(request, 'Cache cleared')
+    if cache._cache and hasattr(cache._cache, 'get_stats'):
+        stats = cache._cache.get_stats()
+    else:
+        stats = []
+    return jingo.render(request, 'zadmin/memcache.html',
+                        {'form': form, 'stats': stats})
+
+
+@admin.site.admin_view
+def site_events(request, event_id=None):
+    event = get_object_or_404(SiteEvent, pk=event_id) if event_id else None
+    data = request.POST or None
+
+    if event:
+        form = SiteEventForm(data, instance=event)
+    else:
+        form = SiteEventForm(data)
+
+    if request.method == 'POST' and form.is_valid():
+        form.save()
+        return redirect('zadmin.site_events')
+    pager = amo.utils.paginate(request, SiteEvent.objects.all(), 30)
+    events = pager.object_list
+    return jingo.render(request, 'zadmin/site_events.html', {
+        'form': form,
+        'events': events,
+    })
+
+
+@admin.site.admin_view
+def delete_site_event(request, event_id):
+    event = get_object_or_404(SiteEvent, pk=event_id)
+    event.delete()
+    return redirect('zadmin.site_events')
+
+
+@admin_required
+def generate_error(request):
+    form = GenerateErrorForm(request.POST or None)
+    if request.method == 'POST' and form.is_valid():
+        form.explode()
+    return jingo.render(request, 'zadmin/generate-error.html', {'form': form})
+
+
+@any_permission_required([('Admin', '%'),
+                          ('MailingLists', 'View')])
+def export_email_addresses(request):
+    return jingo.render(request, 'zadmin/export_button.html', {})
+
+
+@any_permission_required([('Admin', '%'),
+                          ('MailingLists', 'View')])
+def email_addresses_file(request):
+    resp = http.HttpResponse()
+    resp['Content-Type'] = 'text/plain; charset=utf-8'
+    resp['Content-Disposition'] = ('attachment; '
+                                   'filename=amo_optin_emails.txt')
+    emails = (UserProfile.objects.filter(notifications__notification_id=13,
+                                         notifications__enabled=1)
+              .values_list('email', flat=True))
+    for e in emails:
+        if e is not None:
+            resp.write(e + '\n')
+    return resp
+
+
+@admin_required
+def price_tiers(request):
+    output = []
+    form = PriceTiersForm(request.POST or None, request.FILES)
+    if request.method == 'POST' and form.is_valid():
+        output = update_from_csv(form.cleaned_data['prices'])
+
+    return jingo.render(request, 'zadmin/update-prices.html',
+                        {'result': output, 'form': form})

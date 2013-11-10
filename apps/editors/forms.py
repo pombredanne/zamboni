@@ -1,10 +1,10 @@
 from datetime import timedelta
 
 from django import forms
-from django.forms import widgets
-from django.db.models import Q
-from django.utils.translation import get_language
 from django.core.validators import ValidationError
+from django.db.models import Q
+from django.forms import widgets
+from django.utils.translation import get_language
 
 import happyforms
 import jinja2
@@ -13,16 +13,14 @@ from tower import ugettext as _, ugettext_lazy as _lazy
 import amo
 from amo.urlresolvers import reverse
 from applications.models import AppVersion
-
-
+from editors.helpers import (file_review_status, ReviewAddon, ReviewFiles,
+                             ReviewHelper)
 from editors.models import CannedResponse
-from editors.helpers import (ReviewHelper, ReviewAddon, ReviewFiles,
-                             file_review_status)
 from files.models import File
 
 
-ACTION_FILTERS = (('', ''), ('approved', _lazy('Approved reviews')),
-                  ('deleted', _lazy('Deleted reviews')))
+ACTION_FILTERS = (('', ''), ('approved', _lazy(u'Approved reviews')),
+                  ('deleted', _lazy(u'Deleted reviews')))
 
 ACTION_DICT = dict(approved=amo.LOG.APPROVE_REVIEW,
                    deleted=amo.LOG.DELETE_REVIEW)
@@ -50,14 +48,11 @@ class EventLogForm(happyforms.Form):
 class ReviewLogForm(happyforms.Form):
     start = forms.DateField(required=False,
                             label=_lazy(u'View entries between'))
-    end = forms.DateField(required=False,
-                          label=_lazy(u'and'))
-    search = forms.CharField(required=False,
-                          label=_lazy(u'containing'))
+    end = forms.DateField(required=False, label=_lazy(u'and'))
+    search = forms.CharField(required=False, label=_lazy(u'containing'))
 
     def __init__(self, *args, **kw):
         super(ReviewLogForm, self).__init__(*args, **kw)
-
 
         # L10n: start, as in "start date"
         self.fields['start'].widget.attrs = {'placeholder': _('start'),
@@ -108,7 +103,8 @@ class QueueSearchForm(happyforms.Form):
     addon_type_ids = forms.MultipleChoiceField(
                 required=False,
                 label=_lazy(u'Add-on Types'),
-                choices=((id, tp) for id, tp in amo.ADDON_TYPES.items()))
+                choices=((id, tp) for id, tp in amo.ADDON_TYPES.items()
+                         if id != amo.ADDON_WEBAPP))
     platform_ids = forms.MultipleChoiceField(
                 required=False,
                 label=_lazy(u'Platforms'),
@@ -223,9 +219,9 @@ class AddonFilesMultipleChoiceField(forms.ModelMultipleChoiceField):
     def label_from_instance(self, addon_file):
         addon = addon_file.version.addon
         # L10n: 0 = platform, 1 = filename, 2 = status message
-        return jinja2.Markup(_(u"<strong>%s</strong> &middot; %s &middot; %s") %
-                             (addon_file.platform, addon_file.filename,
-                              file_review_status(addon, addon_file)))
+        return jinja2.Markup(_(u"<strong>%s</strong> &middot; %s &middot; %s")
+                             % (addon_file.platform, addon_file.filename,
+                                file_review_status(addon, addon_file)))
 
 
 class NonValidatingChoiceField(forms.ChoiceField):
@@ -236,21 +232,23 @@ class NonValidatingChoiceField(forms.ChoiceField):
 
 class ReviewAddonForm(happyforms.Form):
     addon_files = AddonFilesMultipleChoiceField(required=False,
-            queryset=File.objects.none(), label=_lazy('Files:'),
+            queryset=File.objects.none(), label=_lazy(u'Files:'),
             widget=forms.CheckboxSelectMultiple())
     comments = forms.CharField(required=True, widget=forms.Textarea(),
-                               label=_lazy('Comments:'))
+                               label=_lazy(u'Comments:'))
     canned_response = NonValidatingChoiceField(required=False)
     action = forms.ChoiceField(required=True, widget=forms.RadioSelect())
     operating_systems = forms.CharField(required=False,
-                                        label=_lazy('Operating systems:'))
+                                        label=_lazy(u'Operating systems:'))
     applications = forms.CharField(required=False,
-                                   label=_lazy('Applications:'))
+                                   label=_lazy(u'Applications:'))
     notify = forms.BooleanField(required=False,
-                                label=_lazy('Notify me the next time this '
+                                label=_lazy(u'Notify me the next time this '
                                             'add-on is updated. (Subsequent '
                                             'updates will not generate an '
                                             'email)'))
+    adminflag = forms.BooleanField(required=False,
+                                   label=_lazy(u'Clear Admin Review Flag'))
 
     def is_valid(self):
         result = super(ReviewAddonForm, self).is_valid()
@@ -260,17 +258,18 @@ class ReviewAddonForm(happyforms.Form):
 
     def __init__(self, *args, **kw):
         self.helper = kw.pop('helper')
+        self.type = kw.pop('type', amo.CANNED_RESPONSE_ADDON)
         super(ReviewAddonForm, self).__init__(*args, **kw)
         self.fields['addon_files'].queryset = self.helper.all_files
         self.addon_files_disabled = (self.helper.all_files
                 # We can't review disabled, and public are already reviewed.
-                .filter(status__in=[amo.STATUS_DISABLED, amo.STATUS_PUBLIC])
+                .filter(status__in=[amo.STATUS_OBSOLETE, amo.STATUS_PUBLIC])
                 .values_list('pk', flat=True))
 
         # We're starting with an empty one, which will be hidden via CSS.
         canned_choices = [['', [('', _('Choose a canned response...'))]]]
 
-        responses = CannedResponse.objects.all()
+        responses = CannedResponse.objects.filter(type=self.type)
 
         # Loop through the actions (prelim, public, etc).
         for k, action in self.helper.actions.iteritems():
@@ -310,8 +309,8 @@ class ReviewFileForm(ReviewAddonForm):
 
 def get_review_form(data, request=None, addon=None, version=None):
     helper = ReviewHelper(request=request, addon=addon, version=version)
-
-    form = {ReviewAddon: ReviewAddonForm,
+    FormClass = ReviewAddonForm
+    form = {ReviewAddon: FormClass,
             ReviewFiles: ReviewFileForm}[helper.handler.__class__]
     return form(data, helper=helper)
 

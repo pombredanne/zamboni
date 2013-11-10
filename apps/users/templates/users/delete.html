@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "impala/base_shared.html" %}
 {% from 'includes/forms.html' import required %}
 
 {% block title %}{{ page_title(_('Delete User Account')) }}{% endblock %}
@@ -6,14 +6,12 @@
 {% block content %}
 
 <div class="primary" role="main">
-  <div class="primary">
-    <h2>{{ _('Delete User Account') }}</h2>
-
-    {% include "messages.html" %}
+  <div class="primary island">
+    <h1>{{ _('Delete User Account') }}</h1>
 
     {% if amouser.is_developer %}
       <div class="notification-box info">
-      {% trans link=url('users.profile', amouser.id) %}
+      {% trans link=amouser.get_url_path() %}
         You cannot delete your account if you are listed as an
         <a href="{{ link }}"> author of any add-ons</a>. To delete your
         account, please have another person in your development group delete
@@ -25,7 +23,7 @@
     {% else %}
 
       {% if form %}
-        <div class="notification-box info prose">
+        <div class="notification-box error prose">
           <p>
             {% trans site=settings.DOMAIN %}By clicking "delete" your account is going
              to be <strong>permanently removed</strong>. That means:
@@ -36,7 +34,7 @@
              {% endtrans %}
           </p>
         </div>
-        <form method="post" action="" class="featured-inner object-lead user-input">
+        <form method="post" action="" class="prettyform object-lead user-input">
           {{ csrf() }}
           <fieldset>
             <legend>{{ _('Confirm account deletion') }}</legend>

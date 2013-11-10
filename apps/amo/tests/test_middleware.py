@@ -1,23 +1,44 @@
 # -*- coding: utf-8 -*-
-from django import test
+from django import http, test
+from django.conf import settings
 
 from commonware.middleware import HidePasswordOnException
+from mock import Mock, patch
 from nose.tools import eq_
 from pyquery import PyQuery as pq
-from test_utils import TestCase, RequestFactory
+from test_utils import RequestFactory
 
+import amo.tests
+from amo.middleware import NoAddonsMiddleware, NoVarySessionMiddleware
 from amo.urlresolvers import reverse
 from zadmin.models import Config, _config_cache
 
 
-def test_no_vary_cookie():
-    # We don't break good usage of Vary.
-    response = test.Client().get('/')
-    eq_(response['Vary'], 'Accept-Language, User-Agent, X-Mobile')
+class TestMiddleware(amo.tests.TestCase):
 
-    # But we do prevent Vary: Cookie.
-    response = test.Client().get('/', follow=True)
-    eq_(response['Vary'], 'X-Mobile, User-Agent')
+    def test_no_vary_cookie(self):
+        # We don't break good usage of Vary.
+        response = test.Client().get('/')
+        eq_(response['Vary'], 'Accept-Language, User-Agent, X-Mobile')
+
+        # But we do prevent Vary: Cookie.
+        response = test.Client().get('/', follow=True)
+        eq_(response['Vary'], 'X-Mobile, User-Agent')
+
+    @patch('django.contrib.sessions.middleware.'
+           'SessionMiddleware.process_request')
+    def test_session_not_used_api(self, process_request):
+        req = RequestFactory().get('/')
+        req.API = True
+        NoVarySessionMiddleware().process_request(req)
+        assert not process_request.called
+
+    @patch('django.contrib.sessions.middleware.'
+           'SessionMiddleware.process_request')
+    def test_session_not_used(self, process_request):
+        req = RequestFactory().get('/')
+        NoVarySessionMiddleware().process_request(req)
+        assert process_request.called
 
 
 def test_redirect_with_unicode_get():
@@ -29,12 +50,13 @@ def test_redirect_with_unicode_get():
 
 
 def test_trailing_slash_middleware():
-    response = test.Client().get(u'/en-US/firefox/about/?xxx=\xc3')
+    response = test.Client().get(u'/en-US/about/?xxx=\xc3')
     eq_(response.status_code, 301)
-    assert response['Location'].endswith('/en-US/firefox/about?xxx=%C3%83')
+    assert response['Location'].endswith('/en-US/about?xxx=%C3%83')
 
 
-class AdminMessageTest(TestCase):
+class AdminMessageTest(amo.tests.TestCase):
+
     def test_message(self):
         c = Config()
         c.key = 'site_notice'
@@ -64,3 +86,20 @@ def test_hide_password_middleware():
     eq_(request.POST['x'], '1')
     eq_(request.POST['password'], '******')
     eq_(request.POST['password2'], '******')
+
+
+class TestNoAddonsMiddleware(amo.tests.TestCase):
+
+    @patch('amo.middleware.ViewMiddleware.get_name')
+    def process(self, name, get_name):
+        get_name.return_value = name
+        request = RequestFactory().get('/')
+        view = Mock()
+        return NoAddonsMiddleware().process_view(request, view, [], {})
+
+    @patch.object(settings, 'NO_ADDONS_MODULES',
+                  ('some.addons',))
+    def test_middleware(self):
+        self.assertRaises(http.Http404, self.process, 'some.addons')
+        self.assertRaises(http.Http404, self.process, 'some.addons.thingy')
+        assert not self.process('something.else')

@@ -4,16 +4,17 @@ from django.utils import translation
 from django.utils.http import urlquote
 
 from tower import ugettext as _
+import waffle
 
 import amo
-from amo.urlresolvers import reverse
+from amo.urlresolvers import remora_url, reverse
+from amo.utils import memoize
 from access import acl
-from cake.urlresolvers import remora_url
 from zadmin.models import get_config
 
 
 def app(request):
-    return {'APP': request.APP}
+    return {'APP': getattr(request, 'APP', None)}
 
 
 def static_url(request):
@@ -28,6 +29,20 @@ def i18n(request):
             }
 
 
+@memoize('collect-timings')
+def get_collect_timings():
+    # The flag has to be enabled for everyone and then we'll use that
+    # percentage in the pages.
+    percent = 0
+    try:
+        flag = waffle.models.Flag.objects.get(name='collect-timings')
+        if flag.everyone and flag.percent:
+            percent = float(flag.percent) / 100.0
+    except waffle.models.Flag.DoesNotExist:
+        pass
+    return percent
+
+
 def global_settings(request):
     """
     Storing standard AMO-wide information used in global headers, such as
@@ -37,26 +52,32 @@ def global_settings(request):
     tools_links = []
     context = {}
 
-    tools_title = _('Developer')
+    tools_title = _('Tools')
+    is_reviewer = False
 
-    if request.user.is_authenticated():
-        # TODO(jbalogh): reverse links
+    if request.user.is_authenticated() and hasattr(request, 'amo_user'):
         amo_user = request.amo_user
-        account_links.append({
-            'text': _('View Profile'),
-            'href': request.user.get_profile().get_url_path(),
-        })
-        account_links.append({'text': _('Edit Profile'),
-                              'href': reverse('users.edit')})
+        profile = request.user.get_profile()
+        is_reviewer = acl.check_reviewer(request)
 
-        account_links.append({
-            'text': _('My Collections'),
-            'href': reverse('collections.user', args=[amo_user.username])})
-        if amo_user.favorite_addons:
-            account_links.append(
-                {'text': _('My Favorites'),
-                 'href': reverse('collections.detail',
-                                 args=[amo_user.username, 'favorites'])})
+        account_links.append({'text': _('My Profile'),
+                              'href': profile.get_url_path()})
+        if amo_user.is_artist:
+            account_links.append({'text': _('My Themes'),
+                                  'href': profile.get_user_url('themes')})
+
+        account_links.append({'text': _('Account Settings'),
+                              'href': reverse('users.edit')})
+        if not settings.APP_PREVIEW:
+            account_links.append({
+                'text': _('My Collections'),
+                'href': reverse('collections.user', args=[amo_user.username])})
+
+            if amo_user.favorite_addons:
+                account_links.append(
+                    {'text': _('My Favorites'),
+                     'href': reverse('collections.detail',
+                                     args=[amo_user.username, 'favorites'])})
 
         account_links.append({
             'text': _('Log out'),
@@ -64,25 +85,27 @@ def global_settings(request):
         })
 
         if request.amo_user.is_developer:
-            tools_links.append({'text': _('Manage My Add-ons'),
+            tools_links.append({'text': _('Manage My Submissions'),
                                 'href': reverse('devhub.addons')})
+        tools_links.append({'text': _('Submit a New Add-on'),
+                            'href': reverse('devhub.submit.1')})
 
-            tools_links.append({'text': _('Submit a New Add-on'),
-                                'href': reverse('devhub.submit.1')})
+        if waffle.flag_is_active(request, 'submit-personas'):
+            # TODO(cvan)(fligtar): Do we want this here?
+            tools_links.append({'text': _('Submit a New Theme'),
+                                'href': reverse('devhub.themes.submit')})
 
         tools_links.append({'text': _('Developer Hub'),
                             'href': reverse('devhub.index')})
 
-        if acl.action_allowed(request, 'Editors', '%'):
-            tools_title = _('Tools')
+        if is_reviewer:
             tools_links.append({'text': _('Editor Tools'),
                                 'href': reverse('editors.home')})
-        if acl.action_allowed(request, 'Localizers', '%'):
-            tools_title = _('Tools')
+        if acl.action_allowed(request, 'L10nTools', 'View'):
             tools_links.append({'text': _('Localizer Tools'),
                                 'href': '/localizers'})
-        if acl.action_allowed(request, 'Admin', '%'):
-            tools_title = _('Tools')
+        if (acl.action_allowed(request, 'Admin', '%') or
+            acl.action_allowed(request, 'AdminTools', 'View')):
             tools_links.append({'text': _('Admin Tools'),
                                 'href': reverse('zadmin.home')})
 
@@ -94,5 +117,7 @@ def global_settings(request):
                     'settings': settings, 'amo': amo,
                     'tools_links': tools_links,
                     'tools_title': tools_title,
-                    'ADMIN_MESSAGE': get_config('site_notice')})
+                    'ADMIN_MESSAGE': get_config('site_notice'),
+                    'collect_timings_percent': get_collect_timings(),
+                    'is_reviewer': is_reviewer})
     return context

@@ -1,6 +1,8 @@
-from django.conf.urls.defaults import patterns, url, include
+from django.conf.urls import include, patterns, url
 
 from . import views, feeds
+
+from stats.urls import collection_stats_urls
 
 edit_urls = patterns('',
     url('^$', views.edit, name='collections.edit'),
@@ -12,6 +14,8 @@ edit_urls = patterns('',
 
 detail_urls = patterns('',
     url('^$', views.collection_detail, name='collections.detail'),
+    url('^format:json$', views.collection_detail_json,
+        name='collections.detail.json'),
     url('^vote/(?P<direction>up|down)$', views.collection_vote,
         name='collections.vote'),
     url('^edit/', include(edit_urls)),
@@ -21,7 +25,7 @@ detail_urls = patterns('',
         name='collections.alter'),
     url('^watch$', views.watch, name='collections.watch'),
     url('^share$', views.share, name='collections.share'),
-    url('^format:rss$', feeds.CollectionFeed(),
+    url('^format:rss$', feeds.CollectionDetailFeed(),
         name='collections.detail.rss'),
 )
 
@@ -42,16 +46,22 @@ urlpatterns = patterns('',
         {'edit': True}),
 
     url('^collections/$', views.collection_listing, name='collections.list'),
+
     url('^collections/(editors_picks|popular|favorites)/?$',
         views.legacy_directory_redirects),
     url('^collections/mine/(?P<slug>[^/]+)?$', views.mine,
-        name='collections.mine'),
+        name='collections.mine', kwargs={'username': 'mine'}),
     url('^collections/following/', views.following,
         name='collections.following'),
     url('^collections/(?P<username>[^/]+)/$', views.user_listing,
         name='collections.user'),
     url('^collections/(?P<username>[^/]+)/(?P<slug>[^/]+)/',
         include(detail_urls)),
+    url('^collections/(?P<username>[^/]+)/(?P<slug>[^/]+)/statistics/',
+        include(collection_stats_urls)),
     url('^collections/add$', views.add, name='collections.add'),
     url('^collections/ajax/', include(ajax_urls)),
+
+    url('^collections/format:rss$', feeds.CollectionFeed(),
+        name='collections.rss'),
 )

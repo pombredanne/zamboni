@@ -1,34 +1,42 @@
 # -*- coding: utf-8 -*-
 import os
-import shutil
 import tempfile
 
-import test_utils
 from mock import patch
 from nose.tools import eq_
-import path
 
 from django.conf import settings
+from django.core.files.storage import default_storage as storage
 
 import amo
+import amo.tests
 from amo.tests.test_helpers import get_image_path
-from addons import forms, cron
+from amo.utils import rm_local_tmp_dir
+from addons import forms
 from addons.models import Addon, Category
+from files.helpers import copyfileobj
 from tags.models import Tag, AddonTag
 
 
-class FormsTest(test_utils.TestCase):
+class FormsTest(amo.tests.TestCase):
     fixtures = ('base/addon_3615', 'base/addon_3615_categories',
                 'addons/blacklisted')
 
     def setUp(self):
         super(FormsTest, self).setUp()
-        cron.build_reverse_name_lookup()
         self.existing_name = 'Delicious Bookmarks'
-        self.error_msg = ('This add-on name is already in use. '
-                          'Please choose another.')
+        self.non_existing_name = 'Does Not Exist'
+        self.error_msg = 'This name is already in use. Please choose another.'
 
     def test_new(self):
+        """
+        New add-ons should be able to use non-existing add-on names.
+        """
+        f = forms.AddonForm(dict(name=self.non_existing_name))
+        f.is_valid()
+        eq_(f.errors.get('name'), None)
+
+    def test_new_existing(self):
         """
         New add-ons shouldn't be able to use existing add-on names.
         """
@@ -53,6 +61,7 @@ class FormsTest(test_utils.TestCase):
         delicious = Addon.objects.get()
         f = forms.AddonFormBasic(dict(name=self.existing_name), request=None,
                                  instance=delicious)
+        f.is_valid()
         eq_(f.errors.get('name'), None)
 
     def test_locales(self):
@@ -64,17 +73,19 @@ class FormsTest(test_utils.TestCase):
         form = forms.AddonFormBasic({'slug': 'submit'}, request=None,
                                     instance=delicious)
         assert not form.is_valid()
-        eq_(form.errors['slug'], [u'The slug cannot be: submit.'])
+        eq_(form.errors['slug'],
+            [u'The slug cannot be "submit". Please choose another.'])
 
     def test_slug_isdigit(self):
         delicious = Addon.objects.get()
         form = forms.AddonFormBasic({'slug': '123'}, request=None,
                                     instance=delicious)
         assert not form.is_valid()
-        eq_(form.errors['slug'], [u'The slug cannot be: 123.'])
+        eq_(form.errors['slug'],
+            [u'The slug cannot be "123". Please choose another.'])
 
 
-class TestTagsForm(test_utils.TestCase):
+class TestTagsForm(amo.tests.TestCase):
     fixtures = ['base/addon_3615', 'base/platforms', 'base/users']
 
     def setUp(self):
@@ -198,7 +209,7 @@ class TestTagsForm(test_utils.TestCase):
                                   ' after invalid characters are removed.'])
 
 
-class TestIconForm(test_utils.TestCase):
+class TestIconForm(amo.tests.TestCase):
     fixtures = ['base/addon_3615']
 
     # TODO: AddonFormMedia save() method could do with cleaning up
@@ -210,16 +221,12 @@ class TestIconForm(test_utils.TestCase):
         class DummyRequest:
             FILES = None
         self.request = DummyRequest()
-
-        self.paths = [path.path(settings.TMP_PATH) / 'uploads' /
-                      'addon_icons' / str(self.addon.pk)[0],
-                      path.path(settings.TMP_PATH) / 'icon']
-        for p in self.paths:
-            if not os.path.exists(p):
-                os.makedirs(p)
+        self.icon_path = os.path.join(settings.TMP_PATH, 'icon')
+        if not os.path.exists(self.icon_path):
+            os.makedirs(self.icon_path)
 
     def tearDown(self):
-        shutil.rmtree(self.temp_dir)
+        rm_local_tmp_dir(self.temp_dir)
 
     def get_icon_paths(self):
         path = os.path.join(self.addon.get_icon_dir(), str(self.addon.id))
@@ -255,16 +262,15 @@ class TestIconForm(test_utils.TestCase):
                                     request=self.request,
                                     instance=self.addon)
 
-        img = get_image_path(name)
-        dest = self.paths[1] / name
-        shutil.copyfile(get_image_path(name), dest)
-
+        dest = os.path.join(self.icon_path, name)
+        with storage.open(dest, 'w') as f:
+            copyfileobj(open(get_image_path(name)), f)
         assert form.is_valid()
         form.save(addon=self.addon)
         assert update_mock.called
 
 
-class TestCategoryForm(test_utils.TestCase):
+class TestCategoryForm(amo.tests.TestCase):
     fixtures = ['base/apps']
 
     def test_no_possible_categories(self):

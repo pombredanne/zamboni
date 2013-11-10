@@ -1,35 +1,22 @@
-{% extends "browse/base_listing.html" %}
+{% extends "browse/impala/base_listing.html" %}
 
-{% block content %}
-<header>
+{% block primary %}
+<section class="primary">
   {% if category %}
-    {{ breadcrumbs([(url('browse.extensions'), _('Extensions')), (None, category.name)]) }}
-    <hgroup>
-    <h2>{{ category.name }}</h2>
+    {{ impala_breadcrumbs([base_crumb, (None, title)]) }}
   {% else %}
-    {{ breadcrumbs([(None, _('Extensions'))]) }}
-    <hgroup>
-    <h2>{{ _('Extensions') }}</h2>
+    {{ impala_breadcrumbs([base_crumb]) }}
   {% endif %}
-  {# L10n: {0} is an integer. #}
-  <h3>{{ ngettext('<b>{0}</b> add-on', '<b>{0}</b> add-ons', addons.paginator.count)|f(
-            addons.paginator.count|numberfmt)|safe }}</h3>
-  </hgroup>
-</header>
-
-<div class="featured listing">
-  <div class="featured-inner">
-    {% if category %}
-      {% set url_base = url('browse.extensions', category.slug) %}
-    {% else %}
-      {% set url_base = url('browse.extensions') %}
+  <h1>{{ title }}</h1>
+  <div class="island hero c listing">
+    {% if feed_url %}
+      <a href="{{ feed_url }}" id="subscribe">{{ _('Subscribe') }}</a>
     {% endif %}
-    {{ addon_listing_header(url_base, sort_opts, sorting) }}
-    {{ addon_listing_items(addons.object_list, src='category',
-                           show_date=sorting, show_downloads=sorting=='popular') }}
-    <div class="listing-footer">
-      {{ addons|paginator }}
+    {{ impala_addon_listing_header(request.get_full_path(), search_filter=filter) }}
+    <div class="items">
+      {{ impala_addon_listing_items(addons.object_list, sorting, src=src) }}
     </div>
-  </div> {# featured-inner #}
-</div>
+    {{ addons|impala_paginator }}
+  </div>
+</section>
 {% endblock %}

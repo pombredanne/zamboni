@@ -1,6 +1,9 @@
-import path
+# -*- coding: utf-8 -*-
+import os
 import re
 import socket
+
+from jinja2 import Markup
 
 from django import forms
 from django.conf import settings
@@ -9,29 +12,49 @@ from django.forms.models import modelformset_factory
 from django.forms.formsets import formset_factory, BaseFormSet
 from django.utils.safestring import mark_safe
 from django.utils.encoding import force_unicode
+from django.contrib import messages
 
+import commonware
 import happyforms
 from tower import ugettext as _, ugettext_lazy as _lazy
 from quieter_formset.formset import BaseModelFormSet
+import waffle
 
+from access import acl
 import amo
 import addons.forms
 import paypal
-from addons.models import Addon, AddonUser, Charity, Preview
+from addons.models import (Addon, AddonDependency, AddonUpsell, AddonUser,
+                           BlacklistedSlug, Charity, Preview)
+from amo.helpers import loc
 from amo.forms import AMOModelForm
-from amo.widgets import EmailWidget
+from amo.urlresolvers import reverse
+from amo.utils import raise_required, slugify
+
 from applications.models import Application, AppVersion
 from files.models import File, FileUpload, Platform
 from files.utils import parse_addon, VERSION_RE
+from market.models import AddonPremium, Price
 from translations.widgets import TranslationTextarea, TranslationTextInput
 from translations.fields import TransTextarea, TransField
-from translations.models import delete_translation
+from translations.models import delete_translation, Translation
 from translations.forms import TranslationFormMixin
 from versions.models import License, Version, ApplicationsVersions
+from mkt.webapps.models import Webapp
 from . import tasks
+
+paypal_log = commonware.log.getLogger('z.paypal')
 
 
 class AuthorForm(happyforms.ModelForm):
+
+    # TODO: Remove this whole __init__ when the 'allow-refund' flag goes away.
+    def __init__(self, *args, **kwargs):
+        super(AuthorForm, self).__init__(*args, **kwargs)
+        self.fields['role'].choices = (
+            (c, s) for c, s in amo.AUTHOR_CHOICES
+            if c != amo.AUTHOR_ROLE_SUPPORT or
+            waffle.switch_is_active('allow-refund'))
 
     class Meta:
         model = AddonUser
@@ -75,6 +98,7 @@ AuthorFormSet = modelformset_factory(AddonUser, formset=BaseAuthorFormSet,
 
 class DeleteForm(happyforms.Form):
     password = forms.CharField()
+    reason = forms.CharField(required=False)
 
     def __init__(self, request):
         self.user = request.amo_user
@@ -100,52 +124,98 @@ class LicenseRadioInput(forms.widgets.RadioInput):
         super(LicenseRadioInput, self).__init__(name, value, attrs, choice,
                                                 index)
         license = choice[1]  # Choice is a tuple (object.id, object).
-        link = '<a class="xx extra" href="%s" target="_blank">%s</a>'
+        link = u'<a class="xx extra" href="%s" target="_blank">%s</a>'
         if hasattr(license, 'url'):
             details = link % (license.url, _('Details'))
             self.choice_label = mark_safe(self.choice_label + details)
 
 
-def LicenseForm(*args, **kw):
-    # This needs to be lazy so we get the right translations.
-    cs = [(x.builtin, x)
-          for x in License.objects.builtins().filter(on_form=True)]
-    cs.append((License.OTHER, _('Other')))
+class LicenseForm(AMOModelForm):
+    builtin = forms.TypedChoiceField(choices=[], coerce=int,
+                        widget=forms.RadioSelect(attrs={'class': 'license'},
+                                                 renderer=LicenseChoiceRadio))
+    name = forms.CharField(widget=TranslationTextInput(),
+                           label=_lazy(u"What is your license's name?"),
+                           required=False, initial=_('Custom License'))
+    text = forms.CharField(widget=TranslationTextarea(), required=False,
+                           label=_lazy(u'Provide the text of your license.'))
 
-    class _Form(AMOModelForm):
-        builtin = forms.TypedChoiceField(choices=cs, coerce=int,
-            widget=forms.RadioSelect(attrs={'class': 'license'},
-                                     renderer=LicenseChoiceRadio))
-        name = forms.CharField(widget=TranslationTextInput(),
-                               label=_("What is your license's name?"),
-                               required=False, initial=_('Custom License'))
-        text = forms.CharField(widget=TranslationTextarea(), required=False,
-                               label=_('Provide the text of your license.'))
+    def __init__(self, *args, **kw):
+        addon = kw.pop('addon', None)
+        self.version = None
+        if addon:
+            qs = addon.versions.order_by('-version')[:1]
+            self.version = qs[0] if qs else None
+            if self.version:
+                kw['instance'], kw['initial'] = self.version.license, None
+                # Clear out initial data if it's a builtin license.
+                if getattr(kw['instance'], 'builtin', None):
+                    kw['initial'] = {'builtin': kw['instance'].builtin}
+                    kw['instance'] = None
 
-        class Meta:
-            model = License
-            fields = ('builtin', 'name', 'text')
+        super(LicenseForm, self).__init__(*args, **kw)
 
-        def clean_name(self):
-            name = self.cleaned_data['name']
-            return name.strip() or _('Custom License')
+        cs = [(x.builtin, x)
+              for x in License.objects.builtins().filter(on_form=True)]
+        cs.append((License.OTHER, _('Other')))
+        self.fields['builtin'].choices = cs
 
-        def clean(self):
-            data = self.cleaned_data
-            if self.errors:
-                return data
-            elif data['builtin'] == License.OTHER and not data['text']:
-                raise forms.ValidationError(
-                    _('License text is required when choosing Other.'))
+    class Meta:
+        model = License
+        fields = ('builtin', 'name', 'text')
+
+    def clean_name(self):
+        name = self.cleaned_data['name']
+        return name.strip() or _('Custom License')
+
+    def clean(self):
+        data = self.cleaned_data
+        if self.errors:
             return data
+        elif data['builtin'] == License.OTHER and not data['text']:
+            raise forms.ValidationError(
+                _('License text is required when choosing Other.'))
+        return data
 
-        def save(self, commit=True):
-            builtin = self.cleaned_data['builtin']
-            if builtin != License.OTHER:
-                return License.objects.get(builtin=builtin)
-            return super(_Form, self).save(commit)
+    def get_context(self):
+        """Returns a view context dict having keys license_urls, license_form,
+        and license_other_val.
+        """
+        license_urls = dict(License.objects.builtins()
+                            .values_list('builtin', 'url'))
+        return dict(license_urls=license_urls, version=self.version,
+                    license_form=self.version and self,
+                    license_other_val=License.OTHER)
 
-    return _Form(*args, **kw)
+    def save(self, *args, **kw):
+        """Save all form data.
+
+        This will only create a new license if it's not one of the builtin
+        ones.
+
+        Keyword arguments
+
+        **log=True**
+            Set to False if you do not want to log this action for display
+            on the developer dashboard.
+        """
+        log = kw.pop('log', True)
+        changed = self.changed_data
+
+        builtin = self.cleaned_data['builtin']
+        if builtin != License.OTHER:
+            license = License.objects.get(builtin=builtin)
+        else:
+            # Save the custom license:
+            license = super(LicenseForm, self).save(*args, **kw)
+
+        if self.version:
+            if changed or license != self.version.license:
+                self.version.update(license=license)
+                if log:
+                    amo.log(amo.LOG.CHANGE_LICENSE, license,
+                            self.version.addon)
+        return license
 
 
 class PolicyForm(TranslationFormMixin, AMOModelForm):
@@ -160,29 +230,56 @@ class PolicyForm(TranslationFormMixin, AMOModelForm):
     privacy_policy = TransField(widget=TransTextarea(), required=False,
         label=_lazy(u"Please specify your add-on's Privacy Policy:"))
 
+    def __init__(self, *args, **kw):
+        self.addon = kw.pop('addon', None)
+        if not self.addon:
+            raise ValueError('addon keyword arg cannot be None')
+        kw['instance'] = self.addon
+        kw['initial'] = dict(has_priv=self._has_field('privacy_policy'),
+                             has_eula=self._has_field('eula'))
+        super(PolicyForm, self).__init__(*args, **kw)
+
+    def _has_field(self, name):
+        # If there's a eula in any language, this addon has a eula.
+        n = getattr(self.addon, u'%s_id' % name)
+        return any(map(bool, Translation.objects.filter(id=n)))
+
     class Meta:
         model = Addon
         fields = ('eula', 'privacy_policy')
 
     def save(self, commit=True):
-        super(PolicyForm, self).save(commit)
-        for k, field in (('has_eula', 'eula'), ('has_priv', 'privacy_policy')):
+        ob = super(PolicyForm, self).save(commit)
+        for k, field in (('has_eula', 'eula'),
+                         ('has_priv', 'privacy_policy')):
             if not self.cleaned_data[k]:
                 delete_translation(self.instance, field)
 
+        if 'privacy_policy' in self.changed_data:
+            amo.log(amo.LOG.CHANGE_POLICY, self.addon, self.instance)
+
+        return ob
+
 
 def ProfileForm(*args, **kw):
-     # If the add-on takes contributions, then both fields are required.
-    fields_required = bool(kw['instance'].takes_contributions)
-    fields_required = kw.pop('required', False) or fields_required
+    # If the add-on takes contributions, then both fields are required.
+    addon = kw['instance']
+    fields_required = (kw.pop('required', False) or
+                       bool(addon.takes_contributions))
+    if addon.is_webapp():
+        the_reason_label = _('Why did you make this app?')
+        the_future_label = _("What's next for this app?")
+    else:
+        the_reason_label = _('Why did you make this add-on?')
+        the_future_label = _("What's next for this add-on?")
 
     class _Form(TranslationFormMixin, happyforms.ModelForm):
         the_reason = TransField(widget=TransTextarea(),
                                      required=fields_required,
-                                     label=_("Why did you make this add-on?"))
+                                     label=the_reason_label)
         the_future = TransField(widget=TransTextarea(),
                                      required=fields_required,
-                                     label=_("What's next for this add-on?"))
+                                     label=the_future_label)
 
         class Meta:
             model = Addon
@@ -192,10 +289,11 @@ def ProfileForm(*args, **kw):
 
 
 class CharityForm(happyforms.ModelForm):
-    url = Charity._meta.get_field('url').formfield(verify_exists=False)
+    url = Charity._meta.get_field('url').formfield()
 
     class Meta:
         model = Charity
+        fields = ('name', 'url', 'paypal')
 
     def clean_paypal(self):
         check_paypal_id(self.cleaned_data['paypal'])
@@ -238,6 +336,11 @@ class ContribForm(TranslationFormMixin, happyforms.ModelForm):
                 'annoying': addon.annoying or amo.CONTRIB_PASSIVE}
 
     def clean(self):
+        if self.instance.upsell:
+            raise forms.ValidationError(_('You cannot setup Contributions for '
+                                    'an add-on that is linked to a premium '
+                                    'add-on in the Marketplace.'))
+
         data = self.cleaned_data
         try:
             if not self.errors and data['recipient'] == 'dev':
@@ -355,11 +458,50 @@ CompatFormSet = modelformset_factory(
     form=CompatForm, can_delete=True, extra=0)
 
 
-class NewAddonForm(happyforms.Form):
+def verify_app_domain(manifest_url):
+    if waffle.switch_is_active('webapps-unique-by-domain'):
+        domain = Webapp.domain_from_url(manifest_url)
+        if Addon.objects.filter(app_domain=domain).exists():
+            raise forms.ValidationError(
+                _('An app already exists on this domain, '
+                  'only one app per domain is allowed.'))
+
+
+class NewWebappForm(happyforms.Form):
     upload = forms.ModelChoiceField(widget=forms.HiddenInput,
         queryset=FileUpload.objects.filter(valid=True),
-        error_messages={'invalid_choice': _lazy('There was an error with your '
-                                                'upload. Please try again.')})
+        error_messages={'invalid_choice': _lazy(u'There was an error with your '
+                                                u'upload. Please try again.')})
+
+    def __init__(self, *args, **kw):
+        self.request = kw.pop('request', None)
+        super(AddonUploadForm, self).__init__(*args, **kw)
+
+    def clean_upload(self):
+        upload = self.cleaned_data['upload']
+        verify_app_domain(upload.name)  # JS puts manifest URL here
+        return upload
+
+class AddonUploadForm(happyforms.Form):
+    upload = forms.ModelChoiceField(widget=forms.HiddenInput,
+        queryset=FileUpload.objects,
+        error_messages={'invalid_choice': _lazy(u'There was an error with your '
+                                                u'upload. Please try again.')})
+    admin_override_validation = forms.BooleanField(
+        required=False, label=_lazy(u'Override failed validation'))
+
+    def __init__(self, *args, **kw):
+        self.request = kw.pop('request')
+        super(AddonUploadForm, self).__init__(*args, **kw)
+
+    def _clean_upload(self):
+        if not (self.cleaned_data['upload'].valid or
+                self.cleaned_data['admin_override_validation'] and
+                acl.action_allowed(self.request, 'ReviewerAdminTools', 'View')):
+            raise forms.ValidationError(_(u'There was an error with your '
+                                          u'upload. Please try again.'))
+
+class NewAddonForm(AddonUploadForm):
     desktop_platforms = forms.ModelMultipleChoiceField(
             queryset=Platform.objects,
             widget=forms.CheckboxSelectMultiple(attrs={'class': 'platform'}),
@@ -376,7 +518,8 @@ class NewAddonForm(happyforms.Form):
 
     def clean(self):
         if not self.errors:
-            xpi = parse_addon(self.cleaned_data['upload'].path)
+            self._clean_upload()
+            xpi = parse_addon(self.cleaned_data['upload'])
             addons.forms.clean_name(xpi['name'])
             self._clean_all_platforms()
         return self.cleaned_data
@@ -395,19 +538,16 @@ class NewVersionForm(NewAddonForm):
 
     def clean(self):
         if not self.errors:
-            xpi = parse_addon(self.cleaned_data['upload'].path, self.addon)
+            self._clean_upload()
+            xpi = parse_addon(self.cleaned_data['upload'], self.addon)
             if self.addon.versions.filter(version=xpi['version']):
                 raise forms.ValidationError(
-                    _('Version %s already exists') % xpi['version'])
+                    _(u'Version %s already exists') % xpi['version'])
             self._clean_all_platforms()
         return self.cleaned_data
 
 
-class NewFileForm(happyforms.Form):
-    upload = forms.ModelChoiceField(widget=forms.HiddenInput,
-        queryset=FileUpload.objects.filter(valid=True),
-        error_messages={'invalid_choice': _lazy('There was an error with your '
-                                                'upload. Please try again.')})
+class NewFileForm(AddonUploadForm):
     platform = File._meta.get_field('platform').formfield(empty_label=None,
                     widget=forms.RadioSelect(attrs={'class': 'platform'}))
     platform.choices = sorted((p.id, p.name)
@@ -444,7 +584,7 @@ class NewFileForm(happyforms.Form):
 
         # Check for errors in the xpi.
         if not self.errors:
-            xpi = parse_addon(self.cleaned_data['upload'].path, self.addon)
+            xpi = parse_addon(self.cleaned_data['upload'], self.addon)
             if xpi['version'] != self.version.version:
                 raise forms.ValidationError(_("Version doesn't match"))
         return self.cleaned_data
@@ -459,7 +599,8 @@ class FileForm(happyforms.ModelForm):
 
     def __init__(self, *args, **kw):
         super(FileForm, self).__init__(*args, **kw)
-        if kw['instance'].version.addon.type == amo.ADDON_SEARCH:
+        if kw['instance'].version.addon.type in (amo.ADDON_SEARCH,
+                                                 amo.ADDON_WEBAPP):
             del self.fields['platform']
         else:
             compat = kw['instance'].version.compatible_platforms()
@@ -525,7 +666,16 @@ class Step3Form(addons.forms.AddonFormBasic):
 
     class Meta:
         model = Addon
-        fields = ('name', 'slug', 'summary', 'tags', 'description')
+        fields = ('name', 'slug', 'summary', 'tags', 'description',
+                  'homepage', 'support_email', 'support_url')
+
+
+class Step3WebappForm(Step3Form):
+    """Form to override certain fields for webapps"""
+    name = TransField(max_length=128)
+    homepage = TransField.adapt(forms.URLField)(required=False)
+    support_url = TransField.adapt(forms.URLField)(required=False)
+    support_email = TransField.adapt(forms.EmailField)(required=False)
 
 
 class PreviewForm(happyforms.ModelForm):
@@ -546,9 +696,10 @@ class PreviewForm(happyforms.ModelForm):
             super(PreviewForm, self).save(commit=commit)
             if self.cleaned_data['upload_hash']:
                 upload_hash = self.cleaned_data['upload_hash']
-                upload_path = path.path(settings.TMP_PATH) / 'preview' / upload_hash
-                tasks.resize_preview_store_size.delay(str(upload_path),
-                                self.instance, set_modified_on=[self.instance])
+                upload_path = os.path.join(settings.TMP_PATH, 'preview',
+                                           upload_hash)
+                tasks.resize_preview.delay(upload_path, self.instance,
+                                           set_modified_on=[self.instance])
 
     class Meta:
         model = Preview
@@ -589,37 +740,57 @@ class InlineRadioRenderer(forms.widgets.RadioFieldRenderer):
         return mark_safe(''.join(force_unicode(w) for w in self))
 
 
-class NewsletterForm(forms.Form):
-    def __init__(self, *args, **kwargs):
-        regions = kwargs.pop('regions')
-        super(NewsletterForm, self).__init__(*args, **kwargs)
-        self.fields['region'].choices = regions
-
-    email = forms.EmailField(
-        widget=EmailWidget(placeholder=_lazy(u'Your Email Address')))
-    region = forms.ChoiceField(initial='us')
-    format = forms.ChoiceField(
-        widget=forms.widgets.RadioSelect(renderer=InlineRadioRenderer),
-        choices=(('html', _lazy(u'HTML')),
-                 ('text', _lazy(u'Text'))))
-    policy = forms.BooleanField()
-
-
 class PackagerBasicForm(forms.Form):
-    name = forms.CharField()
-    description = forms.CharField(required=False, widget=forms.Textarea)
-    version = forms.CharField(max_length=32)
-    id = forms.CharField()
-    author_name = forms.CharField()
-    contributors = forms.CharField(required=False, widget=forms.Textarea)
+    name = forms.CharField(min_length=5, max_length=50,
+        help_text=_lazy(u'Give your add-on a name. The most successful '
+                        'add-ons give some indication of their function in '
+                        'their name.'))
+    description = forms.CharField(required=False, widget=forms.Textarea,
+        help_text=_lazy(u'Briefly describe your add-on in one sentence. '
+                        'This appears in the Add-ons Manager.'))
+    version = forms.CharField(max_length=32,
+        help_text=_lazy(u'Enter your initial version number. Depending on the '
+                         'number of releases and your preferences, this is '
+                         'usually 0.1 or 1.0'))
+    id = forms.CharField(
+        help_text=_lazy(u'Each add-on requires a unique ID in the form of a '
+                        'UUID or an email address, such as '
+                        'addon-name@developer.com. The email address does not '
+                        'have to be valid.'))
+    package_name = forms.CharField(min_length=5, max_length=50,
+        help_text=_lazy(u'The package name of your add-on used within the '
+                        'browser. This should be a short form of its name '
+                        '(for example, Test Extension might be '
+                        'test_extension).'))
+    author_name = forms.CharField(
+        help_text=_lazy(u'Enter the name of the person or entity to be '
+                        'listed as the author of this add-on.'))
+    contributors = forms.CharField(required=False, widget=forms.Textarea,
+       help_text=_lazy(u'Enter the names of any other contributors to this '
+                       'extension, one per line.'))
 
     def clean_name(self):
-        name_regex = re.compile('(mozilla|firefox)', re.I)
-
-        if name_regex.match(self.cleaned_data['name']):
+        name = self.cleaned_data['name']
+        addons.forms.clean_name(name)
+        name_regex = re.compile('(mozilla|firefox|thunderbird)', re.I)
+        if name_regex.match(name):
             raise forms.ValidationError(
                 _('Add-on names should not contain Mozilla trademarks.'))
-        return self.cleaned_data['name']
+        return name
+
+    def clean_package_name(self):
+        slug = self.cleaned_data['package_name']
+        if slugify(slug, ok='_', lower=False, delimiter='_') != slug:
+            raise forms.ValidationError(
+                _('Enter a valid package name consisting of letters, numbers, '
+                  'or underscores.'))
+        if Addon.objects.filter(slug=slug).exists():
+            raise forms.ValidationError(
+                _('This package name is already in use.'))
+        if BlacklistedSlug.blocked(slug):
+            raise forms.ValidationError(
+                _(u'The package name cannot be: %s.' % slug))
+        return slug
 
     def clean_id(self):
         id_regex = re.compile(
@@ -629,23 +800,24 @@ class PackagerBasicForm(forms.Form):
 
         if not id_regex.match(self.cleaned_data['id']):
             raise forms.ValidationError(
-                _('The add-on ID must be a UUID string or an email ' +
+                _('The add-on ID must be a UUID string or an email '
                   'address.'))
         return self.cleaned_data['id']
 
     def clean_version(self):
         if not VERSION_RE.match(self.cleaned_data['version']):
-            raise forms.ValidationError(
-                _('The version string is invalid.'))
+            raise forms.ValidationError(_('The version string is invalid.'))
         return self.cleaned_data['version']
 
 
 class PackagerCompatForm(forms.Form):
     enabled = forms.BooleanField(required=False)
     min_ver = forms.ModelChoiceField(AppVersion.objects.none(),
-                                     empty_label=None)
+                                     empty_label=None, required=False,
+                                     label=_lazy(u'Minimum'))
     max_ver = forms.ModelChoiceField(AppVersion.objects.none(),
-                                     empty_label=None)
+                                     empty_label=None, required=False,
+                                     label=_lazy(u'Maximum'))
 
     def __init__(self, *args, **kwargs):
         super(PackagerCompatForm, self).__init__(*args, **kwargs)
@@ -657,38 +829,58 @@ class PackagerCompatForm(forms.Form):
                                 .order_by('-version_int'))
 
         self.fields['enabled'].label = self.app.pretty
+        if self.app == amo.FIREFOX:
+            self.fields['enabled'].widget.attrs['checked'] = True
 
         # Don't allow version ranges as the minimum version.
         self.fields['min_ver'].queryset = qs.filter(~Q(version__contains='*'))
         self.fields['max_ver'].queryset = qs.all()
+
+        # Unreasonably hardcode a reasonable default minVersion.
+        if self.app in (amo.FIREFOX, amo.MOBILE, amo.THUNDERBIRD):
+            try:
+                self.fields['min_ver'].initial = qs.filter(
+                    version=amo.DEFAULT_MINVER)[0]
+            except (IndexError, AttributeError):
+                pass
+
+    def clean_min_ver(self):
+        if self.cleaned_data['enabled'] and not self.cleaned_data['min_ver']:
+            raise_required()
+        return self.cleaned_data['min_ver']
+
+    def clean_max_ver(self):
+        if self.cleaned_data['enabled'] and not self.cleaned_data['max_ver']:
+            raise_required()
+        return self.cleaned_data['max_ver']
 
     def clean(self):
         if self.errors:
             return
 
         data = self.cleaned_data
-        if not data['enabled']:
-            return data
 
-        min_ver = data['min_ver']
-        max_ver = data['max_ver']
-        if not (min_ver and max_ver):
-            raise forms.ValidationError(
-                    _('Invalid version range.'))
+        if data['enabled']:
+            min_ver = data['min_ver']
+            max_ver = data['max_ver']
+            if not (min_ver and max_ver):
+                raise forms.ValidationError(_('Invalid version range.'))
 
-        if min_ver.version_int > max_ver.version_int:
-            raise forms.ValidationError(
+            if min_ver.version_int > max_ver.version_int:
+                raise forms.ValidationError(
                     _('Min version must be less than Max version.'))
 
-        # Pass back the app name and GUID.
-        data['min_ver'] = str(min_ver)
-        data['max_ver'] = str(max_ver)
-        data['name'] = self.app.pretty
-        data['guid'] = self.app.guid
+            # Pass back the app name and GUID.
+            data['min_ver'] = str(min_ver)
+            data['max_ver'] = str(max_ver)
+            data['name'] = self.app.pretty
+            data['guid'] = self.app.guid
+
         return data
 
 
 class PackagerCompatBaseFormSet(BaseFormSet):
+
     def __init__(self, *args, **kw):
         super(PackagerCompatBaseFormSet, self).__init__(*args, **kw)
         self.initial = [{'application': a} for a in amo.APP_USAGE]
@@ -697,35 +889,129 @@ class PackagerCompatBaseFormSet(BaseFormSet):
     def clean(self):
         if any(self.errors):
             return
-
-        if not any(cf.cleaned_data.get('enabled') for cf in self.forms):
+        if (not self.forms or not
+            any(f.cleaned_data.get('enabled') for f in self.forms
+                if f.app == amo.FIREFOX)):
+            # L10n: {0} is Firefox.
             raise forms.ValidationError(
-                        _('At least one target application must be selected.'))
+                _(u'{0} is a required target application.')
+                .format(amo.FIREFOX.pretty))
+        return self.cleaned_data
+
 
 PackagerCompatFormSet = formset_factory(PackagerCompatForm,
-        formset=PackagerCompatBaseFormSet,
-        extra=0)
+    formset=PackagerCompatBaseFormSet, extra=0)
 
 
 class PackagerFeaturesForm(forms.Form):
     about_dialog = forms.BooleanField(
             required=False,
-            label=_lazy('About dialog'))
+            label=_lazy(u'About dialog'),
+            help_text=_lazy(u'Creates a standard About dialog for your '
+                            'extension'))
     preferences_dialog = forms.BooleanField(
             required=False,
-            label=_lazy('Preferences Dialog'))
+            label=_lazy(u'Preferences dialog'),
+            help_text=_lazy(u'Creates an example Preferences window'))
     toolbar = forms.BooleanField(
             required=False,
-            label=_lazy('Toolbar'))
+            label=_lazy(u'Toolbar'),
+            help_text=_lazy(u'Creates an example toolbar for your extension'))
     toolbar_button = forms.BooleanField(
             required=False,
-            label=_lazy('Toolbar button'))
+            label=_lazy(u'Toolbar button'),
+            help_text=_lazy(u'Creates an example button on the browser '
+                            'toolbar'))
     main_menu_command = forms.BooleanField(
             required=False,
-            label=_lazy('Main menu command'))
+            label=_lazy(u'Main menu command'),
+            help_text=_lazy(u'Creates an item on the Tools menu'))
     context_menu_command = forms.BooleanField(
             required=False,
-            label=_lazy('Context menu command'))
+            label=_lazy(u'Context menu command'),
+            help_text=_lazy(u'Creates a context menu item for images'))
     sidebar_support = forms.BooleanField(
             required=False,
-            label=_lazy('Sidebar support'))
+            label=_lazy(u'Sidebar support'),
+            help_text=_lazy(u'Creates an example sidebar panel'))
+
+
+class CheckCompatibilityForm(happyforms.Form):
+    application = forms.ChoiceField(
+                label=_lazy(u'Application'),
+                choices=[(a.id, a.pretty) for a in amo.APP_USAGE])
+    app_version = forms.ChoiceField(
+                label=_lazy(u'Version'),
+                choices=[('', _lazy(u'Select an application first'))])
+
+    def __init__(self, *args, **kw):
+        super(CheckCompatibilityForm, self).__init__(*args, **kw)
+        w = self.fields['application'].widget
+        # Get the URL after the urlconf has loaded.
+        w.attrs['data-url'] = reverse('devhub.compat_application_versions')
+
+    def version_choices_for_app_id(self, app_id):
+        versions = AppVersion.objects.filter(application__id=app_id)
+        return [(v.id, v.version) for v in versions]
+
+    def clean_application(self):
+        app_id = int(self.cleaned_data['application'])
+        app = Application.objects.get(pk=app_id)
+        self.cleaned_data['application'] = app
+        choices = self.version_choices_for_app_id(app_id)
+        self.fields['app_version'].choices = choices
+        return self.cleaned_data['application']
+
+    def clean_app_version(self):
+        v = self.cleaned_data['app_version']
+        return AppVersion.objects.get(pk=int(v))
+
+
+class NewManifestForm(happyforms.Form):
+    manifest = forms.URLField()
+
+    def clean_manifest(self):
+        manifest = self.cleaned_data['manifest']
+        verify_app_domain(manifest)
+        return manifest
+
+
+def DependencyFormSet(*args, **kw):
+    addon_parent = kw.pop('addon')
+
+    # Add-ons: Required add-ons cannot include apps nor personas.
+    # Apps:    Required apps cannot include any add-ons.
+    qs = Addon.objects.reviewed().exclude(id=addon_parent.id)
+    if addon_parent.is_webapp():
+        qs = qs.filter(type=amo.ADDON_WEBAPP)
+    else:
+        qs = qs.exclude(type__in=[amo.ADDON_PERSONA, amo.ADDON_WEBAPP])
+
+    class _Form(happyforms.ModelForm):
+        addon = forms.CharField(required=False, widget=forms.HiddenInput)
+        dependent_addon = forms.ModelChoiceField(qs, widget=forms.HiddenInput)
+
+        class Meta:
+            model = AddonDependency
+            fields = ('addon', 'dependent_addon')
+
+        def clean_addon(self):
+            return addon_parent
+
+    class _FormSet(BaseModelFormSet):
+
+        def clean(self):
+            if any(self.errors):
+                return
+            form_count = len([f for f in self.forms
+                              if not f.cleaned_data.get('DELETE', False)])
+            if form_count > 3:
+                if addon_parent.is_webapp():
+                    error = loc('There cannot be more than 3 required apps.')
+                else:
+                    error = _('There cannot be more than 3 required add-ons.')
+                raise forms.ValidationError(error)
+
+    FormSet = modelformset_factory(AddonDependency, formset=_FormSet,
+                                   form=_Form, extra=0, can_delete=True)
+    return FormSet(*args, **kw)

@@ -1,10 +1,16 @@
 from copy import copy
 from datetime import datetime
+import imghdr
 import json
+import os.path
 import string
 
+from django.conf import settings
+from django.core.urlresolvers import reverse
 from django.db import models
+from django.utils.safestring import mark_safe
 
+import bleach
 import commonware.log
 import jinja2
 from tower import ugettext as _
@@ -12,16 +18,21 @@ from uuidfield.fields import UUIDField
 
 import amo
 import amo.models
+from access.models import Group
 from addons.models import Addon
 from bandwagon.models import Collection
+from mkt.webapps.models import Webapp
 from reviews.models import Review
 from tags.models import Tag
-from translations.fields import TranslatedField
+from translations.fields import save_signal, TranslatedField
 from users.helpers import user_link
 from users.models import UserProfile
 from versions.models import Version
 
 log = commonware.log.getLogger('devhub')
+
+
+table_name = lambda n: n + settings.LOG_TABLE_SUFFIX
 
 
 class RssKey(models.Model):
@@ -64,10 +75,13 @@ class HubPromo(amo.models.ModelBase):
     def flush_urls(self):
         return ['*/developers*']
 
+models.signals.pre_save.connect(save_signal, sender=HubPromo,
+                                dispatch_uid='hubpromo_translations')
+
 
 class HubEvent(amo.models.ModelBase):
     name = models.CharField(max_length=255, default='')
-    url = models.URLField(max_length=255, default='', verify_exists=False)
+    url = models.URLField(max_length=255, default='')
     location = models.CharField(max_length=255, default='')
     date = models.DateField(default=datetime.now)
 
@@ -89,7 +103,21 @@ class AddonLog(amo.models.ModelBase):
     activity_log = models.ForeignKey('ActivityLog')
 
     class Meta:
-        db_table = 'log_activity_addon'
+        # This table is addons only and not in use by the marketplace (except
+        # for Themes).
+        db_table = table_name('log_activity_addon')
+        ordering = ('-created',)
+
+
+class AppLog(amo.models.ModelBase):
+    """
+    This table is for indexing the activity log by app.
+    """
+    addon = models.ForeignKey(Webapp)
+    activity_log = models.ForeignKey('ActivityLog')
+
+    class Meta:
+        db_table = table_name('log_activity_app')
         ordering = ('-created',)
 
 
@@ -101,7 +129,7 @@ class CommentLog(amo.models.ModelBase):
     comments = models.CharField(max_length=255)
 
     class Meta:
-        db_table = 'log_activity_comment'
+        db_table = table_name('log_activity_comment')
         ordering = ('-created',)
 
 
@@ -113,7 +141,7 @@ class VersionLog(amo.models.ModelBase):
     version = models.ForeignKey(Version)
 
     class Meta:
-        db_table = 'log_activity_version'
+        db_table = table_name('log_activity_version')
         ordering = ('-created',)
 
 
@@ -126,7 +154,19 @@ class UserLog(amo.models.ModelBase):
     user = models.ForeignKey(UserProfile)
 
     class Meta:
-        db_table = 'log_activity_user'
+        db_table = table_name('log_activity_user')
+        ordering = ('-created',)
+
+
+class GroupLog(amo.models.ModelBase):
+    """
+    This table is for indexing the activity log by access group.
+    """
+    activity_log = models.ForeignKey('ActivityLog')
+    group = models.ForeignKey(Group)
+
+    class Meta:
+        db_table = table_name('log_activity_group')
         ordering = ('-created',)
 
 
@@ -143,38 +183,76 @@ class ActivityLogManager(amo.models.ManagerBase):
         else:
             return self.none()
 
+    def for_apps(self, apps):
+        if isinstance(apps, Webapp):
+            apps = (apps,)
+
+        vals = (AppLog.objects.filter(addon__in=apps)
+                .values_list('activity_log', flat=True))
+
+        if vals:
+            return self.filter(pk__in=list(vals))
+        else:
+            return self.none()
+
     def for_version(self, version):
         vals = (VersionLog.objects.filter(version=version)
                 .values_list('activity_log', flat=True))
         return self.filter(pk__in=list(vals))
+
+    def for_group(self, group):
+        return self.filter(grouplog__group=group)
 
     def for_user(self, user):
         vals = (UserLog.objects.filter(user=user)
                     .values_list('activity_log', flat=True))
         return self.filter(pk__in=list(vals))
 
+    def for_developer(self):
+        return self.exclude(action__in=amo.LOG_ADMINS + amo.LOG_HIDE_DEVELOPER)
+
+    def admin_events(self):
+        return self.filter(action__in=amo.LOG_ADMINS)
+
     def editor_events(self):
         return self.filter(action__in=amo.LOG_EDITORS)
 
-    def review_queue(self):
-        return self.filter(action__in=amo.LOG_REVIEW_QUEUE)
+    def review_queue(self, webapp=False):
+        qs = self._by_type(webapp)
+        return (qs.filter(action__in=amo.LOG_REVIEW_QUEUE)
+                  .exclude(user__id=settings.TASK_USER_ID))
 
-    def total_reviews(self):
+    def total_reviews(self, webapp=False, theme=False):
+        qs = self._by_type(webapp)
         """Return the top users, and their # of reviews."""
-        return (self.values('user', 'user__display_name')
-                    .filter(action__in=amo.LOG_REVIEW_QUEUE)
-                    .annotate(approval_count=models.Count('id'))
-                    .order_by('-approval_count'))
+        return (qs.values('user', 'user__display_name', 'user__username')
+                  .filter(action__in=([amo.LOG.THEME_REVIEW.id] if theme
+                                      else amo.LOG_REVIEW_QUEUE))
+                  .exclude(user__id=settings.TASK_USER_ID)
+                  .annotate(approval_count=models.Count('id'))
+                  .order_by('-approval_count'))
 
-    def monthly_reviews(self):
+    def monthly_reviews(self, webapp=False, theme=False):
         """Return the top users for the month, and their # of reviews."""
+        qs = self._by_type(webapp)
         now = datetime.now()
         created_date = datetime(now.year, now.month, 1)
-        return (self.values('user', 'user__display_name')
-                    .filter(created__gte=created_date,
-                            action__in=amo.LOG_REVIEW_QUEUE)
-                    .annotate(approval_count=models.Count('id'))
-                    .order_by('-approval_count'))
+        return (qs.values('user', 'user__display_name', 'user__username')
+                  .filter(created__gte=created_date,
+                          action__in=([amo.LOG.THEME_REVIEW.id] if theme
+                                      else amo.LOG_REVIEW_QUEUE))
+                  .exclude(user__id=settings.TASK_USER_ID)
+                  .annotate(approval_count=models.Count('id'))
+                  .order_by('-approval_count'))
+
+    def _by_type(self, webapp=False):
+        qs = super(ActivityLogManager, self).get_query_set()
+        table = (table_name('log_activity_app') if webapp
+                 else table_name('log_activity_addon'))
+        return qs.extra(
+            tables=[table],
+            where=['%s.activity_log_id=%s.id'
+                   % (table, table_name('log_activity'))])
 
 
 class SafeFormatter(string.Formatter):
@@ -187,7 +265,7 @@ class SafeFormatter(string.Formatter):
 
 
 class ActivityLog(amo.models.ModelBase):
-    TYPES = [(value, key) for key, value in amo.LOG.items()]
+    TYPES = sorted([(value.id, key) for key, value in amo.LOG.items()])
     user = models.ForeignKey('users.UserProfile', null=True)
     action = models.SmallIntegerField(choices=TYPES, db_index=True)
     _arguments = models.TextField(blank=True, db_column='arguments')
@@ -195,6 +273,10 @@ class ActivityLog(amo.models.ModelBase):
     objects = ActivityLogManager()
 
     formatter = SafeFormatter()
+
+    class Meta:
+        db_table = table_name('log_activity')
+        ordering = ('-created',)
 
     def f(self, *args, **kw):
         """Calls SafeFormatter.format and returns a Markup string."""
@@ -206,7 +288,7 @@ class ActivityLog(amo.models.ModelBase):
 
         try:
             # d is a structure:
-            # ``d = [{'addons.addon'=12}, {'addons.addon'=1}, ... ]``
+            # ``d = [{'addons.addon':12}, {'addons.addon':1}, ... ]``
             d = json.loads(self._arguments)
         except:
             log.debug('unserializing data from addon_log failed: %s' % self.id)
@@ -216,12 +298,16 @@ class ActivityLog(amo.models.ModelBase):
         for item in d:
             # item has only one element.
             model_name, pk = item.items()[0]
-            if model_name in ('str', 'int'):
+            if model_name in ('str', 'int', 'null'):
                 objs.append(pk)
             else:
                 (app_label, model_name) = model_name.split('.')
                 model = models.loading.get_model(app_label, model_name)
-                objs.extend(model.objects.filter(pk=pk))
+                # Cope with soft deleted models.
+                if hasattr(model, 'with_deleted'):
+                    objs.extend(model.with_deleted.filter(pk=pk))
+                else:
+                    objs.extend(model.objects.filter(pk=pk))
 
         return objs
 
@@ -266,11 +352,10 @@ class ActivityLog(amo.models.ModelBase):
     def log(self):
         return amo.LOG_BY_ID[self.action]
 
-    # TODO(davedash): Support other types.
-    def to_string(self, type=None):
+    def to_string(self, type_=None):
         log_type = amo.LOG_BY_ID[self.action]
-        if type and hasattr(log_type, '%s_format' % type):
-            format = getattr(log_type, '%s_format' % type)
+        if type_ and hasattr(log_type, '%s_format' % type_):
+            format = getattr(log_type, '%s_format' % type_)
         else:
             format = log_type.format
 
@@ -282,6 +367,7 @@ class ActivityLog(amo.models.ModelBase):
         version = None
         collection = None
         tag = None
+        group = None
 
         for arg in self.arguments:
             if isinstance(arg, Addon) and not addon:
@@ -293,9 +379,12 @@ class ActivityLog(amo.models.ModelBase):
                                 arg.get_url_path(), _('Review'))
                 arguments.remove(arg)
             if isinstance(arg, Version) and not version:
-                text = _('Version %s') % arg.version
-                version = self.f(u'<a href="{0}">{1}</a>',
-                                 arg.get_url_path(), text)
+                text = _('Version {0}')
+                if settings.MARKETPLACE:
+                    version = self.f(text, arg.version)
+                else:
+                    version = self.f(u'<a href="{1}">%s</a>' % text,
+                                     arg.version, arg.get_url_path())
                 arguments.remove(arg)
             if isinstance(arg, Collection) and not collection:
                 collection = self.f(u'<a href="{0}">{1}</a>',
@@ -307,12 +396,15 @@ class ActivityLog(amo.models.ModelBase):
                                  arg.get_url_path(), arg.tag_text)
                 else:
                     tag = self.f('{0}', arg.tag_text)
+            if isinstance(arg, Group) and not group:
+                group = arg.name
+                arguments.remove(arg)
 
         user = user_link(self.user)
 
         try:
             kw = dict(addon=addon, review=review, version=version,
-                      collection=collection, tag=tag, user=user)
+                      collection=collection, tag=tag, user=user, group=group)
             return self.f(format, *arguments, **kw)
         except (AttributeError, KeyError, IndexError):
             log.warning('%d contains garbage data' % (self.id or 0))
@@ -324,9 +416,53 @@ class ActivityLog(amo.models.ModelBase):
     def __html__(self):
         return self
 
+
+class ActivityLogAttachment(amo.models.ModelBase):
+    """
+    Model for an attachment to an ActivityLog instance. Used by the Marketplace
+    reviewer tools, where reviewers can attach files to comments made during the
+    review process.
+    """
+    activity_log = models.ForeignKey('ActivityLog')
+    filepath = models.CharField(max_length=255)
+    description = models.CharField(max_length=255, blank=True)
+    mimetype = models.CharField(max_length=255, blank=True)
+
     class Meta:
-        db_table = 'log_activity'
-        ordering = ('-created',)
+        db_table = 'log_activity_attachment_mkt'
+        ordering = ('id',)
+
+    def get_absolute_url(self):
+        if settings.MARKETPLACE:
+            return reverse('reviewers.apps.review.attachment', args=[self.pk])
+        return None
+
+    def filename(self):
+        """
+        Returns the attachment's file name.
+        """
+        return os.path.basename(self.filepath)
+
+    def full_path(self):
+        """
+        Returns the full filesystem path of the attachment.
+        """
+        return os.path.join(settings.REVIEWER_ATTACHMENTS_PATH, self.filepath)
+
+    def display_name(self):
+        """
+        Returns a string describing the attachment suitable for front-end
+        display.
+        """
+        display = self.description if self.description else self.filename()
+        return mark_safe(bleach.clean(display))
+
+    def is_image(self):
+        """
+        Returns a boolean indicating whether the attached file is an image of a
+        format recognizable by the stdlib imghdr module.
+        """
+        return imghdr.what(self.full_path()) is not None
 
 
 # TODO(davedash): Remove after we finish the import.

@@ -1,15 +1,16 @@
 from datetime import datetime
+import json
 
 import jinja2
 
 import jingo
-from mock import patch, Mock, sentinel
+from mock import patch, Mock
 from nose.tools import eq_
 from pyquery import PyQuery
-import test_utils
 
 import amo
 import amo.models
+import amo.tests
 from amo.urlresolvers import reverse
 from addons.buttons import install_button, _install_button, big_install_button
 from addons.models import Addon
@@ -19,13 +20,15 @@ def setup():
     jingo.load_helpers()
 
 
-class ButtonTest(test_utils.TestCase):
+class ButtonTest(amo.tests.TestCase):
 
     def setUp(self):
         self.addon = Mock()
         self.addon.is_featured.return_value = False
-        self.addon.is_category_featured.return_value = False
         self.addon.is_unreviewed.return_value = False
+        self.addon.is_webapp.return_value = False
+        self.addon.is_premium.return_value = False
+        self.addon.can_be_purchased.return_value = False
         self.addon.has_eula = False
         self.addon.status = amo.STATUS_PUBLIC
         self.addon.id = 2
@@ -33,8 +36,11 @@ class ButtonTest(test_utils.TestCase):
         self.addon.type = amo.ADDON_EXTENSION
         self.addon.privacy_policy = None
         self.addon.backup_version = None
+        self.addon.app_slug = 'app_slug'
 
         self.version = v = Mock()
+        v.is_compatible = False
+        v.compat_override_app_versions.return_value = []
         v.is_unreviewed = False
         v.is_beta = False
         v.is_lite = False
@@ -81,6 +87,8 @@ class ButtonTest(test_utils.TestCase):
         file.get_url_path.return_value = 'xpi.url'
         file.eula_url.return_value = 'eula.url'
         file.status = amo.STATUS_PUBLIC
+        file.strict_compatibility = False
+        file.binary_components = False
         return file
 
 
@@ -175,7 +183,6 @@ class TestButton(ButtonTest):
         assert b.latest
         assert not b.featured
         assert not b.unreviewed
-        assert not b.self_hosted
         assert not b.show_eula
         assert not b.show_contrib
         assert not b.show_warning
@@ -204,11 +211,6 @@ class TestButton(ButtonTest):
         b = self.get_button(show_warning=False)
         assert not b.show_warning
 
-        self.setUp()
-        self.addon.status = amo.STATUS_LISTED
-        b = self.get_button()
-        assert b.show_warning
-
     def test_eula(self):
         self.addon.has_eula = True
         b = self.get_button()
@@ -231,11 +233,6 @@ class TestButton(ButtonTest):
         eq_(b.button_class, ['download'])
         eq_(b.install_class, ['featuredaddon'])
         eq_(b.install_text, 'Featured')
-
-    def test_category_featured(self):
-        self.addon.is_category_featured.return_value = True
-        b = self.get_button()
-        assert b.featured
 
     def test_unreviewed(self):
         # Throw featured in there to make sure it's ignored.
@@ -308,23 +305,6 @@ class TestButton(ButtonTest):
         eq_(b.button_class, ['caution'])
         eq_(b.install_class, ['lite'])
         eq_(b.install_text, 'Experimental')
-
-    def test_self_hosted(self):
-        # Throw featured in there to make sure it's ignored.
-        self.addon.is_featured.return_value = True
-        self.addon.homepage = sentinel.url
-        self.addon.status = amo.STATUS_LISTED
-
-        b = self.get_button()
-        assert not b.featured
-        assert b.self_hosted
-        eq_(b.button_class, ['go'])
-        eq_(b.install_class, ['selfhosted'])
-        eq_(b.install_text, 'Self Hosted')
-
-        links = b.links()
-        eq_(len(links), 1)
-        eq_(links[0].url, sentinel.url)
 
     def test_attrs(self):
         b = self.get_button()
@@ -413,7 +393,7 @@ class TestButton(ButtonTest):
 
     def test_link_with_invalid_file(self):
         self.version.all_files = self.platform_files
-        self.version.all_files[0].status = amo.STATUS_DISABLED
+        self.version.all_files[0].status = amo.STATUS_OBSOLETE
         links = self.get_button().links()
 
         expected_platforms = self.platforms[1:]
@@ -429,7 +409,7 @@ class TestButtonHtml(ButtonTest):
 
     def test_basics(self):
         a = self.addon
-        a.id = 'addon id'
+        a.id = '12345'
         a.icon_url = 'icon url'
         a.meet_the_dev_url.return_value = 'meet.dev'
         a.name = 'addon name'
@@ -443,9 +423,11 @@ class TestButtonHtml(ButtonTest):
         eq_(doc('.button').length, 1)
 
         install = doc('.install')
-        eq_('addon id', install.attr('data-addon'))
+        eq_('12345', install.attr('data-addon'))
         eq_('icon url', install.attr('data-icon'))
         eq_('meet.dev', install.attr('data-developers'))
+        eq_(reverse('addons.versions', args=[a.id]),
+            install.attr('data-versions'))
         eq_('addon name', install.attr('data-name'))
         eq_(None, install.attr('data-min'))
         eq_(None, install.attr('data-max'))
@@ -461,6 +443,20 @@ class TestButtonHtml(ButtonTest):
         eq_(['install', 'featuredaddon'],
             doc('.install').attr('class').split())
         eq_('Featured', doc('.install strong:last-child').text())
+
+    def test_premium(self):
+        self.addon.is_premium.return_value = True
+        self.addon.can_be_purchased.return_value = True
+        doc = self.render()
+
+        eq_(['install', 'premium'],
+            doc('.install').attr('class').split())
+
+    def test_premium_no_hash(self):
+        self.addon.is_premium.return_value = True
+        self.addon.can_be_purchased.return_value = True
+        doc = self.render()
+        eq_(doc('.button').attr('data-hash'), None)
 
     def test_unreviewed(self):
         self.addon.status = amo.STATUS_UNREVIEWED
@@ -491,14 +487,16 @@ class TestButtonHtml(ButtonTest):
         self.version.is_lite = True
         warning = self.render(detailed=True)('.install-shell .warning')
         eq_(warning.text(),
-            'This add-on has been preliminarily reviewed by Mozilla. Learn more')
+            'This add-on has been preliminarily reviewed by Mozilla.'
+            ' Learn more')
 
     def test_lite_and_nom_detailed_warning(self):
         self.addon.status = amo.STATUS_LITE_AND_NOMINATED
         self.version.is_lite = True
         warning = self.render(detailed=True)('.install-shell .warning')
         eq_(warning.text(),
-            'This add-on has been preliminarily reviewed by Mozilla. Learn more')
+            'This add-on has been preliminarily reviewed by Mozilla.'
+            ' Learn more')
 
     def test_multi_platform(self):
         self.version.all_files = self.platform_files
@@ -514,6 +512,8 @@ class TestButtonHtml(ButtonTest):
         compat.min.version = 'min version'
         compat.max.version = 'max version'
         self.version.compatible_apps = {amo.FIREFOX: compat}
+        self.version.is_compatible = (True, [])
+        self.version.is_compatible_app.return_value = True
         self.version.created = datetime.now()
         install = self.render()('.install')
         eq_('min version', install.attr('data-min'))
@@ -551,6 +551,63 @@ class TestButtonHtml(ButtonTest):
         flags_mock.return_value = xss = '<script src="x.js">'
         s = big_install_button(self.context, self.addon)
         assert xss not in s, s
+
+    def test_d2c_attrs(self):
+        compat = Mock()
+        compat.min.version = '4.0'
+        compat.max.version = '12.0'
+        self.version.compatible_apps = {amo.FIREFOX: compat}
+        self.version.is_compatible = (True, [])
+        self.version.is_compatible_app.return_value = True
+        doc = self.render(impala=True)
+        install_shell = doc('.install-shell')
+        install = doc('.install')
+        eq_(install.attr('data-min'), '4.0')
+        eq_(install.attr('data-max'), '12.0')
+        eq_(install.attr('data-is-compatible'), 'true')
+        eq_(install.attr('data-is-compatible-app'), 'true')
+        eq_(install.attr('data-compat-overrides'), '[]')
+        eq_(install_shell.find('.d2c-reasons-popup ul li').length, 0)
+        # Also test overrides.
+        override = [('10.0a1', '10.*')]
+        self.version.compat_override_app_versions.return_value = override
+        install = self.render(impala=True)('.install')
+        eq_(install.attr('data-is-compatible'), 'true')
+        eq_(install.attr('data-compat-overrides'), json.dumps(override))
+
+    def test_d2c_attrs_binary(self):
+        compat = Mock()
+        compat.min.version = '4.0'
+        compat.max.version = '12.0'
+        self.version.compatible_apps = {amo.FIREFOX: compat}
+        self.version.is_compatible = (False, ['Add-on binary components.'])
+        self.version.is_compatible_app.return_value = True
+        doc = self.render(impala=True)
+        install_shell = doc('.install-shell')
+        install = doc('.install')
+        eq_(install.attr('data-min'), '4.0')
+        eq_(install.attr('data-max'), '12.0')
+        eq_(install.attr('data-is-compatible'), 'false')
+        eq_(install.attr('data-is-compatible-app'), 'true')
+        eq_(install.attr('data-compat-overrides'), '[]')
+        eq_(install_shell.find('.d2c-reasons-popup ul li').length, 1)
+
+    def test_d2c_attrs_strict_and_binary(self):
+        compat = Mock()
+        compat.min.version = '4.0'
+        compat.max.version = '12.0'
+        self.version.compatible_apps = {amo.FIREFOX: compat}
+        self.version.is_compatible = (False, ['strict', 'binary'])
+        self.version.is_compatible_app.return_value = True
+        doc = self.render(impala=True)
+        install_shell = doc('.install-shell')
+        install = doc('.install')
+        eq_(install.attr('data-min'), '4.0')
+        eq_(install.attr('data-max'), '12.0')
+        eq_(install.attr('data-is-compatible'), 'false')
+        eq_(install.attr('data-is-compatible-app'), 'true')
+        eq_(install.attr('data-compat-overrides'), '[]')
+        eq_(install_shell.find('.d2c-reasons-popup ul li').length, 2)
 
 
 class TestBackup(ButtonTest):
@@ -597,7 +654,7 @@ class TestBackup(ButtonTest):
         eq_(doc('a')[1].get('href'), 'xpi.backup.url')
 
 
-class TestViews(test_utils.TestCase):
+class TestViews(amo.tests.TestCase):
     fixtures = ['addons/eula+contrib-addon', 'base/apps']
 
     def test_eula_with_contrib_roadblock(self):

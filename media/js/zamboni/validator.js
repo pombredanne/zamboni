@@ -6,7 +6,8 @@ $(document).ready(function() {
 
 });
 
-function initValidator() {
+function initValidator($doc) {
+    $doc = $doc || $(document);
 
     function inherit(OtherClass, constructor) {
         var NewClass = function() {
@@ -33,7 +34,7 @@ function initValidator() {
         this.$results = $('.results', $suite);
         this.app = options.app;
         this.testsWereRun = options.testsWereRun;
-        this.counts = {error: 0, warning: 0};
+        this.counts = {error: 0, warning: 0, notice: 0};
         this.tierId = tierId;
         this.$suite = $suite;
         this.$dom = $('#suite-results-tier-' + tierId, $suite);
@@ -46,7 +47,6 @@ function initValidator() {
     }
 
     ResultsTier.prototype.tallyMsgType = function(type_) {
-        if (type_ == 'notice') type_ = 'warning';
         this.counts[type_] += 1;
     };
 
@@ -57,7 +57,8 @@ function initValidator() {
     }
 
     ResultsTier.prototype.summarize = function() {
-        var sm = resultSummary(this.counts.error, this.counts.warning),
+        var sm = resultSummary(this.counts.error, this.counts.warning, this.counts.notice,
+                               this.testsWereRun),
             resultClass, summaryMsg;
         $('.result-summary', this.$dom).css('visibility', 'visible')
                                        .empty().text(sm);
@@ -89,7 +90,8 @@ function initValidator() {
     ResultsTier.prototype.topSummary = function() {
         var $top = $('[class~="test-tier"]' +
                      '[data-tier="' + this.tierId + '"]', this.$suite),
-            summaryMsg = resultSummary(this.counts.error, this.counts.warning);
+            summaryMsg = resultSummary(this.counts.error, this.counts.warning, this.counts.notice,
+                                       this.testsWereRun);
 
         $('.tier-summary', $top).text(summaryMsg);
         $top.removeClass('ajax-loading', 'tests-failed', 'tests-passed',
@@ -125,7 +127,7 @@ function initValidator() {
                            // L10n: Example: Changes in Firefox 5
                            gettext(format('Changes in {0} {1}',
                                           this.app.trans[this.app.guid],
-                                          this.app.version.substring(0,1)))));
+                                          /\d+/.exec(this.app.version)))));
             }
         } else if (!$title.text()) {
             $title.text(gettext('Tests'));
@@ -196,7 +198,7 @@ function initValidator() {
         msgDiv.attr('id', 'v-msg-' + msg.uid);
         msgDiv.addClass('msg-' + effectiveType);
         $('h5', msgDiv).html(msg.message);
-        if (typeof(msg.description) === 'undefined' || msg.description === '') {
+        if (!msg.description) {
             msg.description = [];
         } else if (typeof(msg.description) === 'string') {
             // Currently it can be either of these:
@@ -205,7 +207,10 @@ function initValidator() {
             msg.description = [msg.description];
         }
         $.each(msg.description, function(i, val) {
-            msgDiv.append(format('<p>{0}: {1}</p>', [prefix, val]));
+            msgDiv.append(
+                i == 0 ? format('<p>{0}: {1}</p>', [prefix, val]) :
+                         format('<p>{0}</p>', [val])
+            );
         });
         if (msg.description.length == 0) {
             msgDiv.append('<p>&nbsp;</p>');
@@ -321,10 +326,18 @@ function initValidator() {
         });
         vis.finish();
 
-        if (validation.errors > 0) {
-            summaryTxt = gettext('Add-on failed validation.');
+        if (z.apps) {
+            if (validation.errors > 0) {
+                summaryTxt = gettext('App failed validation.');
+            } else {
+                summaryTxt = gettext('App passed validation.');
+            }
         } else {
-            summaryTxt = gettext('Add-on passed validation.');
+            if (validation.errors > 0) {
+                summaryTxt = gettext('Add-on failed validation.');
+            } else {
+                summaryTxt = gettext('Add-on passed validation.');
+            }
         }
         $('.suite-summary span', suite).text(summaryTxt);
         $('.suite-summary', suite).show();
@@ -349,13 +362,18 @@ function initValidator() {
         }
     }
 
-    function resultSummary(numErrors, numWarnings) {
+    function resultSummary(numErrors, numWarnings, numNotices, testsWereRun) {
+        if (!testsWereRun) {
+            return gettext('These tests were not run.');
+        }
         // e.g. '1 error, 3 warnings'
         var errors = format(ngettext('{0} error', '{0} errors', numErrors),
                             [numErrors]),
             warnings = format(ngettext('{0} warning', '{0} warnings', numWarnings),
-                              [numWarnings]);
-        return format('{0}, {1}', errors, warnings);
+                              [numWarnings]),
+            notices = format(ngettext('{0} notice', '{0} notices', numNotices),
+                              [numNotices]);
+        return format('{0}, {1}, {2}', errors, warnings, notices);
     }
 
     function joinPaths(parts) {
@@ -412,7 +430,7 @@ function initValidator() {
         return lines;
     }
 
-    $('.addon-validator-suite').live('validate', function(e) {
+    $('.addon-validator-suite', $doc).bind('validate', function(e) {
         var el = $(this),
             url = el.attr('data-validateurl');
 
@@ -439,6 +457,7 @@ function initValidator() {
                         };
                     }
                     buildResults(el, data);
+                    el.trigger('success.validation');
                 },
                 error: function(XMLHttpRequest, textStatus, errorThrown) {
                     buildResults(el, {
@@ -453,6 +472,7 @@ function initValidator() {
                             }]
                         }
                     });
+                    el.trigger('badresponse.validation');
                 },
                 dataType: 'json'
         });

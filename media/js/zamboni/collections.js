@@ -19,6 +19,13 @@ var collections = {};
 
 (function() {
 
+var $c = $('h2.collection[data-collectionid]');
+if ($c.length) {
+    $c.find('img').click(function() {
+        window.location.hash = 'id=' + $c.attr('data-collectionid');
+    })
+}
+
 /** Helpers for recently_viewed. **/
 
 RECENTLY_VIEWED_LIMIT = 5;
@@ -159,7 +166,11 @@ collections.recently_viewed = function() {
             return [key, $.trim(add_recent.attr('data-' + key))];
         }));
         var current_uuid = o.uuid;
-        recentlyViewed.add(o);
+
+        // If the collection has a visible name.
+        if (o.disp) {
+            recentlyViewed.add(o);
+        }
     } else {
         var current_uuid = '';
     }
@@ -379,20 +390,20 @@ if (addon_ac.length) {
           }, response);
         },
         focus: function(event, ui) {
-          $('#addon-ac').val(ui.item.label);
+          $('#addon-ac').val(ui.item.name);
           return false;
         },
         select: function(event, ui) {
-            $('#addon-ac').val(ui.item.label).attr('data-id', ui.item.id)
+            $('#addon-ac').val(ui.item.name).attr('data-id', ui.item.id)
             .attr('data-icon', ui.item.icon);
             return false;
         }
-    }).data( "autocomplete" )._renderItem = function( ul, item ) {
-        if (!$("#addons-list input[value='" + item.id + "']").length) {
-            return $( "<li></li>" )
-                .data( "item.autocomplete", item )
-                .append( '<a><img src="' + item.icon + '"/>&nbsp;<span>' + item.label + "</span></a>" )
-                .appendTo( ul );
+    }).data('autocomplete')._renderItem = function(ul, item) {
+        if (!$("#addons-list input[value=" + item.id + "]").length) {
+            return $('<li>')
+                .data('item.autocomplete', item)
+                .append('<a><img src="' + item.icon + '">' + item.name + '</a>')
+                .appendTo(ul);
         }
     };
 }
@@ -463,17 +474,33 @@ if ($('body.collections-contributors')) {
         var email = $('#contributor-ac').val();
         var src = $('#contributor-ac').attr('data-src');
         var my_id = $('#contributor-ac').attr('data-owner');
+
+        var $contributor_error = $('#contributor-ac-error');
+        if (!email) {
+            $contributor_error.html(gettext('An email address is required.')).addClass('error');
+            return;
+        }
+
         $('#contributor-ac').addClass("ui-autocomplete-loading");
         // TODO(potch): Add a fancy failure case.
         $.get(src, {q: email}, function(d) {
 
             $('#contributor-ac').removeClass("ui-autocomplete-loading");
 
-            // TODO(potch): gently yell at user if they add someone twice.
-            if ($('input[name=contributor][value='+d.id+']').length == 0 &&
-                my_id != d.id) {
-                var str = user_row({id: d.id, name: d.name, email: email});
-                $('#contributor-ac-button').closest('tbody').append(str);
+            if (d.status) {
+                if ($('input[name=contributor][value='+d.id+']').length == 0 &&
+                    my_id != d.id) {
+                    var str = user_row({id: d.id, name: d.name, email: email});
+                    $('#contributor-ac-button').closest('tbody').append(str);
+
+                    $contributor_error.html('').removeClass('error');
+                } else if (d.id == my_id) {
+                    $contributor_error.html(gettext('You cannot add yourself as a contributor.')).addClass('error');
+                } else {
+                    $contributor_error.html(gettext('You have already added that user.')).addClass('error');
+                }
+            } else {
+                $contributor_error.html(d.message).addClass('error');
             }
 
             $('#contributor-ac').val('');

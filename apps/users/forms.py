@@ -4,6 +4,7 @@ from smtplib import SMTPException
 
 from django import forms
 from django.conf import settings
+from django.core.files.storage import default_storage as storage
 from django.contrib.auth import forms as auth_forms
 from django.forms.util import ErrorList
 
@@ -13,9 +14,11 @@ import happyforms
 from tower import ugettext as _, ugettext_lazy as _lazy
 
 import amo
-from amo.utils import slug_validator
-from .models import (UserProfile, BlacklistedUsername, BlacklistedEmailDomain,
-                     BlacklistedPassword, DjangoUser)
+from amo.utils import log_cef, slug_validator
+from .models import (UserProfile, UserNotification, BlacklistedUsername,
+                     BlacklistedEmailDomain, BlacklistedPassword, DjangoUser)
+from .widgets import NotificationsSelectMultiple
+import users.notifications as email
 from . import tasks
 
 log = commonware.log.getLogger('z.users')
@@ -49,10 +52,23 @@ class PasswordMixin:
 
 
 class AuthenticationForm(auth_forms.AuthenticationForm):
+    username = forms.CharField(max_length=50)
     rememberme = forms.BooleanField(required=False)
+    recaptcha = captcha.fields.ReCaptchaField()
+    recaptcha_shown = forms.BooleanField(widget=forms.HiddenInput,
+                                         required=False)
+
+    def __init__(self, request=None, use_recaptcha=False, *args, **kw):
+        super(AuthenticationForm, self).__init__(*args, **kw)
+        if not use_recaptcha or not settings.RECAPTCHA_PRIVATE_KEY:
+            del self.fields['recaptcha']
 
 
 class PasswordResetForm(auth_forms.PasswordResetForm):
+
+    def __init__(self, *args, **kwargs):
+        self.request = kwargs.pop('request', None)
+        super(PasswordResetForm, self).__init__(*args, **kwargs)
 
     def clean_email(self):
         email = self.cleaned_data['email']
@@ -68,6 +84,16 @@ class PasswordResetForm(auth_forms.PasswordResetForm):
     def save(self, **kw):
         for user in self.users_cache:
             log.info(u'Password reset email sent for user (%s)' % user)
+            if user.needs_tougher_password:
+                log_cef('Password Reset', 5, self.request,
+                        username=user,
+                        signature='PASSWORDRESET',
+                        msg='Privileged user requested password reset')
+            else:
+                log_cef('Password Reset', 5, self.request,
+                        username=user,
+                        signature='PASSWORDRESET',
+                        msg='User requested password reset')
         try:
             # Django calls send_mail() directly and has no option to pass
             # in fail_silently, so we have to catch the SMTP error ourselves
@@ -77,12 +103,13 @@ class PasswordResetForm(auth_forms.PasswordResetForm):
 
 
 class SetPasswordForm(auth_forms.SetPasswordForm, PasswordMixin):
-    new_password1 = forms.CharField(label=_("New password"),
+    new_password1 = forms.CharField(label=_lazy(u'New password'),
                                     min_length=PasswordMixin.min_length,
                                     error_messages=PasswordMixin.error_msg,
                                     widget=PasswordMixin.widget())
 
     def __init__(self, *args, **kwargs):
+        self.request = kwargs.pop('request', None)
         super(SetPasswordForm, self).__init__(*args, **kwargs)
         # We store our password in the users table, not auth_user like
         # Django expects.
@@ -93,8 +120,12 @@ class SetPasswordForm(auth_forms.SetPasswordForm, PasswordMixin):
         return self.clean_password(field='new_password1', instance='user')
 
     def save(self, **kw):
+        # Three different loggers? :(
         amo.log(amo.LOG.CHANGE_PASSWORD, user=self.user)
         log.info(u'User (%s) changed password with reset form' % self.user)
+        log_cef('Password Changed', 5, self.request,
+                username=self.user.username, signature='PASSWORDCHANGED',
+                msg='User changed password')
         super(SetPasswordForm, self).save(**kw)
 
 
@@ -123,13 +154,37 @@ class UserDeleteForm(forms.Form):
             raise forms.ValidationError("")
 
 
-class UserRegisterForm(happyforms.ModelForm, PasswordMixin):
+class UsernameMixin:
+
+    def clean_username(self):
+        name = self.cleaned_data['username']
+        slug_validator(name, lower=False,
+            message=_('Enter a valid username consisting of letters, numbers, '
+                      'underscores or hyphens.'))
+        if BlacklistedUsername.blocked(name):
+            raise forms.ValidationError(_('This username cannot be used.'))
+
+        # FIXME: Bug 858452. Remove this check when collation of the username
+        # column is changed to case insensitive.
+        if (UserProfile.objects.exclude(id=self.instance.id)
+                       .filter(username__iexact=name).exists()):
+            raise forms.ValidationError(_('This username is already in use.'))
+        return name
+
+
+class UserRegisterForm(happyforms.ModelForm, UsernameMixin, PasswordMixin):
     """
     For registering users.  We're not building off
     d.contrib.auth.forms.UserCreationForm because it doesn't do a lot of the
     details here, so we'd have to rewrite most of it anyway.
     """
-
+    username = forms.CharField(max_length=50)
+    display_name = forms.CharField(label=_lazy(u'Display Name'), max_length=50,
+                                   required=False)
+    location = forms.CharField(label=_lazy(u'Location'), max_length=100,
+                               required=False)
+    occupation = forms.CharField(label=_lazy(u'Occupation'), max_length=100,
+                                 required=False)
     password = forms.CharField(max_length=255,
                                min_length=PasswordMixin.min_length,
                                error_messages=PasswordMixin.error_msg,
@@ -138,9 +193,13 @@ class UserRegisterForm(happyforms.ModelForm, PasswordMixin):
     password2 = forms.CharField(max_length=255,
                                 widget=forms.PasswordInput(render_value=False))
     recaptcha = captcha.fields.ReCaptchaField()
+    homepage = forms.URLField(label=_lazy(u'Homepage'), required=False)
 
     class Meta:
         model = UserProfile
+        fields = ('username', 'display_name', 'location', 'occupation',
+                  'password', 'password2', 'recaptcha', 'homepage', 'email',
+                  'emailhidden')
 
     def __init__(self, *args, **kwargs):
         super(UserRegisterForm, self).__init__(*args, **kwargs)
@@ -160,13 +219,6 @@ class UserRegisterForm(happyforms.ModelForm, PasswordMixin):
                                           'different provider to complete '
                                           'your registration.'))
         return self.cleaned_data['email']
-
-    def clean_username(self):
-        name = self.cleaned_data['username']
-        slug_validator(name, lower=False)
-        if BlacklistedUsername.blocked(name):
-            raise forms.ValidationError(_('This username is invalid.'))
-        return name
 
     def clean(self):
         super(UserRegisterForm, self).clean()
@@ -200,9 +252,39 @@ class UserEditForm(UserRegisterForm, PasswordMixin):
 
     photo = forms.FileField(label=_lazy(u'Profile Photo'), required=False)
 
+    notifications = forms.MultipleChoiceField(
+            choices=[],
+            widget=NotificationsSelectMultiple,
+            initial=email.NOTIFICATIONS_DEFAULT,
+            required=False)
+
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop('request', None)
         super(UserEditForm, self).__init__(*args, **kwargs)
+
+        if self.instance:
+            default = dict((i, n.default_checked) for i, n
+                           in email.NOTIFICATIONS_BY_ID.items())
+            user = dict((n.notification_id, n.enabled) for n
+                        in self.instance.notifications.all())
+            default.update(user)
+
+            # Add choices to Notification.
+            choices = email.NOTIFICATIONS_CHOICES
+            if not self.instance.is_developer:
+                choices = email.NOTIFICATIONS_CHOICES_NOT_DEV
+
+            # Append a "NEW" message to new notification options.
+            saved = self.instance.notifications.values_list('notification_id',
+                                                            flat=True)
+            self.choices_status = {}
+            for idx, label in choices:
+                self.choices_status[idx] = idx not in saved
+
+            self.fields['notifications'].choices = choices
+            self.fields['notifications'].initial = [i for i, v
+                                                    in default.items() if v]
+            self.fields['notifications'].widget.form_instance = self
 
         # TODO: We should inherit from a base form not UserRegisterForm
         if self.fields.get('recaptcha'):
@@ -213,7 +295,6 @@ class UserEditForm(UserRegisterForm, PasswordMixin):
         exclude = ('password', 'picture_type')
 
     def clean(self):
-
         data = self.cleaned_data
         amouser = self.request.user.get_profile()
 
@@ -247,7 +328,7 @@ class UserEditForm(UserRegisterForm, PasswordMixin):
 
         return photo
 
-    def save(self):
+    def save(self, log_for_developer=True):
         u = super(UserEditForm, self).save(commit=False)
         data = self.cleaned_data
         photo = data['photo']
@@ -255,26 +336,86 @@ class UserEditForm(UserRegisterForm, PasswordMixin):
             u.picture_type = 'image/png'
             tmp_destination = u.picture_path + '__unconverted'
 
-            if not os.path.exists(u.picture_dir):
-                os.makedirs(u.picture_dir)
+            with storage.open(tmp_destination, 'wb') as fh:
+                for chunk in photo.chunks():
+                    fh.write(chunk)
 
-            fh = open(tmp_destination, 'w')
-            for chunk in photo.chunks():
-                fh.write(chunk)
-
-            fh.close()
             tasks.resize_photo.delay(tmp_destination, u.picture_path,
                                      set_modified_on=[u])
 
         if data['password']:
             u.set_password(data['password'])
-            amo.log(amo.LOG.CHANGE_PASSWORD)
-            log.info(u'User (%s) changed their password' % u)
+            log_cef('Password Changed', 5, self.request, username=u.username,
+                    signature='PASSWORDCHANGED', msg='User changed password')
+            if log_for_developer:
+                amo.log(amo.LOG.CHANGE_PASSWORD)
+                log.info(u'User (%s) changed their password' % u)
+
+        for (i, n) in email.NOTIFICATIONS_BY_ID.items():
+            enabled = n.mandatory or (str(i) in data['notifications'])
+            UserNotification.update_or_create(user=u, notification_id=i,
+                    update={'enabled': enabled})
 
         log.debug(u'User (%s) updated their profile' % u)
 
         u.save()
         return u
+
+
+class BaseAdminUserEditForm(object):
+
+    def changed_fields(self):
+        """Returns changed_data ignoring these fields."""
+        return (set(self.changed_data) -
+                set(['admin_log', 'notifications', 'photo',
+                     'password', 'password2', 'oldpassword']))
+
+    def changes(self):
+        """A dictionary of changed fields, old, new. Hides password."""
+        details = dict([(k, (self.initial[k], self.cleaned_data[k]))
+                           for k in self.changed_fields()])
+        if 'password' in self.changed_data:
+            details['password'] = ['****', '****']
+        return details
+
+    def clean_anonymize(self):
+        if (self.cleaned_data['anonymize'] and
+            self.changed_fields() != set(['anonymize'])):
+            raise forms.ValidationError(_('To anonymize, enter a reason for'
+                                          ' the change but do not change any'
+                                          ' other field.'))
+        return self.cleaned_data['anonymize']
+
+
+class AdminUserEditForm(BaseAdminUserEditForm, UserEditForm):
+    """This is the form used by admins to edit users' info."""
+    admin_log = forms.CharField(required=True, label='Reason for change',
+                                widget=forms.Textarea(attrs={'rows': 4}))
+    confirmationcode = forms.CharField(required=False, max_length=255,
+                                       label='Confirmation code')
+    notes = forms.CharField(required=False, label='Notes',
+                            widget=forms.Textarea(attrs={'rows': 4}))
+    anonymize = forms.BooleanField(required=False)
+
+    def save(self, *args, **kw):
+        profile = super(AdminUserEditForm, self).save(log_for_developer=False)
+        if self.cleaned_data['anonymize']:
+            amo.log(amo.LOG.ADMIN_USER_ANONYMIZED, self.instance,
+                    self.cleaned_data['admin_log'])
+            profile.anonymize()  # This also logs
+        else:
+            amo.log(amo.LOG.ADMIN_USER_EDITED, self.instance,
+                    self.cleaned_data['admin_log'], details=self.changes())
+            log.info('Admin edit user: %s changed fields: %s' %
+                     (self.instance, self.changed_fields()))
+            if 'password' in self.changes():
+                log_cef('Password Changed', 5, self.request,
+                        username=self.instance.username,
+                        signature='PASSWORDRESET',
+                        msg='Admin requested password reset',
+                        cs1=self.request.amo_user.username,
+                        cs1Label='AdminName')
+        return profile
 
 
 class BlacklistedUsernameAddForm(forms.Form):
@@ -315,3 +456,11 @@ class BlacklistedEmailDomainAddForm(forms.Form):
             self._errors['domains'] = ErrorList([msg])
 
         return data
+
+
+class ContactForm(happyforms.Form):
+    text = forms.CharField(widget=forms.Textarea())
+
+
+class RemoveForm(happyforms.Form):
+    remove = forms.BooleanField()

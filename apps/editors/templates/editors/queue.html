@@ -6,23 +6,12 @@
 
 {% block content %}
 
+<div id="reviewers-score-bar" class="c">
+  {{ reviewers_score_bar(types=point_types) }}
+</div>
+
 <ul class="tabnav">
-  {% for this, loc, text in (('nominated', 'queue_nominated',
-                              ngettext('Full Review ({0})',
-                                       'Full Reviews ({0})',
-                                       queue_counts['nominated'])|f(queue_counts['nominated'])),
-                             ('pending', 'queue_pending',
-                              ngettext('Pending Update ({0})',
-                                       'Pending Updates ({0})',
-                                       queue_counts['pending'])|f(queue_counts['pending'])),
-                             ('prelim', 'queue_prelim',
-                              ngettext('Preliminary Review ({0})',
-                                       'Preliminary Reviews ({0})',
-                                       queue_counts['prelim'])|f(queue_counts['prelim'])),
-                             ('moderated', 'queue_moderated',
-                              ngettext('Moderated Review ({0})',
-                                       'Moderated Reviews ({0})',
-                                       queue_counts['moderated'])|f(queue_counts['moderated']))) %}
+  {% for this, loc, text in queue_tabnav() %}
   <li class="{% if tab==this %}selected{% endif %}"><a href="{{ url('editors.%s' % loc) }}">{{ text }}</a></li>
   {% endfor %}
 </ul>
@@ -30,17 +19,17 @@
 <div class="queue-outer">
   <div class="queue-inner">
     {% if search_form %}
-    <div id="queue-search">
+    <div class="queue-search">
       <form action="" method="get">
         {{ search_form['searching'] }}
         <label for="id_text_query">{{ search_form['text_query'].label }}</label>
         {{ search_form['text_query'] }}
         <button type="submit">{{ _('Search') }}</button>
-        <a id="toggle-queue-search" href="#">{{ _('Advanced Search') }}</a>
+        <a class="toggle-queue-search" href="#">{{ _('Advanced Search') }}</a>
         {% if search_form.data and search_form.data['searching'] %}
-          (<a id="clear-queue-search" href="{{ url('editors.queue_%s' % tab) }}">{{ _('clear search') }}</a>)
+          (<a class="clear-queue-search" href="{{ url('editors.queue_%s' % tab) }}">{{ _('clear search') }}</a>)
         {% endif %}
-        <div id="advanced-search">
+        <div class="advanced-search">
           <div class="column1">
             <div class="form-row">
               {% for elem in ('admin_review', 'application_id',
@@ -85,7 +74,7 @@
           {{ csrf() }}
           {{ reviews_formset.management_form }}
           {% for review in reviews_formset.forms %}
-          <div class="review-flagged">
+          <div class="review-flagged{%- if not check_review_delete(review.instance) %} disabled{% endif %}">
             <div class="review-flagged-actions">
               {{ review.errors }}
               <strong>{{ _('Moderation actions:') }}</strong>
@@ -145,7 +134,7 @@
                 {% endif %}
                 <th class="{{ cls }}">
                   {% if column.sortable %}
-                    <a href="?sort={{ column.name_toggled }}" class="sort-icon ed-sprite-sort-{{ sprite }}">
+                    <a href="{{ request.get_full_path()|urlparams(sort=column.name_toggled) }}" class="sort-icon ed-sprite-sort-{{ sprite }}">
                       {{ column }}
                     </a>
                   {% else %}
@@ -162,6 +151,11 @@
             {% for value in row %}
               <td>{{ value|xssafe }}</td>
             {% endfor %}
+            <td>
+              <div class="addon-version-notes">
+                <a href="#" class="ed-sprite-notes app-icon" title="{{ _('Version Notes / Notes for Reviewer') }}">&nbsp;</a>
+              </div>
+            </td>
             </tr>
           {% endfor %}
         </tbody>
@@ -180,9 +174,11 @@
 
 <div id="helpfulLinks">
 {{ _('Helpful Links:') }}
-<a href="{{ remora_url('/pages/policy') }}" >{{ _('Add-on Policy') }}</a>
+<a href="{{ url('devhub.docs', doc_name='policies') }}">{{ _('Add-on Policy') }}</a>
 |
 <a href="http://wiki.mozilla.org/Update:Editors">{{ _("Editors' Guide") }}</a>
 </div>
+
+<div class="popup" id="popup-notes" data-url="{{ url('editors.queue_version_notes') }}"></div>
 
 {% endblock %}

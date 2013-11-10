@@ -6,7 +6,7 @@
             "localized_string_clean": null,
             "created": "2009-10-20 21:58:03",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2009-10-20 21:58:03",
             "id": 590130,
             "localized_string": "Personas are lightweight, easy-to-install and easy-to-change \"skins\" for your Firefox web browser."
         }
@@ -18,7 +18,7 @@
             "localized_string_clean": null,
             "created": "2009-10-20 21:58:03",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2009-10-20 21:58:03",
             "id": 590129,
             "localized_string": "Personas"
         }
@@ -30,7 +30,7 @@
             "localized_string_clean": null,
             "created": "2009-10-20 21:58:03",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2009-10-20 21:58:03",
             "id": 590128,
             "localized_string": "Persona"
         }
@@ -42,7 +42,7 @@
             "localized_string_clean": "Persona Description clean",
             "created": "2009-10-20 21:58:25",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2009-10-20 21:58:25",
             "id": 590879,
             "localized_string": "Persona Description"
         }
@@ -65,7 +65,7 @@
             "localized_string_clean": null,
             "created": "2009-10-20 21:58:25",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2009-10-20 21:58:25",
             "id": 590878,
             "localized_string": "My Persona"
         }
@@ -98,7 +98,6 @@
             "the_future": null,
             "trusted": 0,
             "locale_disambiguation": null,
-            "binary": 0,
             "guid": null,
             "weekly_downloads": 0,
             "support_url": null,
@@ -108,7 +107,6 @@
             "average_daily_users": 55,
             "bayesian_rating": 0.0,
             "share_count": 0,
-            "get_satisfaction_company": null,
             "homepage": null,
             "support_email": null,
             "public_stats": 0,
@@ -122,7 +120,6 @@
             "admin_review": 0,
             "external_software": 0,
             "highest_status": 0,
-            "get_satisfaction_product": null,
             "name": 590878,
             "created": "2009-03-30 23:17:40",
             "type": 9,
@@ -140,7 +137,7 @@
         "pk": 559,
         "model": "addons.persona",
         "fields": {
-            "display_username": "My Persona",
+            "display_username": "persona_author",
             "popularity": 10,
             "license": null,
             "footer": "BCBG_Persona_footer2.png",

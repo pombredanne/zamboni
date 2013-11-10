@@ -14,6 +14,7 @@
         "fields": {
             "localized_string": "bunch of crap",
             "created": "2009-05-11 22:06:47",
+            "modified": "2009-05-11 22:06:47",
             "locale": "en-US",
             "id": 379597,
             "localized_string_clean": null
@@ -132,7 +133,18 @@
             "localized_string": "Fix for an important bug",
             "created": "2009-10-21 10:02:38",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2009-10-21 10:02:38",
+            "id": 650353
+        }
+    },
+    {
+        "pk": 697693,
+        "model": "translations.translation",
+        "fields": {
+            "localized_string": "Quelque chose en français.\n\nQuelque chose d'autre.",
+            "created": "2009-10-21 10:02:38",
+            "locale": "fr",
+            "modified": "2009-10-21 10:02:38",
             "id": 650353
         }
     },
@@ -140,7 +152,6 @@
         "pk": 1,
         "model": "files.platform",
         "fields": {
-            "icontype": "",
             "modified": "2008-04-07 08:16:55",
             "created": "2007-03-05 13:09:27"
         }
@@ -149,7 +160,6 @@
         "pk": 2,
         "model": "files.platform",
         "fields": {
-            "icontype": "",
             "modified": "2008-04-07 08:16:55",
             "created": "2007-03-05 13:09:27"
         }
@@ -160,6 +170,7 @@
         "fields": {
             "slug": "a3615",
             "_current_version": 81551,
+            "_latest_version": 81551,
             "dev_agreement": true,
             "eula": 42021,
             "last_updated": "2009-10-21 09:58:40",
@@ -173,17 +184,15 @@
             "trusted": true,
             "description": 15002,
             "locale_disambiguation": null,
-            "binary": false,
             "the_future": null,
             "weekly_downloads": 13053,
             "support_url": 149594,
             "paypal_id": "",
             "average_rating": "3.03",
             "wants_contributions": false,
-            "average_daily_users": 497063,
+            "average_daily_users": 6000000,
             "bayesian_rating": 3.0784799999999999,
             "share_count": 8,
-            "get_satisfaction_company": null,
             "homepage": 15001,
             "support_email": 149593,
             "public_stats": false,
@@ -197,7 +206,6 @@
             "admin_review": false,
             "external_software": false,
             "highest_status": 4,
-            "get_satisfaction_product": null,
             "name": 15000,
             "created": "2006-10-23 12:57:41",
             "type": 1,
@@ -245,7 +253,7 @@
             "filename": "delicious_bookmarks-2.1.072-fx.xpi",
             "platform": 1,
             "version": 81551,
-            "size": 379,
+            "size": 388096,
             "datestatuschanged": "2009-10-21 09:58:40"
         }
     },
@@ -271,7 +279,6 @@
         "pk": 55021,
         "model": "users.userprofile",
         "fields": {
-            "sandboxshown": true,
             "display_collections_fav": false,
             "display_collections": false,
             "averagerating": "3.11",
@@ -283,13 +290,10 @@
             "email": "del@icio.us",
             "location": "",
             "bio": null,
-            "firstname": "Yahoo!",
             "deleted": false,
-            "lastname": "Inc.",
             "emailhidden": true,
             "user": 55021,
             "password": "sha512$7b5436061f8c0902088c292c057be69fdb17312e2f71607c9c51641f5d876522$08d1d370d89e2ae92755fd03464a7276ca607c431d04a52d659f7a184f3f9918073637d82fc88981c7099c7c46a1137b9fdeb675304eb98801038905a9ee0600",
-            "nickname": "55021",
             "username": "55021",
             "display_name": "55021 \u0627\u0644\u062a\u0637\u0628",
             "resetcode_expires": null,
@@ -297,7 +301,8 @@
             "created": "2007-03-05 13:09:56",
             "notes": null,
             "modified": "2010-05-19 16:41:22",
-            "notifyevents": true
+            "notifyevents": true,
+            "read_dev_agreement": "2012-08-20 00:00:00"
         }
     },
     {
@@ -308,7 +313,18 @@
             "version": "3.7a1pre",
             "created": "2007-03-05 13:09:26",
             "version_int": 3070000001000,
-            "modified": null
+            "modified": "2007-03-05 13:09:26"
+        }
+    },
+    {
+        "pk": 364,
+        "model": "applications.appversion",
+        "fields": {
+            "application": 1,
+            "version": "4.0",
+            "created": "2007-03-05 13:09:26",
+            "version_int": 4000000200100,
+            "modified": "2007-03-05 13:09:26"
         }
     },
     {
@@ -319,7 +335,7 @@
             "version": "2.0",
             "created": "2007-03-05 13:09:26",
             "version_int": 2000000200100,
-            "modified": null
+            "modified": "2007-03-05 13:09:26"
         }
     },
     {
@@ -340,7 +356,7 @@
             "application": 1,
             "version": 81551,
             "min": 97,
-            "max": 282
+            "max": 364
         }
     },
     {
@@ -349,6 +365,7 @@
         "fields": {
             "localized_string": "Bookmarks",
             "created": "2009-05-11 22:06:47",
+            "modified": "2009-05-11 22:06:47",
             "locale": "en-US",
             "id": 2222,
             "localized_string_clean": null
@@ -360,6 +377,7 @@
         "fields": {
             "localized_string": "Feeds",
             "created": "2009-05-11 22:06:47",
+            "modified": "2009-05-11 22:06:47",
             "locale": "en-US",
             "id": 2323,
             "localized_string_clean": null
@@ -371,6 +389,7 @@
         "fields": {
             "localized_string": "Social",
             "created": "2009-05-11 22:06:47",
+            "modified": "2009-05-11 22:06:47",
             "locale": "en-US",
             "id": 2424,
             "localized_string_clean": null
@@ -381,7 +400,6 @@
         "model": "addons.category",
         "fields": {
             "count": 901,
-            "description": null,
             "weight": 0,
             "created": "2007-03-05 13:09:27",
             "modified": "2010-02-23 19:17:32",
@@ -396,7 +414,6 @@
         "model": "addons.category",
         "fields": {
             "count": 901,
-            "description": null,
             "weight": 0,
             "created": "2007-03-05 13:09:27",
             "modified": "2010-02-23 19:17:32",
@@ -411,7 +428,6 @@
         "model": "addons.category",
         "fields": {
             "count": 901,
-            "description": null,
             "weight": 0,
             "created": "2007-03-05 13:09:27",
             "modified": "2010-02-23 19:17:32",

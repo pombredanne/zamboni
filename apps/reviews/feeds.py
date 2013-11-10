@@ -3,8 +3,7 @@ from django.shortcuts import get_object_or_404
 
 from tower import ugettext as _
 
-from amo.urlresolvers import reverse
-from amo.helpers import absolutify, url
+from amo.helpers import absolutify, shared_url, url
 
 from addons.models import Addon, Review
 
@@ -15,10 +14,13 @@ class ReviewsRss(Feed):
 
     addon = None
 
-    def get_object(self, request, addon_id):
+    def get_object(self, request, addon_id=None, app_slug=None):
         """Get the Addon for which we are about to output
            the RSS feed of it Review"""
-        self.addon = get_object_or_404(Addon.objects.id_or_slug(addon_id))
+        if app_slug:
+            self.addon = get_object_or_404(Addon, app_slug=app_slug)
+        else:
+            self.addon = get_object_or_404(Addon.objects.id_or_slug(addon_id))
         return self.addon
 
     def title(self, addon):
@@ -40,8 +42,8 @@ class ReviewsRss(Feed):
 
     def item_link(self, review):
         """Link for a particular review (<item><link>)"""
-        return absolutify(reverse('reviews.detail', args=[self.addon.slug,
-                                                          review.id]))
+        return absolutify(shared_url('reviews.detail', self.addon,
+                                     review.id))
 
     def item_title(self, review):
         """Title for particular review (<item><title>)"""
@@ -60,16 +62,12 @@ class ReviewsRss(Feed):
 
     def item_guid(self, review):
         """Guid for a particuar review  (<item><guid>)"""
-        guid_url = absolutify(reverse('reviews.list', args=[self.addon.slug]))
+        guid_url = absolutify(shared_url('reviews.list', self.addon))
         return guid_url + urllib.quote(str(review.id))
 
     def item_author_name(self, review):
         """Author for a particuar review  (<item><dc:creator>)"""
-        user = review.user
-        if user.username:
-            return user.username.strip()
-        else:
-            return '%s %s' % (user.firstname.strip(), user.lastname.strip())
+        return review.user.name
 
     def item_pubdate(self, review):
         """Pubdate for a particuar review  (<item><pubDate>)"""

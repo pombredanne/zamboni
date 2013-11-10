@@ -37,22 +37,18 @@ def update_denorm(*pairs, **kw):
 
 @task
 def addon_review_aggregates(*addons, **kw):
-    log.info('[%s@%s] Updating total reviews.' %
+    log.info('[%s@%s] Updating total reviews and average ratings.' %
              (len(addons), addon_review_aggregates.rate_limit))
     using = kw.get('using')
-    stats = dict(Review.objects.latest().filter(addon__in=addons)
-                 .using(using).values_list('addon').annotate(Count('addon')))
-    for addon in addons:
-        count = stats.get(addon, 0)
-        Addon.objects.filter(id=addon).update(total_reviews=count)
-
-    log.info('[%s@%s] Updating average ratings.' %
-             (len(addons), addon_review_aggregates.rate_limit))
-    stats = dict(Review.objects.valid().filter(addon__in=addons)
-                 .using(using).values_list('addon').annotate(Avg('rating')))
-    for addon in addons:
-        avg = stats.get(addon, 0)
-        Addon.objects.filter(id=addon).update(average_rating=avg)
+    addon_objs = list(Addon.objects.filter(pk__in=addons))
+    stats = dict((x[0], x[1:]) for x in
+                 Review.objects.valid().no_cache().using(using)
+                 .filter(addon__in=addons, is_latest=True)
+                 .values_list('addon')
+                 .annotate(Avg('rating'), Count('addon')))
+    for addon in addon_objs:
+        rating, reviews = stats.get(addon.id, [0, 0])
+        addon.update(total_reviews=reviews, average_rating=rating)
 
     # Delay bayesian calculations to avoid slave lag.
     addon_bayesian_rating.apply_async(args=addons, countdown=5)
@@ -66,8 +62,15 @@ def addon_bayesian_rating(*addons, **kw):
     f = lambda: Addon.objects.aggregate(rating=Avg('average_rating'),
                                         reviews=Avg('total_reviews'))
     avg = caching.cached(f, 'task.bayes.avg', 60 * 60 * 60)
+    # Rating can be NULL in the DB, so don't update it if it's not there.
+    if avg['rating'] is None:
+        return
     mc = avg['reviews'] * avg['rating']
-    for addon in Addon.uncached.filter(id__in=addons):
+    for addon in Addon.objects.no_cache().filter(id__in=addons):
+        if addon.average_rating is None:
+            # Ignoring addons with no average rating.
+            continue
+
         q = Addon.objects.filter(id=addon.id)
         if addon.total_reviews:
             num = mc + F('total_reviews') * F('average_rating')

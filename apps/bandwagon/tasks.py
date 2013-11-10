@@ -1,18 +1,19 @@
 import logging
 import math
-import os
 
 from django.conf import settings
+from django.core.files.storage import default_storage as storage
 from django.db.models import Count
 
-import elasticutils
+import elasticutils.contrib.django as elasticutils
 from celeryutils import task
 
 import amo
 from amo.decorators import set_modified_on
-from amo.utils import resize_image
+from amo.utils import attach_trans_dict, resize_image
 from tags.models import Tag
-from . import cron, search  # Pull in tasks run through cron.
+from lib.es.utils import index_objects
+from . import search
 from .models import (Collection, CollectionAddon, CollectionVote,
                      CollectionWatcher)
 
@@ -40,12 +41,12 @@ def collection_votes(*ids, **kw):
 
 @task
 @set_modified_on
-def resize_icon(src, dst, **kw):
+def resize_icon(src, dst, locally=False, **kw):
     """Resizes collection icons to 32x32"""
     log.info('[1@None] Resizing icon: %s' % dst)
 
     try:
-        resize_image(src, dst, (32, 32))
+        resize_image(src, dst, (32, 32), locally=locally)
         return True
     except Exception, e:
         log.error("Error saving collection icon: %s" % e)
@@ -60,7 +61,7 @@ def delete_icon(dst, **kw):
         return
 
     try:
-        os.remove(dst)
+        storage.delete(dst)
     except Exception, e:
         log.error("Error deleting icon: %s" % e)
 
@@ -101,26 +102,20 @@ def collection_watchers(*ids, **kw):
             log.error('Updating collection watchers failed: %s, %s' % (pk, e))
 
 
-@task(rate_limit='10/m')
-def cron_collection_meta(*addons, **kw):
-    collection_meta(*addons)
-
-
 @task
 def index_collections(ids, **kw):
-    if not settings.USE_ELASTIC:
-        return
-    es = elasticutils.get_es()
-    log.info('Indexing collections %s-%s [%s].' % (ids[0], ids[-1], len(ids)))
-    for c in Collection.objects.filter(id__in=ids):
-        Collection.index(search.extract(c), bulk=True, id=c.id)
-    es.flush_bulk(forced=True)
+    log.debug('Indexing collections %s-%s [%s].' % (ids[0], ids[-1], len(ids)))
+    index = kw.pop('index', None)
+    index_objects(ids, Collection, search, index, [attach_translations])
+
+
+def attach_translations(collections):
+    """Put all translations into a translations dict."""
+    attach_trans_dict(Collection, collections)
 
 
 @task
 def unindex_collections(ids, **kw):
-    if not settings.USE_ELASTIC:
-        return
     for id in ids:
-        log.info('Removing collection [%s] from search index.' % id)
+        log.debug('Removing collection [%s] from search index.' % id)
         Collection.unindex(id)

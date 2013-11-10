@@ -1,26 +1,21 @@
-<form method="post" action="{{ url('users.abuse', profile.pk) }}">
+<form id="report-user-form" method="post"
+      action="{{ url('users.abuse', profile.pk) }}">
+  {{ csrf() }}
   <fieldset class="abuse">
-    {% if hide %}
-    <legend><a href="{{ remora_url('developers/docs/policies/contact') }}">{{ _('Report user') }}</a></legend>
-    {% endif %}
-    <ol {% if hide %}class="hide"{% endif %}>
+    <ol>
       <li>
         <p>{% trans %}Please describe why you are reporting this user,
         such as for spam or an inappropriate picture.{% endtrans %}</p>
       </li>
       <li>
-        {{ csrf() }}
-        {% if abuse_form.has_recaptcha %}
-          {{ recaptcha(abuse_form) }}
-        {% endif %}
         {{ abuse_form.text }}
         {{ abuse_form.text.errors }}
       </li>
-      <li>
+      {% if abuse_form.has_recaptcha %}
+        {{ recaptcha(abuse_form) }}
+      {% endif %}
+      <li class="footer-submit">
         <button type="submit">{{ _('Send Report') }}</button>
-        {% if hide %}
-        or <button type="reset" class="link">{{ _('Cancel') }}</button>
-        {% endif %}
       </li>
     </ol>
   </fieldset>

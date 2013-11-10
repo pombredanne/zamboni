@@ -11,60 +11,35 @@ from django.conf import settings
 from django.db import connections, transaction
 from django.db.models import Q, F, Avg
 
+import cronjobs
 import multidb
 import path
-import recommend
+from lib import recommend
 from celery.task.sets import TaskSet
 from celeryutils import task
+import waffle
 
 import amo
-import cronjobs
 from amo.utils import chunked
 from addons import search
-from addons.models import Addon, FrozenAddon, AppSupport
-from addons.utils import ReverseNameLookup
+from addons.models import Addon, AppSupport, FrozenAddon, Persona
 from files.models import File
-from stats.models import UpdateCount
-from translations.models import Translation
+from lib.es.utils import raise_if_reindex_in_progress
+from stats.models import ThemeUserCount, UpdateCount
 
 log = logging.getLogger('z.cron')
 task_log = logging.getLogger('z.task')
 recs_log = logging.getLogger('z.recs')
 
 
-@cronjobs.register
-def build_reverse_name_lookup():
-    """Builds a Reverse Name lookup table in REDIS."""
-    ReverseNameLookup().clear()
-
-    # Get all add-on name ids
-    names = (Addon.objects.filter(
-        name__isnull=False, type__in=[amo.ADDON_EXTENSION, amo.ADDON_THEME])
-        .values_list('name_id', 'id'))
-
-    for chunk in chunked(names, 100):
-        _build_reverse_name_lookup.delay(dict(chunk))
-
-
-@task
-def _build_reverse_name_lookup(names, **kw):
-    clear = kw.get('clear', False)
-    translations = (Translation.objects.filter(id__in=names)
-                    .values_list('id', 'localized_string'))
-
-    if clear:
-        for addon_id in names.values():
-            ReverseNameLookup().delete(addon_id)
-
-    for t_id, string in translations:
-        if string:
-            ReverseNameLookup().add(string, names[t_id])
-
-
 # TODO(jbalogh): removed from cron on 6/27/11. If the site doesn't break,
 # delete it.
 @cronjobs.register
 def fast_current_version():
+
+    # Candidate for deletion - Bug 750510
+    if not waffle.switch_is_active('current_version_crons'):
+        return
     # Only find the really recent versions; this is called a lot.
     t = datetime.now() - timedelta(minutes=5)
     qs = Addon.objects.values_list('id')
@@ -82,6 +57,11 @@ def fast_current_version():
 @cronjobs.register
 def update_addons_current_version():
     """Update the current_version field of the addons."""
+
+    # Candidate for deletion - Bug 750510
+    if not waffle.switch_is_active('current_version_crons'):
+        return
+
     d = (Addon.objects.filter(disabled_by_user=False,
                               status__in=amo.VALID_STATUSES)
          .exclude(type=amo.ADDON_PERSONA).values_list('id'))
@@ -95,6 +75,11 @@ def update_addons_current_version():
 # delete it.
 @task(rate_limit='20/m')
 def _update_addons_current_version(data, **kw):
+
+    # Candidate for deletion - Bug 750510
+    if not waffle.switch_is_active('current_version_crons'):
+        return
+
     task_log.info("[%s@%s] Updating addons current_versions." %
                    (len(data), _update_addons_current_version.rate_limit))
     for pk in data:
@@ -110,11 +95,12 @@ def _update_addons_current_version(data, **kw):
 @cronjobs.register
 def update_addon_average_daily_users():
     """Update add-ons ADU totals."""
+    raise_if_reindex_in_progress()
     cursor = connections[multidb.get_slave()].cursor()
     q = """SELECT
                addon_id, AVG(`count`)
            FROM update_counts
-           WHERE `date` >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+           WHERE `date` > DATE_SUB(CURDATE(), INTERVAL 7 DAY)
            GROUP BY addon_id
            ORDER BY addon_id"""
     cursor.execute(q)
@@ -122,17 +108,56 @@ def update_addon_average_daily_users():
     cursor.close()
 
     ts = [_update_addon_average_daily_users.subtask(args=[chunk])
-          for chunk in chunked(d, 1000)]
+          for chunk in chunked(d, 250)]
     TaskSet(ts).apply_async()
 
 
-@task(rate_limit='15/m')
+@task
 def _update_addon_average_daily_users(data, **kw):
-    task_log.info("[%s@%s] Updating add-ons ADU totals." %
-                   (len(data), _update_addon_average_daily_users.rate_limit))
+    task_log.info("[%s] Updating add-ons ADU totals." % (len(data)))
 
     for pk, count in data:
-        Addon.objects.filter(pk=pk).update(average_daily_users=count)
+        try:
+            addon = Addon.objects.get(pk=pk)
+        except Addon.DoesNotExist:
+            # The processing input comes from metrics which might be out of
+            # date in regards to currently existing add-ons
+            m = "Got an ADU update (%s) but the add-on doesn't exist (%s)"
+            task_log.debug(m % (count, pk))
+            continue
+
+        if (count - addon.total_downloads) > 10000:
+            # Adjust ADU to equal total downloads so bundled add-ons don't
+            # skew the results when sorting by users.
+            task_log.info('Readjusted ADU count for addon %s' % addon.slug)
+            addon.update(average_daily_users=addon.total_downloads)
+        else:
+            #task_log.debug('Updating "%s" :: ADU %s -> %s' %
+            #               (addon.slug, addon.average_daily_users, count))
+            addon.update(average_daily_users=count)
+
+
+@cronjobs.register
+def update_daily_theme_user_counts():
+    """Store the day's theme popularity counts into ThemeUserCount."""
+    raise_if_reindex_in_progress()
+    d = Persona.objects.values_list('addon', 'popularity').order_by('id')
+
+    date = datetime.now().strftime('%M-%d-%y')
+    ts = [_update_daily_theme_user_counts.subtask(args=[chunk],
+                                                  kwargs={'date': date})
+          for chunk in chunked(d, 250)]
+    TaskSet(ts).apply_async()
+
+
+@task
+def _update_daily_theme_user_counts(data, **kw):
+    task_log.info("[%s] Updating daily theme user counts for %s."
+                  % (len(data), kw['date']))
+
+    for pk, count in data:
+        ThemeUserCount.objects.create(addon_id=pk, count=count,
+                                      date=datetime.now())
 
 
 @cronjobs.register
@@ -152,18 +177,25 @@ def update_addon_download_totals():
     cursor.close()
 
     ts = [_update_addon_download_totals.subtask(args=[chunk])
-          for chunk in chunked(d, 1000)]
+          for chunk in chunked(d, 250)]
     TaskSet(ts).apply_async()
 
 
-@task(rate_limit='15/m')
+@task
 def _update_addon_download_totals(data, **kw):
-    task_log.info("[%s@%s] Updating add-ons download+average totals." %
-                   (len(data), _update_addon_download_totals.rate_limit))
+    task_log.info("[%s] Updating add-ons download+average totals." %
+                   (len(data)))
 
     for pk, avg, sum in data:
-        Addon.objects.filter(pk=pk).update(average_daily_downloads=avg,
-                                           total_downloads=sum)
+        try:
+            Addon.objects.get(pk=pk).update(average_daily_downloads=avg,
+                                            total_downloads=sum)
+        except Addon.DoesNotExist:
+            # The processing input comes from metrics which might be out of
+            # date in regards to currently existing add-ons
+            m = ("Got new download totals (total=%s,avg=%s) but the add-on"
+                 "doesn't exist (%s)" % (sum, avg, pk))
+            task_log.debug(m)
 
 
 def _change_last_updated(next):
@@ -173,15 +205,19 @@ def _change_last_updated(next):
     changes = {}
 
     for addon, last_updated in next.items():
-        if current[addon] != last_updated:
-            changes[addon] = last_updated
+        try:
+            if current[addon] != last_updated:
+                changes[addon] = last_updated
+        except KeyError:
+            pass
 
     if not changes:
         return
 
     log.debug('Updating %s add-ons' % len(changes))
     # Update + invalidate.
-    for addon in Addon.uncached.filter(id__in=changes).no_transforms():
+    qs = Addon.objects.no_cache().filter(id__in=changes).no_transforms()
+    for addon in qs:
         addon.last_updated = changes[addon.id]
         addon.save()
 
@@ -196,7 +232,7 @@ def addon_last_updated():
     _change_last_updated(next)
 
     # Get anything that didn't match above.
-    other = (Addon.uncached.filter(last_updated__isnull=True)
+    other = (Addon.objects.no_cache().filter(last_updated__isnull=True)
              .values_list('id', 'created'))
     _change_last_updated(dict(other))
 
@@ -208,8 +244,7 @@ def update_addon_appsupport():
               Q(appsupport__created__isnull=True))
     # Search providers don't list supported apps.
     has_app = Q(versions__apps__isnull=False) | Q(type=amo.ADDON_SEARCH)
-    has_file = (Q(status=amo.STATUS_LISTED) |
-                Q(versions__files__status__in=amo.VALID_STATUSES))
+    has_file = Q(versions__files__status__in=amo.VALID_STATUSES)
     good = Q(has_app, has_file) | Q(type=amo.ADDON_PERSONA)
     ids = (Addon.objects.valid().distinct()
            .filter(newish, good).values_list('id', flat=True))
@@ -231,7 +266,7 @@ def update_all_appsupport():
         update_appsupport(chunk)
 
 
-@task(rate_limit='30/m')
+@task
 @transaction.commit_manually
 def _update_appsupport(ids, **kw):
     from .tasks import update_appsupport
@@ -243,17 +278,12 @@ def addons_add_slugs():
     """Give slugs to any slugless addons."""
     Addon._meta.get_field('modified').auto_now = False
     q = Addon.objects.filter(slug=None).order_by('id')
-    ids = q.values_list('id', flat=True)
 
-    cnt = 0
-    total = len(ids)
-    task_log.info('%s addons without slugs' % total)
     # Chunk it so we don't do huge queries.
-    for chunk in chunked(ids, 300):
-        # Slugs are set in Addon.__init__.
-        list(q.no_cache().filter(id__in=chunk))
-        cnt += 300
-        task_log.info('Slugs added to %s/%s add-ons.' % (cnt, total))
+    for chunk in chunked(q, 300):
+        task_log.info('Giving slugs to %s slugless addons' % len(chunk))
+        for addon in chunk:
+            addon.save()
 
 
 @cronjobs.register
@@ -262,10 +292,11 @@ def hide_disabled_files():
     # GUARDED_ADDONS_PATH so it's not publicly visible.
     q = (Q(version__addon__status=amo.STATUS_DISABLED)
          | Q(version__addon__disabled_by_user=True))
-    ids = (File.objects.filter(q | Q(status=amo.STATUS_DISABLED))
+    ids = (File.objects.filter(q | Q(status=amo.STATUS_OBSOLETE))
            .values_list('id', flat=True))
     for chunk in chunked(ids, 300):
-        qs = File.uncached.filter(id__in=chunk).select_related('version')
+        qs = File.objects.no_cache().filter(id__in=chunk)
+        qs = qs.select_related('version')
         for f in qs:
             f.hide_disabled_file()
 
@@ -277,7 +308,7 @@ def unhide_disabled_files():
     log = logging.getLogger('z.files.disabled')
     q = (Q(version__addon__status=amo.STATUS_DISABLED)
          | Q(version__addon__disabled_by_user=True))
-    files = set(File.objects.filter(q | Q(status=amo.STATUS_DISABLED))
+    files = set(File.objects.filter(q | Q(status=amo.STATUS_OBSOLETE))
                 .values_list('version__addon', 'filename'))
     for filepath in path.path(settings.GUARDED_ADDONS_PATH).walkfiles():
         addon, filename = filepath.split('/')[-2:]
@@ -291,7 +322,7 @@ def unhide_disabled_files():
                     and file_.status in amo.MIRROR_STATUSES):
                     file_.copy_to_mirror()
             except File.DoesNotExist:
-                log.warning('File does not exist: %s.' % filepath)
+                log.warning('File object does not exist for: %s.' % filepath)
             except Exception:
                 log.error('Could not unhide file: %s.' % filepath,
                           exc_info=True)
@@ -313,7 +344,7 @@ def deliver_hotness():
     one_week = now - timedelta(days=7)
     four_weeks = now - timedelta(days=28)
     for ids in chunked(all_ids, 300):
-        addons = Addon.uncached.filter(id__in=ids).no_transforms()
+        addons = Addon.objects.no_cache().filter(id__in=ids).no_transforms()
         ids = [a.id for a in addons if a.id not in frozen]
         qs = (UpdateCount.objects.filter(addon__in=ids)
               .values_list('addon').annotate(Avg('count')))
@@ -347,6 +378,9 @@ def recs():
     recs_log.info('%.2fs (groupby) : %s addons' %
                   ((time.time() - start), len(addons)))
 
+    if not len(addons):
+        return
+
     # Check our memory usage.
     try:
         p = subprocess.Popen('%s -p%s -o rss' % (settings.PS_BIN, os.getpid()),
@@ -364,8 +398,8 @@ def recs():
         try:
             _dump_recs(sims)
         except Exception:
-            recs_log.error('SQL issue', exc_info=True)
-            print idx, 'Error dumping recommendations.'
+            recs_log.error('Error dumping recommendations. SQL issue.',
+                           exc_info=True)
         sims.clear()
         timers['sql'].append(time.time() - calc)
         start[0] = time.time()
@@ -434,14 +468,16 @@ def give_personas_versions():
 
 
 @cronjobs.register
-def reindex_addons():
+def reindex_addons(index=None, aliased=True, addon_type=None):
     from . import tasks
     # Make sure our mapping is up to date.
-    search.setup_mapping()
+    search.setup_mapping(index, aliased)
     ids = (Addon.objects.values_list('id', flat=True)
            .filter(_current_version__isnull=False,
                    status__in=amo.VALID_STATUSES,
                    disabled_by_user=False))
-    ts = [tasks.index_addons.subtask(args=[chunk])
+    if addon_type:
+        ids = ids.filter(type=addon_type)
+    ts = [tasks.index_addons.subtask(args=[chunk], kwargs=dict(index=index))
           for chunk in chunked(sorted(list(ids)), 150)]
     TaskSet(ts).apply_async()

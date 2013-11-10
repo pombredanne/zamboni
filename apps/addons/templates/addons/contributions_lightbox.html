@@ -1,5 +1,6 @@
 <div id="contribute-box" class="jqmWindow modal">
-  <form action="{{ url('addons.contribute', addon.slug) }}" method="get">
+  <form action="{{ url('addons.contribute', addon.slug) }}" method="post">
+    {{ csrf() }}
     <input type="hidden" name="source" value="{{ contribution_src }}"/>
     <h2>{{ _('Make a Contribution') }}</h2>
     <p class="support">
@@ -8,19 +9,19 @@
           {% trans %}
             Help support the continued development of
             <strong>{{ addon_name }}</strong> by making a small contribution
-            through <a href="{{ paypal_url }}">Paypal</a>.
+            through <a href="{{ paypal_url }}">PayPal</a>.
           {% endtrans %}
         {% elif addon.charity_id == amo.FOUNDATION_ORG %}
           {% trans %}
             To show your support for <b>{{ addon_name }}</b>, the developer asks
             that you make a donation to the <a href="{{ charity_url }}">{{ charity_name }}</a>
-            through <a href="{{ paypal_url }}">Paypal</a>.
+            through <a href="{{ paypal_url }}">PayPal</a>.
           {% endtrans %}
         {% else %}
           {% trans %}
             To show your support for <b>{{ addon_name }}</b>, the developer asks
             that you make a small contribution to <a href="{{ charity_url }}">{{ charity_name }}</a>
-            through <a href="{{ paypal_url }}">Paypal</a>.
+            through <a href="{{ paypal_url }}">PayPal</a>.
           {% endtrans %}
         {% endif %}
       {% endwith %}
@@ -40,7 +41,6 @@
         {{ _('Contribution amount must be a number.') }}
     </div>
     <div class="error" id="paypal-error">
-        {{ _('There was an error communicating with Paypal. Please try again later.') }}
     </div>
     <ul>
       {% if has_suggested %}
@@ -48,7 +48,7 @@
         <input type="radio" name="type" value="suggested"
                id="contrib-suggested" checked="checked"/>
         <label for="contrib-suggested">
-          {# L10n: {1} is a currency amount (e.g., $5.00) #}
+          {# L10n: {0} is a currency amount (e.g., $5.00) #}
           {{ _('A one-time suggested contribution of {0}')|f(
             addon.suggested_amount|currencyfmt('USD')) }}
         </label>
@@ -65,17 +65,6 @@
             '$', '<input type="text" name="onetime-amount" value=""/>')|safe }}
         </label>
       </li>
-      {% if not settings.PAYPAL_USE_EMBEDDED %}
-      <li>
-        <input type="radio" name="type" value="monthly"
-               id="contrib-monthly"/>
-        <label for="contrib-monthly">
-          {# L10n: {0} is a currency symbol (e.g., $),
-                   {1} is an amount input field #}
-          {{ _('A regular monthly contribution of {0} {1}')|f(
-            '$', '</label><input type="text" name="monthly-amount" value=""/>')|safe }}
-      </li>
-      {% endif %}
     </ul>
 
     <h4 class="comment">
@@ -86,9 +75,16 @@
     <textarea name="comment" id="contrib-comment"></textarea>
     <span class="commentlen"></span>
 
-    <button id="contribute-confirm" type="submit" class="prominent">
-      {{ _('Make Contribution') }}
-    </button>
-    <span class="cancel"><a href="#">{{ _('No Thanks') }}</a></span>
+    <div id="contribute-actions">
+        <button id="contribute-confirm" type="submit" class="prominent">
+          {{ _('Make Contribution') }}
+        </button>
+        <span class="js-hidden ajax-loading">{{ _('Contacting PayPal') }}</span>
+        <span class="cancel"><a href="#">{{ _('No Thanks') }}</a></span>
+    </div>
+    <div id="paypal-complete" class="js-hidden">
+        <strong>{{ _('Contribution made, thank you.') }}</strong>
+    </div>
+
   </form>
 </div>{# /contribute-box #}

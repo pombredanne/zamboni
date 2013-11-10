@@ -1,7 +1,7 @@
 import posixpath
 
 from django import http
-from django.conf import settings
+from django.core.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404, redirect
 
 import caching.base as caching
@@ -11,7 +11,7 @@ from mobility.decorators import mobile_template
 
 import amo
 from amo.urlresolvers import reverse
-from amo.utils import urlparams, HttpResponseSendFile
+from amo.utils import HttpResponseSendFile, urlparams
 from access import acl
 from addons.decorators import addon_view_factory
 from addons.models import Addon
@@ -53,9 +53,30 @@ def _find_version_page(qs, addon, version_num):
     url = reverse('addons.versions', args=[addon.slug])
     if version_num in ids:
         page = 1 + ids.index(version_num) / PER_PAGE
-        return redirect(urlparams(url, 'version-%s' % version_num, page=page))
+        to = urlparams(url, 'version-%s' % version_num, page=page)
+        return http.HttpResponseRedirect(to)
     else:
         raise http.Http404()
+
+
+@addon_view
+def update_info(request, addon, version_num):
+    qs = addon.versions.filter(version=version_num,
+                               files__status__in=amo.VALID_STATUSES)
+    if not qs:
+        raise http.Http404()
+    serve_xhtml = ('application/xhtml+xml' in
+                   request.META.get('HTTP_ACCEPT', '').lower())
+    return jingo.render(request, 'versions/update_info.html',
+                        {'version': qs[0], 'serve_xhtml': serve_xhtml},
+                        content_type='application/xhtml+xml')
+
+
+def update_info_redirect(request, version_id):
+    version = get_object_or_404(Version, pk=version_id)
+    return redirect(reverse('addons.versions.update_info',
+                            args=(version.addon.id, version.version)),
+                    permanent=True)
 
 
 # Should accept junk at the end for filename goodness.
@@ -63,8 +84,13 @@ def download_file(request, file_id, type=None):
     file = get_object_or_404(File.objects, pk=file_id)
     addon = get_object_or_404(Addon.objects, pk=file.version.addon_id)
 
-    if addon.is_disabled or file.status == amo.STATUS_DISABLED:
-        if acl.check_addon_ownership(request, addon, viewer=True, ignore_disabled=True):
+    if addon.is_premium():
+        raise PermissionDenied
+
+    if addon.is_disabled or file.status == amo.STATUS_OBSOLETE:
+        if (acl.check_addon_ownership(request, addon, viewer=True,
+                                      ignore_disabled=True) or
+            acl.check_reviewer(request)):
             return HttpResponseSendFile(request, file.guarded_file_path,
                                         content_type='application/xp-install')
         else:
@@ -79,6 +105,8 @@ def download_file(request, file_id, type=None):
 
 
 guard = lambda: Addon.objects.filter(_current_version__isnull=False)
+
+
 @addon_view_factory(guard)
 def download_latest(request, addon, type='xpi', platform=None):
     platforms = [amo.PLATFORM_ALL.id]
@@ -95,4 +123,4 @@ def download_latest(request, addon, type='xpi', platform=None):
     url = posixpath.join(reverse('downloads.file', args=args), file.filename)
     if request.GET:
         url += '?' + request.GET.urlencode()
-    return redirect(url)
+    return http.HttpResponseRedirect(url)

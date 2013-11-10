@@ -3,6 +3,19 @@
 {% block title %}{{ page_title(addon.name) }}{% endblock %}
 
 {% block page %}
+  {% if request.GET.get('status') == 'complete' %}
+    <div class="purchase-result purchase-complete">
+      {% with addon_name=addon.name %}
+        <h2>{{ loc('Thank you') }}</h2>
+        <p>Your purchase of <strong class='addon-title'>{{ addon_name }}</strong> is complete.</p>
+      {% endwith %}
+    </div>
+  {% elif request.GET.get('status') %}
+    <div class="purchase-result purchase-cancel">
+      <p>Your purchase was cancelled.</p>
+    </div>
+  {% endif %}
+
   <div class="infobox item">
     <img class="icon" width="32" height="32" src="{{ addon.icon_url }}">
     <h3>{{ addon.name }}</h3>
@@ -24,19 +37,21 @@
   </div>
 
   {% if addon.all_previews %}
-  <div id="screenshots" class="carousel">
-    <ul>
-      {# TODO: lazy-load all, or at least the third and up. #}
-      {# Avoid extra white-space in here- we need it collapsed. #}
-      {% for preview in addon.all_previews -%}
-        <li>
-          <a href="{{ preview.image_url }}" title="{{ preview.caption }}">
-            <img src="{{ preview.thumbnail_url }}"></a>
-        </li>
-      {%- endfor %}
-    </ul>
-    <a href="#" class="control next">&raquo;</a>
-    <a href="#" class="control prev">&laquo;</a>
+  <div id="screenshots">
+    <div class="carousel">
+      <ul>
+        {# TODO: lazy-load all, or at least the third and up. #}
+        {# Avoid extra white-space in here- we need it collapsed. #}
+        {% for preview in addon.all_previews -%}
+          <li>
+            <a href="{{ preview.image_url }}" title="{{ preview.caption }}">
+              <img src="{{ preview.thumbnail_url }}"></a>
+          </li>
+        {%- endfor %}
+      </ul>
+      <a href="#" class="control next">&raquo;</a>
+      <a href="#" class="control prev">&laquo;</a>
+    </div>
   </div>
   {% endif %}
 
@@ -60,36 +75,48 @@
           </td>
         </tr>
       {% endif %}
-      {% if addon.compatible_apps[APP] %}
-        <tr>
-          <th>{{ _('Works with') }}</th>
-          <td>{{ addon.compatible_apps[APP] }}</td>
+      {% if not addon.is_webapp() %}
+        {% if addon.compatible_apps[APP] %}
+          <tr>
+            <th>{{ _('Works with') }}</th>
+            <td>{{ addon.compatible_apps[APP] }}</td>
+          </tr>
+        {% endif %}
+      {% endif %}
+      {% if addon.show_adu() and addon.average_daily_users %}
+        <tr class="adu">
+          <th>{{ _('Users') }}</th>
+          <td>{{ addon.average_daily_users|numberfmt }}</td>
         </tr>
       {% endif %}
-      <tr>
-        <th>{{ _('Downloads', 'list_sortby_downloads') }}</th>
-        <td>{{ addon.total_downloads|numberfmt }}</td>
-      </tr>
-      <tr>
-        <th>{{ _('Version') }}</th>
-        <td>
-          <ul class="versions">
-            {% set version = addon.current_version %}
-            <li>
-              <a href="{{ url('addons.versions', addon.slug, version.version) }}">
-                {# L10n: {0} is a version number. #}
-                {{ _('{0} (Release Notes)')|f(version.version) }}</a>
-            </li>
-            <li>
-              <a href="{{ url('addons.versions', addon.slug) }}">
-                {{ _('View All Versions') }}</a>
-            </li>
-            {% if addon.current_beta_version %}
-              <li><a href="#beta" class="expando">{{ _('View Development Version') }}</a></li>
-            {% endif %}
-          </ul>
-        </td>
-      </tr>
+      {% if addon.weekly_downloads %}
+        <tr class="downloads">
+          <th>{{ _('Weekly Downloads') }}</th>
+          <td>{{ addon.weekly_downloads|numberfmt }}</td>
+        </tr>
+      {% endif %}
+      {% set version = addon.current_version if not addon.is_webapp() else None %}
+      {% if version %}
+        <tr>
+          <th>{{ _('Version') }}</th>
+          <td>
+            <ul class="versions">
+              <li>
+                <a href="{{ version.get_url_path() }}">
+                  {# L10n: {0} is a version number. #}
+                  {{ _('{0} (Version Notes)')|f(version.version) }}</a>
+              </li>
+              <li>
+                <a href="{{ url('addons.versions', addon.slug) }}">
+                  {{ _('View All Versions') }}</a>
+              </li>
+              {% if addon.current_beta_version %}
+                <li><a href="#beta" class="expando">{{ _('View Development Version') }}</a></li>
+              {% endif %}
+            </ul>
+          </td>
+        </tr>
+      {% endif %}
     </table>
   </details>
   {% if addon.current_beta_version %}

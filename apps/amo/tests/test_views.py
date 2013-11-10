@@ -1,226 +1,230 @@
+# -*- coding: utf-8 -*-
 from datetime import datetime
+import json
 import urllib
 
-from django import http, test
+from django import test
 from django.conf import settings
-from django.core.cache import cache, parse_backend_uri
 
 import commonware.log
 from lxml import etree
-from mock import patch, Mock
-from nose import SkipTest
+import mock
+from mock import patch
 from nose.tools import eq_
 from pyquery import PyQuery as pq
-import test_utils
 
+import amo.tests
 from access import acl
+from access.models import Group, GroupUser
 from addons.models import Addon, AddonUser
-from amo.urlresolvers import reverse
+from amo.helpers import absolutify
 from amo.pyquery_wrapper import PyQuery
-from stats.models import SubscriptionEvent, Contribution
+from amo.tests import check_links
+from amo.urlresolvers import reverse
 from users.models import UserProfile
 
-URL_ENCODED = 'application/x-www-form-urlencoded'
+
+class Test403(amo.tests.TestCase):
+    fixtures = ['base/users']
+
+    def setUp(self):
+        assert self.client.login(username='regular@mozilla.com',
+                                 password='password')
+
+    def test_403_no_app(self):
+        response = self.client.get('/en-US/admin/')
+        eq_(response.status_code, 403)
+        self.assertTemplateUsed(response, 'amo/403.html')
+
+    def test_403_app(self):
+        response = self.client.get('/en-US/thunderbird/admin/', follow=True)
+        eq_(response.status_code, 403)
+        self.assertTemplateUsed(response, 'amo/403.html')
 
 
-def test_login_link():
-    "Test that the login link encodes parameters correctly."
-    r = test.Client().get('/?your=mom', follow=True)
-    doc = pq(r.content)
-    assert doc('.context a')[1].attrib['href'].endswith(
-            '?to=%2Fen-US%2Ffirefox%2F%3Fyour%3Dmom'), ("Got %s" %
-            doc('.context a')[1].attrib['href'])
+class Test404(amo.tests.TestCase):
 
-    r = test.Client().get('/en-US/firefox/search/?q=%B8+%EB%B2%88%EC%97%A')
-    doc = pq(r.content)
-    link = doc('.context a')[1].attrib['href']
-    assert link.endswith('?to=%2Fen-US%2Ffirefox%2Fsearch%2F%3Fq%3D%25EF'
-            '%25BF%25BD%2B%25EB%25B2%2588%25EF%25BF%25BDA'), "Got %s" % link
+    def test_404_no_app(self):
+        """Make sure a 404 without an app doesn't turn into a 500."""
+        # That could happen if helpers or templates expect APP to be defined.
+        url = reverse('amo.monitor')
+        response = self.client.get(url + 'nonsense')
+        eq_(response.status_code, 404)
+        self.assertTemplateUsed(response, 'amo/404.html')
 
-
-class Client(test.Client):
-    """Test client that uses form-urlencoded (like browsers)."""
-
-    def post(self, url, data={}, **kw):
-        if hasattr(data, 'items'):
-            data = urllib.urlencode(data)
-            kw['content_type'] = URL_ENCODED
-        return super(Client, self).post(url, data, **kw)
+    def test_404_app_links(self):
+        res = self.client.get('/en-US/thunderbird/xxxxxxx')
+        eq_(res.status_code, 404)
+        self.assertTemplateUsed(res, 'amo/404.html')
+        links = pq(res.content)('[role=main] ul a[href^="/en-US/thunderbird"]')
+        eq_(links.length, 4)
 
 
-def test_404_no_app():
-    """Make sure a 404 without an app doesn't turn into a 500."""
-    # That could happen if helpers or templates expect APP to be defined.
-    url = reverse('amo.monitor')
-    response = test.Client().get(url + 'nonsense')
-    eq_(response.status_code, 404)
-
-
-def test_404_app_links():
-    response = test.Client().get('/en-US/thunderbird/xxxxxxx')
-    eq_(response.status_code, 404)
-    links = pq(response.content)('[role=main] ul li a:not([href^=mailto])')
-    eq_(len(links), 4)
-    for link in links:
-        href = link.attrib['href']
-        assert href.startswith('/en-US/thunderbird'), href
-
-
-class TestImpala(test_utils.TestCase):
+class TestCommon(amo.tests.TestCase):
     fixtures = ('base/users', 'base/global-stats', 'base/configs',
                 'base/addon_3615')
 
-    def test_tools_loggedout(self):
-        r = self.client.get(reverse('i_home'), follow=True)
-        nav = pq(r.content)('#aux-nav')
-        eq_(nav.find('.tools').length, 0)
+    def setUp(self):
+        self.url = reverse('home')
+        # TODO: Remove when `submit-personas` flag is gone.
+        self.patcher = mock.patch('waffle.flag_is_active')
+        self.patcher.start().return_value = True
+        self.addCleanup(self.patcher.stop)
+
+    def login(self, user=None, get=False):
+        email = '%s@mozilla.com' % user
+        self.client.login(username=email, password='password')
+        if get:
+            return UserProfile.objects.get(email=email)
 
     def test_tools_regular_user(self):
-        self.client.login(username='regular@mozilla.com', password='password')
-        r = self.client.get(reverse('i_home'), follow=True)
-        nav = pq(r.content)('#aux-nav')
+        self.login('regular')
+        r = self.client.get(self.url, follow=True)
+        eq_(r.context['request'].amo_user.is_developer, False)
 
-        request = r.context['request']
-
-        eq_(request.amo_user.is_developer, False)
-        eq_(nav.find('.tools a').length, 1)
-        eq_(nav.find('.tools a').eq(0).text(), "Developer Hub")
-        eq_(nav.find('.tools a').eq(0).attr('href'), reverse('devhub.index'))
+        expected = [
+            ('Tools', '#'),
+            ('Submit a New Add-on', reverse('devhub.submit.1')),
+            ('Submit a New Theme', reverse('devhub.themes.submit')),
+            ('Developer Hub', reverse('devhub.index')),
+        ]
+        check_links(expected, pq(r.content)('#aux-nav .tools a'))
 
     def test_tools_developer(self):
-        # Make them a developer
-        user = UserProfile.objects.get(email='regular@mozilla.com')
-        addon = Addon.objects.all()[0]
-        AddonUser.objects.create(user=user, addon=addon)
+        # Make them a developer.
+        user = self.login('regular', get=True)
+        AddonUser.objects.create(user=user, addon=Addon.objects.all()[0])
 
-        self.client.login(username='regular@mozilla.com', password='password')
-        r = self.client.get(reverse('i_home'), follow=True)
-        nav = pq(r.content)('#aux-nav')
+        group = Group.objects.create(name='Staff', rules='AdminTools:View')
+        GroupUser.objects.create(group=group, user=user)
 
-        request = r.context['request']
+        r = self.client.get(self.url, follow=True)
+        eq_(r.context['request'].amo_user.is_developer, True)
 
-        eq_(request.amo_user.is_developer, True)
-
-        eq_(nav.find('.tools').length, 1)
-        eq_(nav.find('.tools li').length, 3)
-        eq_(nav.find('.tools > a').length, 1)
-        eq_(nav.find('.tools > a').text(), "Developer")
-
-        item = nav.find('.tools ul li a').eq(0)
-        eq_(item.text(), "Manage My Add-ons")
-        eq_(item.attr('href'), reverse('devhub.addons'))
-
-        item = nav.find('.tools ul li a').eq(1)
-        eq_(item.text(), "Submit a New Add-on")
-        eq_(item.attr('href'), reverse('devhub.submit.1'))
-
-        item = nav.find('.tools ul li a').eq(2)
-        eq_(item.text(), "Developer Hub")
-        eq_(item.attr('href'), reverse('devhub.index'))
-
-    def test_tools_developer_and_editor(self):
-        # Make them a developer
-        user = UserProfile.objects.get(email='editor@mozilla.com')
-        addon = Addon.objects.all()[0]
-        AddonUser.objects.create(user=user, addon=addon)
-
-        self.client.login(username='editor@mozilla.com', password='password')
-        r = self.client.get(reverse('i_home'), follow=True)
-        nav = pq(r.content)('#aux-nav')
-
-        request = r.context['request']
-
-        eq_(request.amo_user.is_developer, True)
-        eq_(acl.action_allowed(request, 'Editors', '%'), True)
-
-        eq_(nav.find('li.tools').length, 1)
-        eq_(nav.find('li.tools li').length, 4)
-        eq_(nav.find('li.tools > a').length, 1)
-        eq_(nav.find('li.tools > a').text(), "Tools")
-
-        item = nav.find('.tools ul li a').eq(0)
-        eq_(item.text(), "Manage My Add-ons")
-        eq_(item.attr('href'), reverse('devhub.addons'))
-
-        item = nav.find('.tools ul li a').eq(1)
-        eq_(item.text(), "Submit a New Add-on")
-        eq_(item.attr('href'), reverse('devhub.submit.1'))
-
-        item = nav.find('.tools ul li a').eq(2)
-        eq_(item.text(), "Developer Hub")
-        eq_(item.attr('href'), reverse('devhub.index'))
-
-        item = nav.find('.tools ul li a').eq(3)
-        eq_(item.text(), "Editor Tools")
-        eq_(item.attr('href'), reverse('editors.home'))
+        expected = [
+            ('Tools', '#'),
+            ('Manage My Submissions', reverse('devhub.addons')),
+            ('Submit a New Add-on', reverse('devhub.submit.1')),
+            ('Submit a New Theme', reverse('devhub.themes.submit')),
+            ('Developer Hub', reverse('devhub.index')),
+        ]
+        check_links(expected, pq(r.content)('#aux-nav .tools a'))
 
     def test_tools_editor(self):
-        self.client.login(username='editor@mozilla.com', password='password')
-        r = self.client.get(reverse('i_home'), follow=True)
-        nav = pq(r.content)('#aux-nav')
-
+        self.login('editor')
+        r = self.client.get(self.url, follow=True)
         request = r.context['request']
-
         eq_(request.amo_user.is_developer, False)
-        eq_(acl.action_allowed(request, 'Editors', '%'), True)
+        eq_(acl.action_allowed(request, 'Addons', 'Review'), True)
+
+        expected = [
+            ('Tools', '#'),
+            ('Submit a New Add-on', reverse('devhub.submit.1')),
+            ('Submit a New Theme', reverse('devhub.themes.submit')),
+            ('Developer Hub', reverse('devhub.index')),
+            ('Editor Tools', reverse('editors.home')),
+        ]
+        check_links(expected, pq(r.content)('#aux-nav .tools a'))
+
+    def test_tools_developer_and_editor(self):
+        # Make them a developer.
+        user = self.login('editor', get=True)
+        AddonUser.objects.create(user=user, addon=Addon.objects.all()[0])
+
+        r = self.client.get(self.url, follow=True)
+        request = r.context['request']
+        eq_(request.amo_user.is_developer, True)
+        eq_(acl.action_allowed(request, 'Addons', 'Review'), True)
+
+        expected = [
+            ('Tools', '#'),
+            ('Manage My Submissions', reverse('devhub.addons')),
+            ('Submit a New Add-on', reverse('devhub.submit.1')),
+            ('Submit a New Theme', reverse('devhub.themes.submit')),
+            ('Developer Hub', reverse('devhub.index')),
+            ('Editor Tools', reverse('editors.home')),
+        ]
+        check_links(expected, pq(r.content)('#aux-nav .tools a'))
+
+    def test_tools_admin(self):
+        self.login('admin')
+        r = self.client.get(self.url, follow=True)
+        request = r.context['request']
+        eq_(request.amo_user.is_developer, False)
+        eq_(acl.action_allowed(request, 'Addons', 'Review'), True)
+        eq_(acl.action_allowed(request, 'Localizer', '%'), True)
+        eq_(acl.action_allowed(request, 'Admin', '%'), True)
+
+        expected = [
+            ('Tools', '#'),
+            ('Submit a New Add-on', reverse('devhub.submit.1')),
+            ('Submit a New Theme', reverse('devhub.themes.submit')),
+            ('Developer Hub', reverse('devhub.index')),
+            ('Editor Tools', reverse('editors.home')),
+            ('Localizer Tools', '/localizers'),
+            ('Admin Tools', reverse('zadmin.home')),
+        ]
+        check_links(expected, pq(r.content)('#aux-nav .tools a'))
+
+    def test_tools_developer_and_admin(self):
+        # Make them a developer.
+        user = self.login('admin', get=True)
+        AddonUser.objects.create(user=user, addon=Addon.objects.all()[0])
+
+        r = self.client.get(self.url, follow=True)
+        request = r.context['request']
+        eq_(request.amo_user.is_developer, True)
+        eq_(acl.action_allowed(request, 'Addons', 'Review'), True)
+        eq_(acl.action_allowed(request, 'Localizer', '%'), True)
+        eq_(acl.action_allowed(request, 'Admin', '%'), True)
+
+        expected = [
+            ('Tools', '#'),
+            ('Manage My Submissions', reverse('devhub.addons')),
+            ('Submit a New Add-on', reverse('devhub.submit.1')),
+            ('Submit a New Theme', reverse('devhub.themes.submit')),
+            ('Developer Hub', reverse('devhub.index')),
+            ('Editor Tools', reverse('editors.home')),
+            ('Localizer Tools', '/localizers'),
+            ('Admin Tools', reverse('zadmin.home')),
+        ]
+        check_links(expected, pq(r.content)('#aux-nav .tools a'))
 
 
-        eq_(nav.find('li.tools').length, 1)
-        eq_(nav.find('li.tools li').length, 2)
-        eq_(nav.find('li.tools > a').length, 1)
-        eq_(nav.find('li.tools > a').text(), "Tools")
+class TestOtherStuff(amo.tests.TestCase):
+    # Tests that don't need fixtures but do need redis mocked.
 
-        item = nav.find('.tools ul li a').eq(0)
-        eq_(item.text(), "Developer Hub")
-        eq_(item.attr('href'), reverse('devhub.index'))
+    @mock.patch.object(settings, 'READ_ONLY', False)
+    def test_balloons_no_readonly(self):
+        response = self.client.get('/en-US/firefox/')
+        doc = pq(response.content)
+        eq_(doc('#site-notice').length, 0)
+        eq_(doc('#site-nonfx').length, 1)
+        eq_(doc('#site-welcome').length, 1)
 
-        item = nav.find('.tools ul li a').eq(1)
-        eq_(item.text(), "Editor Tools")
-        eq_(item.attr('href'), reverse('editors.home'))
+    @mock.patch.object(settings, 'READ_ONLY', True)
+    def test_balloons_readonly(self):
+        response = self.client.get('/en-US/firefox/')
+        doc = pq(response.content)
+        eq_(doc('#site-notice').length, 1)
+        eq_(doc('#site-nonfx').length, 1)
+        eq_(doc('#site-welcome').length, 1)
 
-class TestStuff(test_utils.TestCase):
-    fixtures = ('base/users', 'base/global-stats', 'base/configs',
-                'base/addon_3615')
+    @mock.patch.object(settings, 'READ_ONLY', False)
+    def test_thunderbird_balloons_no_readonly(self):
+        response = self.client.get('/en-US/thunderbird/')
+        eq_(response.status_code, 200)
+        doc = pq(response.content)
+        eq_(doc('#site-notice').length, 0)
 
-    def test_hide_stats_link(self):
-        r = self.client.get('/', follow=True)
-        doc = pq(r.content)
-        assert doc('.stats')
-        assert not doc('.stats a')
-
-    def test_data_anonymous(self):
-        def check(expected):
-            response = self.client.get('/', follow=True)
-            anon = PyQuery(response.content)('body').attr('data-anonymous')
-            eq_(anon, expected)
-
-        check('true')
-        self.client.login(username='admin@mozilla.com', password='password')
-        check('false')
-
-    def test_my_account_menu(self):
-        def get_homepage():
-            response = self.client.get('/', follow=True)
-            return PyQuery(response.content)
-
-        # Logged out
-        doc = get_homepage()
-        eq_(doc('#aux-nav .account').length, 0)
-        eq_(doc('#aux-nav .tools').length, 0)
-
-        # Logged in, regular user = one tools link
-        self.client.login(username='regular@mozilla.com', password='password')
-        doc = get_homepage()
-        eq_(doc('#aux-nav .account').length, 1)
-        eq_(doc('#aux-nav ul.tools').length, 0)
-        eq_(doc('#aux-nav p.tools').length, 1)
-
-        # Logged in, admin = multiple links
-        self.client.login(username='admin@mozilla.com', password='password')
-        doc = get_homepage()
-        eq_(doc('#aux-nav .account').length, 1)
-        eq_(doc('#aux-nav ul.tools').length, 1)
-        eq_(doc('#aux-nav p.tools').length, 0)
+    @mock.patch.object(settings, 'READ_ONLY', True)
+    def test_thunderbird_balloons_readonly(self):
+        response = self.client.get('/en-US/thunderbird/')
+        doc = pq(response.content)
+        eq_(doc('#site-notice').length, 1)
+        eq_(doc('#site-nonfx').length, 0,
+            'This balloon should appear for Firefox only')
+        eq_(doc('#site-welcome').length, 1)
 
     def test_heading(self):
         def title_eq(url, alt, text):
@@ -229,278 +233,132 @@ class TestStuff(test_utils.TestCase):
             eq_(alt, doc('.site-title img').attr('alt'))
             eq_(text, doc('.site-title').text())
 
-        title_eq('/firefox', 'Firefox', 'Add-ons')
-        title_eq('/thunderbird', 'Thunderbird', 'Add-ons')
-        title_eq('/mobile', 'Firefox', 'Mobile Add-ons')
-
-    def test_tools_loggedout(self):
-        r = self.client.get(reverse('home'), follow=True)
-        nav = pq(r.content)('#aux-nav')
-        eq_(nav.find('.tools').length, 0)
-
-    def test_tools_regular_user(self):
-        self.client.login(username='regular@mozilla.com', password='password')
-        r = self.client.get(reverse('home'), follow=True)
-        nav = pq(r.content)('#aux-nav')
-
-        request = r.context['request']
-
-        eq_(request.amo_user.is_developer, False)
-        eq_(nav.find('.tools a').length, 1)
-        eq_(nav.find('.tools a').eq(0).text(), "Developer Hub")
-        eq_(nav.find('.tools a').eq(0).attr('href'), reverse('devhub.index'))
-
-    def test_tools_developer(self):
-        # Make them a developer
-        user = UserProfile.objects.get(email='regular@mozilla.com')
-        addon = Addon.objects.all()[0]
-        AddonUser.objects.create(user=user, addon=addon)
-
-        self.client.login(username='regular@mozilla.com', password='password')
-        r = self.client.get(reverse('home'), follow=True)
-        nav = pq(r.content)('#aux-nav')
-
-        request = r.context['request']
-
-        eq_(request.amo_user.is_developer, True)
-
-        eq_(nav.find('ul.tools').length, 1)
-        eq_(nav.find('ul.tools li').length, 4)
-        eq_(nav.find('ul.tools > li > a').length, 1)
-        eq_(nav.find('ul.tools > li > a').text(), "Developer")
-
-        item = nav.find('ul.tools ul li a').eq(0)
-        eq_(item.text(), "Manage My Add-ons")
-        eq_(item.attr('href'), reverse('devhub.addons'))
-
-        item = nav.find('ul.tools ul li a').eq(1)
-        eq_(item.text(), "Submit a New Add-on")
-        eq_(item.attr('href'), reverse('devhub.submit.1'))
-
-        item = nav.find('ul.tools ul li a').eq(2)
-        eq_(item.text(), "Developer Hub")
-        eq_(item.attr('href'), reverse('devhub.index'))
-
-    def test_tools_developer_and_editor(self):
-        # Make them a developer
-        user = UserProfile.objects.get(email='editor@mozilla.com')
-        addon = Addon.objects.all()[0]
-        AddonUser.objects.create(user=user, addon=addon)
-
-        self.client.login(username='editor@mozilla.com', password='password')
-        r = self.client.get(reverse('home'), follow=True)
-        nav = pq(r.content)('#aux-nav')
-
-        request = r.context['request']
-
-        eq_(request.amo_user.is_developer, True)
-        eq_(acl.action_allowed(request, 'Editors', '%'), True)
-
-        eq_(nav.find('ul.tools').length, 1)
-        eq_(nav.find('ul.tools li').length, 5)
-        eq_(nav.find('ul.tools > li > a').length, 1)
-        eq_(nav.find('ul.tools > li > a').text(), "Tools")
-
-        item = nav.find('ul.tools ul li a').eq(0)
-        eq_(item.text(), "Manage My Add-ons")
-        eq_(item.attr('href'), reverse('devhub.addons'))
-
-        item = nav.find('ul.tools ul li a').eq(1)
-        eq_(item.text(), "Submit a New Add-on")
-        eq_(item.attr('href'), reverse('devhub.submit.1'))
-
-        item = nav.find('ul.tools ul li a').eq(2)
-        eq_(item.text(), "Developer Hub")
-        eq_(item.attr('href'), reverse('devhub.index'))
-
-        item = nav.find('ul.tools ul li a').eq(3)
-        eq_(item.text(), "Editor Tools")
-        eq_(item.attr('href'), reverse('editors.home'))
-
-    def test_tools_editor(self):
-        self.client.login(username='editor@mozilla.com', password='password')
-        r = self.client.get(reverse('home'), follow=True)
-        nav = pq(r.content)('#aux-nav')
-
-        request = r.context['request']
-
-        eq_(request.amo_user.is_developer, False)
-        eq_(acl.action_allowed(request, 'Editors', '%'), True)
-
-        eq_(nav.find('ul.tools').length, 1)
-        eq_(nav.find('ul.tools li').length, 3)
-        eq_(nav.find('ul.tools > li > a').length, 1)
-        eq_(nav.find('ul.tools > li > a').text(), "Tools")
-
-        item = nav.find('ul.tools ul li a').eq(0)
-        eq_(item.text(), "Developer Hub")
-        eq_(item.attr('href'), reverse('devhub.index'))
-
-        item = nav.find('ul.tools ul li a').eq(1)
-        eq_(item.text(), "Editor Tools")
-        eq_(item.attr('href'), reverse('editors.home'))
-
-    def test_xenophobia(self):
-        r = self.client.get(reverse('home'), follow=True)
-        self.assertNotContains(r, 'show only English (US) add-ons')
+        title_eq('/firefox/', 'Firefox', 'Add-ons')
+        title_eq('/thunderbird/', 'Thunderbird', 'Add-ons')
+        title_eq('/mobile/extensions/', 'Mobile', 'Mobile Add-ons')
+        title_eq('/android/', 'Firefox for Android', 'Android Add-ons')
 
     def test_login_link(self):
         r = self.client.get(reverse('home'), follow=True)
         doc = PyQuery(r.content)
         next = urllib.urlencode({'to': '/en-US/firefox/'})
         eq_('/en-US/firefox/users/login?%s' % next,
-            doc('#aux-nav p a')[1].attrib['href'])
+            doc('.account.anonymous a')[1].attrib['href'])
+
+    def test_tools_loggedout(self):
+        r = self.client.get(reverse('home'), follow=True)
+        eq_(pq(r.content)('#aux-nav .tools').length, 0)
+
+    def test_language_selector(self):
+        doc = pq(test.Client().get('/en-US/firefox/').content)
+        eq_(doc('form.languages option[selected]').attr('value'), 'en-us')
+
+    def test_language_selector_variables(self):
+        r = self.client.get('/en-US/firefox/?foo=fooval&bar=barval')
+        doc = pq(r.content)('form.languages')
+
+        eq_(doc('input[type=hidden][name=foo]').attr('value'), 'fooval')
+        eq_(doc('input[type=hidden][name=bar]').attr('value'), 'barval')
+
+    @patch.object(settings, 'KNOWN_PROXIES', ['127.0.0.1'])
+    def test_remote_addr(self):
+        """Make sure we're setting REMOTE_ADDR from X_FORWARDED_FOR."""
+        client = test.Client()
+        # Send X-Forwarded-For as it shows up in a wsgi request.
+        client.get('/en-US/firefox/', follow=True,
+                   HTTP_X_FORWARDED_FOR='1.1.1.1')
+        eq_(commonware.log.get_remote_addr(), '1.1.1.1')
+
+    def test_jsi18n_caching(self):
+        # The jsi18n catalog should be cached for a long time.
+        # Get the url from a real page so it includes the build id.
+        client = test.Client()
+        doc = pq(client.get('/', follow=True).content)
+        js_url = absolutify(reverse('jsi18n'))
+        url_with_build = doc('script[src^="%s"]' % js_url).attr('src')
+
+        response = client.get(url_with_build, follow=True)
+        fmt = '%a, %d %b %Y %H:%M:%S GMT'
+        expires = datetime.strptime(response['Expires'], fmt)
+        assert (expires - datetime.now()).days >= 365
+
+    def test_dictionaries_link(self):
+        doc = pq(test.Client().get('/', follow=True).content)
+        eq_(doc('#site-nav #more .more-lang a').attr('href'),
+            reverse('browse.language-tools'))
+
+    def test_mobile_link_firefox(self):
+        doc = pq(test.Client().get('/firefox', follow=True).content)
+        eq_(doc('#site-nav #more .more-mobile a').length, 1)
+
+    def test_mobile_link_nonfirefox(self):
+        for app in ('thunderbird', 'mobile'):
+            doc = pq(test.Client().get('/' + app, follow=True).content)
+            eq_(doc('#site-nav #more .more-mobile').length, 0)
+
+    def test_opensearch(self):
+        client = test.Client()
+        page = client.get('/en-US/firefox/opensearch.xml')
+
+        wanted = ('Content-Type', 'text/xml')
+        eq_(page._headers['content-type'], wanted)
+
+        doc = etree.fromstring(page.content)
+        e = doc.find("{http://a9.com/-/spec/opensearch/1.1/}ShortName")
+        eq_(e.text, "Firefox Add-ons")
+
+    def test_login_link(self):
+        # Test that the login link encodes parameters correctly.
+        r = test.Client().get('/?your=mom', follow=True)
+        doc = pq(r.content)
+        assert doc('.account.anonymous a')[1].attrib['href'].endswith(
+                '?to=%2Fen-US%2Ffirefox%2F%3Fyour%3Dmom'), ("Got %s" %
+                doc('.account.anonymous a')[1].attrib['href'])
+
+        r = test.Client().get(u'/ar/firefox/?q=འ')
+        doc = pq(r.content)
+        link = doc('.account.anonymous a')[1].attrib['href']
+        assert link.endswith('?to=%2Far%2Ffirefox%2F%3Fq%3D%25E0%25BD%25A0')
+
+    @mock.patch.object(settings, 'PFS_URL', 'https://pfs.mozilla.org/pfs.py')
+    def test_plugincheck_redirect(self):
+        r = test.Client().get('/services/pfs.php?'
+                              'mimetype=application%2Fx-shockwave-flash&'
+                              'appID={ec8030f7-c20a-464f-9b0e-13a3a9e97384}&'
+                              'appVersion=20120215223356&'
+                              'clientOS=Windows%20NT%205.1&'
+                              'chromeLocale=en-US&appRelease=10.0.2')
+        self.assertEquals(r.status_code, 302)
+        self.assertEquals(r['Location'], ('https://pfs.mozilla.org/pfs.py?'
+                          'mimetype=application%2Fx-shockwave-flash&'
+                          'appID=%7Bec8030f7-c20a-464f-9b0e-13a3a9e97384%7D&'
+                          'appVersion=20120215223356&'
+                          'clientOS=Windows%20NT%205.1&'
+                          'chromeLocale=en-US&appRelease=10.0.2'))
 
 
-class TestPaypal(test_utils.TestCase):
+@mock.patch('amo.views.log_cef')
+class TestCSP(amo.tests.TestCase):
 
     def setUp(self):
-        self.url = reverse('amo.paypal')
-        self.item = 1234567890
-        self.client = Client()
-        settings.PAYPAL_USE_EMBEDDED = True
+        self.url = reverse('amo.csp.report')
+        self.create_sample(name='csp-store-reports')
 
-    def urlopener(self, status):
-        m = Mock()
-        m.readline.return_value = status
-        return m
+    def test_get_document(self, log_cef):
+        eq_(self.client.get(self.url).status_code, 405)
 
-    @patch('amo.views.urllib2.urlopen')
-    def test_not_verified(self, urlopen):
-        urlopen.return_value = self.urlopener('xxx')
-        response = self.client.post(self.url, {'foo': 'bar'})
-        assert isinstance(response, http.HttpResponseForbidden)
+    def test_malformed(self, log_cef):
+        res = self.client.post(self.url, 'f', content_type='application/json')
+        eq_(res.status_code, 400)
 
-    @patch('amo.views.urllib2.urlopen')
-    def test_no_payment_status(self, urlopen):
-        urlopen.return_value = self.urlopener('VERIFIED')
-        response = self.client.post(self.url)
-        eq_(response.status_code, 200)
+    def test_document_uri(self, log_cef):
+        url = 'http://foo.com'
+        self.client.post(self.url,
+                         json.dumps({'csp-report': {'document-uri': url}}),
+                         content_type='application/json')
+        eq_(log_cef.call_args[0][2]['PATH_INFO'], url)
 
-    @patch('amo.views.urllib2.urlopen')
-    def test_subscription_event(self, urlopen):
-        urlopen.return_value = self.urlopener('VERIFIED')
-        response = self.client.post(self.url, {'txn_type': 'subscr_xxx'})
-        eq_(response.status_code, 200)
-        eq_(SubscriptionEvent.objects.count(), 1)
-
-    def test_get_not_allowed(self):
-        response = self.client.get(self.url)
-        assert isinstance(response, http.HttpResponseNotAllowed)
-
-    @patch('amo.views.urllib2.urlopen')
-    def test_mysterious_contribution(self, urlopen):
-        urlopen.return_value = self.urlopener('VERIFIED')
-
-        key = "%s%s:%s" % (settings.CACHE_PREFIX, 'contrib', self.item)
-
-        data = {'txn_id': 100,
-                'payer_email': 'jbalogh@wherever.com',
-                'receiver_email': 'clouserw@gmail.com',
-                'mc_gross': '99.99',
-                'item_number': self.item,
-                'payment_status': 'Completed'}
-        response = self.client.post(self.url, data)
-        assert isinstance(response, http.HttpResponseServerError)
-        eq_(cache.get(key), 1)
-
-        cache.set(key, 10, 1209600)
-        response = self.client.post(self.url, data)
-        assert isinstance(response, http.HttpResponse)
-        eq_(cache.get(key), None)
-
-    @patch('amo.views.urllib2.urlopen')
-    def test_query_string_order(self, urlopen):
-        urlopen.return_value = self.urlopener('HEY MISTER')
-        query = 'x=x&a=a&y=y'
-        response = self.client.post(self.url, data=query,
-                                    content_type=URL_ENCODED)
-        eq_(response.status_code, 403)
-        _, path, _ = urlopen.call_args[0]
-        eq_(path, 'cmd=_notify-validate&%s' % query)
-
-    @patch('amo.views.urllib2.urlopen')
-    def test_any_exception(self, urlopen):
-        urlopen.side_effect = Exception()
-        response = self.client.post(self.url)
-        eq_(response.status_code, 500)
-        eq_(response.content, 'Unknown error.')
-
-
-class TestEmbeddedPaymentsPaypal(test_utils.TestCase):
-    fixtures = ['base/addon_3615']
-
-    def setUp(self):
-        self.url = reverse('amo.paypal')
-        self.addon = Addon.objects.get(pk=3615)
-
-    def urlopener(self, status):
-        m = Mock()
-        m.readline.return_value = status
-        return m
-
-    @patch('amo.views.urllib2.urlopen')
-    def test_success(self, urlopen):
-        uuid = 'e76059abcf747f5b4e838bf47822e6b2'
-        Contribution.objects.create(uuid=uuid, addon=self.addon)
-        data = {'tracking_id': uuid, 'payment_status': 'Completed'}
-        urlopen.return_value = self.urlopener('VERIFIED')
-
-        response = self.client.post(self.url, data)
-        eq_(response.content, 'Success!')
-
-    @patch('amo.views.urllib2.urlopen')
-    def test_wrong_uuid(self, urlopen):
-        uuid = 'e76059abcf747f5b4e838bf47822e6b2'
-        Contribution.objects.create(uuid=uuid, addon=self.addon)
-        data = {'tracking_id': 'sdf', 'payment_status': 'Completed'}
-        urlopen.return_value = self.urlopener('VERIFIED')
-
-        response = self.client.post(self.url, data)
-        eq_(response.content, 'Contribution not found')
-
-
-def test_jsi18n_caching():
-    """The jsi18n catalog should be cached for a long time."""
-    # Get the url from a real page so it includes the build id.
-    client = test.Client()
-    doc = pq(client.get('/', follow=True).content)
-    js_url = reverse('jsi18n')
-    url_with_build = doc('script[src^="%s"]' % js_url).attr('src')
-
-    response = client.get(url_with_build, follow=True)
-    fmt = '%a, %d %b %Y %H:%M:%S GMT'
-    expires = datetime.strptime(response['Expires'], fmt)
-    assert (expires - datetime.now()).days >= 365
-
-
-def test_dictionaries_link():
-    doc = pq(test.Client().get('/', follow=True).content)
-    link = doc('#categoriesdropdown a[href*="language-tools"]')
-    eq_(link.text(), 'Dictionaries & Language Packs')
-
-
-@patch.object(settings, 'KNOWN_PROXIES', ['127.0.0.1'])
-def test_remote_addr():
-    """Make sure we're setting REMOTE_ADDR from X_FORWARDED_FOR."""
-    client = test.Client()
-    # Send X-Forwarded-For as it shows up in a wsgi request.
-    client.get('/en-US/firefox/', follow=True, HTTP_X_FORWARDED_FOR='1.1.1.1')
-    eq_(commonware.log.get_remote_addr(), '1.1.1.1')
-
-
-def test_opensearch():
-    client = test.Client()
-    page = client.get('/en-US/firefox/opensearch.xml')
-
-    wanted = ('Content-Type', 'text/xml')
-    eq_(page._headers['content-type'], wanted)
-
-    doc = etree.fromstring(page.content)
-    e = doc.find("{http://a9.com/-/spec/opensearch/1.1/}ShortName")
-    eq_(e.text, "Firefox Add-ons")
-
-
-def test_language_selector():
-    doc = pq(test.Client().get('/en-US/firefox/').content)
-    eq_(doc('form.languages option[selected]').attr('value'), 'en-us')
+    def test_no_document_uri(self, log_cef):
+        self.client.post(self.url, json.dumps({'csp-report': {}}),
+                         content_type='application/json')
+        eq_(log_cef.call_args[0][2]['PATH_INFO'], '/services/csp/report')

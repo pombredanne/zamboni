@@ -1,37 +1,36 @@
-# -*- coding: utf8 -*-
-import os
+# -*- coding: utf-8 -*-
 from datetime import datetime, timedelta
-import shutil
-import tempfile
 
 from django.core import mail
+from django.core.files.storage import default_storage as storage
 from django.conf import settings
 
-from mock import Mock
+from mock import Mock, patch
 from nose.tools import eq_
 from pyquery import PyQuery as pq
-import test_utils
 
 import amo
+import amo.tests
 from addons.models import Addon
 from amo.urlresolvers import reverse
 from devhub.models import ActivityLog
 from editors import helpers
+from editors.models import ReviewerScore
 from files.models import File
 from translations.models import Translation
 from users.models import UserProfile
 from versions.models import Version
-from .test_models import create_addon_file
 
+from . test_models import create_addon_file
 
 REVIEW_ADDON_STATUSES = (amo.STATUS_NOMINATED, amo.STATUS_LITE_AND_NOMINATED,
                          amo.STATUS_UNREVIEWED)
 REVIEW_FILES_STATUSES = (amo.STATUS_BETA, amo.STATUS_NULL, amo.STATUS_PUBLIC,
-                         amo.STATUS_DISABLED, amo.STATUS_LISTED,
-                         amo.STATUS_LITE)
+                         amo.STATUS_DISABLED, amo.STATUS_LITE,
+                         amo.STATUS_OBSOLETE)
 
 
-class TestViewPendingQueueTable(test_utils.TestCase):
+class TestViewPendingQueueTable(amo.tests.TestCase):
 
     def setUp(self):
         super(TestViewPendingQueueTable, self).setUp()
@@ -46,7 +45,6 @@ class TestViewPendingQueueTable(test_utils.TestCase):
         row.addon_name = 'フォクすけといっしょ'.decode('utf8')
         row.addon_slug = 'test'
         row.latest_version = u'0.12'
-        row.latest_version_id = 1234
         self.table.set_page(page)
         a = pq(self.table.render_addon_name(row))
 
@@ -57,7 +55,7 @@ class TestViewPendingQueueTable(test_utils.TestCase):
     def test_addon_type_id(self):
         row = Mock()
         row.addon_type_id = amo.ADDON_THEME
-        eq_(unicode(self.table.render_addon_type_id(row)), u'Theme')
+        eq_(unicode(self.table.render_addon_type_id(row)), u'Complete Theme')
 
     def test_applications(self):
         row = Mock()
@@ -100,60 +98,25 @@ class TestViewPendingQueueTable(test_utils.TestCase):
         row.waiting_time_min = 0
         eq_(self.table.render_waiting_time_min(row), u'moments ago')
 
-    def test_flags_admin_review(self):
+    def test_flags(self):
         row = Mock()
-        row.admin_review = True
+        row.flags = [('admin-review', 'Admin Review')]
         doc = pq(self.table.render_flags(row))
-        eq_(doc('div.app-icon').attr('class'),
-           'app-icon ed-sprite-admin-review')
-
-    def test_flags_jetpack_and_restartless(self):
-        row = Mock()
-        row.is_jetpack = True
-        row.is_restartless = True
-        doc = pq(self.table.render_flags(row))
-        eq_(doc('div.ed-sprite-jetpack').length, 1)
-        eq_(doc('div.ed-sprite-restartless').length, 0)
-
-    def test_flags_restartless(self):
-        row = Mock()
-        row.is_restartless = True
-        row.is_jetpack = False
-        doc = pq(self.table.render_flags(row))
-        eq_(doc('div.ed-sprite-jetpack').length, 0)
-        eq_(doc('div.ed-sprite-restartless').length, 1)
-
-    def test_flags_jetpack(self):
-        row = Mock()
-        row.is_jetpack = True
-        doc = pq(self.table.render_flags(row))
-        eq_(doc('div.ed-sprite-restartless').length, 0)
-        eq_(doc('div.ed-sprite-jetpack').length, 1)
-
-    def test_no_flags(self):
-        row = Mock()
-        row.is_restartless = False
-        row.is_jetpack = False
-        row.admin_review = False
-        eq_(self.table.render_flags(row), '')
+        assert doc('div.ed-sprite-admin-review').length
 
 
-class TestAdditionalInfoInQueue(test_utils.TestCase):
+class TestAdditionalInfoInQueue(amo.tests.TestCase):
 
     def setUp(self):
         super(TestAdditionalInfoInQueue, self).setUp()
         qs = Mock()
         self.table = helpers.ViewPendingQueueTable(qs)
         self.row = Mock()
-        self.row.latest_version_id = 1
         self.row.is_site_specific = False
-        self.row.file_platform_ids = [self.platform_id(amo.PLATFORM_ALL.id)]
-        self.row.file_platform_vers = [self.platform_id(amo.PLATFORM_ALL.id)]
+        self.row.file_platform_ids = [amo.PLATFORM_ALL.id]
         self.row.external_software = False
         self.row.binary = False
-
-    def platform_id(self, platform):
-        return '%s-%s' % (platform, self.row.latest_version_id)
+        self.row.binary_components = False
 
     def test_no_info(self):
         eq_(self.table.render_additional_info(self.row), '')
@@ -163,7 +126,7 @@ class TestAdditionalInfoInQueue(test_utils.TestCase):
         eq_(self.table.render_additional_info(self.row), u'Site Specific')
 
     def test_platform(self):
-        self.row.file_platform_vers = [self.platform_id(amo.PLATFORM_LINUX.id)]
+        self.row.file_platform_ids = [amo.PLATFORM_LINUX.id]
         assert "plat-sprite-linux" in self.table.render_platforms(self.row)
 
     def test_combo(self):
@@ -173,12 +136,12 @@ class TestAdditionalInfoInQueue(test_utils.TestCase):
             u'Site Specific, Requires External Software')
 
     def test_all_platforms(self):
-        self.row.file_platform_vers = [self.platform_id(amo.PLATFORM_ALL.id)]
+        self.row.file_platform_ids = [amo.PLATFORM_ALL.id]
         assert "plat-sprite-all" in self.table.render_platforms(self.row)
 
     def test_mixed_platforms(self):
-        self.row.file_platform_vers = [self.platform_id(amo.PLATFORM_ALL.id),
-                                       self.platform_id(amo.PLATFORM_LINUX.id)]
+        self.row.file_platform_ids = [amo.PLATFORM_ALL.id,
+                                      amo.PLATFORM_LINUX.id]
         assert "plat-sprite-linux" in self.table.render_platforms(self.row)
         assert "plat-sprite-all" in self.table.render_platforms(self.row)
 
@@ -195,13 +158,14 @@ class TestAdditionalInfoInQueue(test_utils.TestCase):
 yesterday = datetime.today() - timedelta(days=1)
 
 
-class TestReviewHelper(test_utils.TestCase):
+class TestReviewHelper(amo.tests.TestCase):
     fixtures = ('base/addon_3615', 'base/users')
     preamble = 'Mozilla Add-ons: Delicious Bookmarks 2.1.072'
 
     def setUp(self):
         class FakeRequest:
-            user = UserProfile.objects.get(pk=10482).user
+            amo_user = UserProfile.objects.get(pk=10482)
+            user = amo_user.user
 
         self.request = FakeRequest()
         self.addon = Addon.objects.get(pk=3615)
@@ -211,23 +175,19 @@ class TestReviewHelper(test_utils.TestCase):
 
         self.old_mirror = settings.MIRROR_STAGE_PATH
         self.old_normal = settings.ADDONS_PATH
-        settings.MIRROR_STAGE_PATH = tempfile.mkdtemp()
-        settings.ADDONS_PATH = tempfile.mkdtemp()
 
         self.create_paths()
 
-    def create_paths(self):
-        for dr in [os.path.dirname(self.file.mirror_file_path),
-                   os.path.dirname(self.file.file_path)]:
-            if not os.path.exists(dr):
-                os.mkdir(dr)
-        if not os.path.exists(self.file.file_path):
-            open(self.file.file_path, 'w')
+    def _check_score(self, reviewed_type):
+        scores = ReviewerScore.objects.all()
+        assert len(scores) > 0
+        eq_(scores[0].score, amo.REVIEWED_SCORES[reviewed_type])
+        eq_(scores[0].note_key, reviewed_type)
 
-    def tearDown(self):
-        shutil.rmtree(settings.MIRROR_STAGE_PATH)
-        settings.MIRROR_STAGE_PATH = self.old_mirror
-        settings.ADDONS_PATH = self.old_normal
+    def create_paths(self):
+        if not storage.exists(self.file.file_path):
+            with storage.open(self.file.file_path, 'w') as f:
+                f.write('test data\n')
 
     def get_data(self):
         return {'comments': 'foo', 'addon_files': self.version.files.all(),
@@ -259,9 +219,14 @@ class TestReviewHelper(test_utils.TestCase):
         eq_(self.setup_type(amo.STATUS_NULL), 'pending')
         eq_(self.setup_type(amo.STATUS_PUBLIC), 'pending')
         eq_(self.setup_type(amo.STATUS_DISABLED), 'pending')
-        eq_(self.setup_type(amo.STATUS_LISTED), 'pending')
         eq_(self.setup_type(amo.STATUS_BETA), 'pending')
         eq_(self.setup_type(amo.STATUS_PURGATORY), 'pending')
+        eq_(self.setup_type(amo.STATUS_OBSOLETE), 'pending')
+
+    def test_no_version(self):
+        helper = helpers.ReviewHelper(request=self.request, addon=self.addon,
+                                      version=None)
+        eq_(helper.review_type, 'pending')
 
     def test_review_files(self):
         for status in REVIEW_FILES_STATUSES:
@@ -314,6 +279,12 @@ class TestReviewHelper(test_utils.TestCase):
         eq_(self.get_action(amo.STATUS_PUBLIC, 'public')[-29:],
             'to appear on the public side.')
 
+    def test_action_premium(self):
+        for type_ in amo.ADDON_PREMIUMS:
+            self.addon.update(premium_type=type_)
+            self.assertRaises(KeyError, self.get_action,
+                              amo.STATUS_NOMINATED, 'prelim')
+
     def test_set_files(self):
         self.file.update(datestatuschanged=yesterday)
         self.helper.set_data({'addon_files': self.version.files.all()})
@@ -330,16 +301,17 @@ class TestReviewHelper(test_utils.TestCase):
                                       self.helper.handler.data['addon_files'],
                                       copy_to_mirror=True)
 
-        assert os.path.exists(self.file.mirror_file_path)
+        assert storage.exists(self.file.mirror_file_path)
 
     def test_set_files_remove(self):
-        open(self.file.mirror_file_path, 'wb')
+        with storage.open(self.file.mirror_file_path, 'wb') as f:
+            f.write('test data\n')
         self.helper.set_data({'addon_files': self.version.files.all()})
         self.helper.handler.set_files(amo.STATUS_PUBLIC,
                                       self.helper.handler.data['addon_files'],
                                       hide_disabled_file=True)
 
-        assert not os.path.exists(self.file.mirror_file_path)
+        assert not storage.exists(self.file.mirror_file_path)
 
     def test_logs(self):
         self.helper.set_data({'comments': 'something'})
@@ -356,6 +328,7 @@ class TestReviewHelper(test_utils.TestCase):
             mail.outbox = []
             self.helper.handler.notify_email(template, 'Sample subject %s, %s')
             eq_(len(mail.outbox), 1)
+            assert mail.outbox[0].body, 'Expected a message'
 
     def setup_data(self, status, delete=[]):
         mail.outbox = []
@@ -372,6 +345,8 @@ class TestReviewHelper(test_utils.TestCase):
         self.setup_data(amo.STATUS_PUBLIC, ['addon_files'])
         self.helper.handler.request_information()
 
+        eq_(self.version.has_info_request, True)
+
         eq_(len(mail.outbox), 1)
         eq_(mail.outbox[0].subject, self.preamble)
 
@@ -383,6 +358,7 @@ class TestReviewHelper(test_utils.TestCase):
 
         eq_(len(mail.outbox), 1)
         assert '/en-US/firefox/addon/a3615' not in mail.outbox[0].body
+        assert '/addon/a3615' in mail.outbox[0].body
 
     def test_nomination_to_public_no_files(self):
         for status in helpers.NOMINATED_STATUSES:
@@ -423,11 +399,13 @@ class TestReviewHelper(test_utils.TestCase):
             amo.STATUS_PUBLIC)
 
         eq_(len(mail.outbox), 1)
-        eq_(mail.outbox[0].subject, '%s Fully Reviewed' % self.preamble)
+        eq_(mail.outbox[0].subject, '%s Published' % self.preamble)
 
-        assert os.path.exists(self.file.mirror_file_path)
+        assert storage.exists(self.file.mirror_file_path)
 
         eq_(self.check_log_count(amo.LOG.APPROVE_VERSION.id), 1)
+
+        self._check_score(amo.REVIEWED_ADDON_FULL)
 
     def test_nomination_to_public(self):
         for status in helpers.NOMINATED_STATUSES:
@@ -440,11 +418,24 @@ class TestReviewHelper(test_utils.TestCase):
                 amo.STATUS_PUBLIC)
 
             eq_(len(mail.outbox), 1)
-            eq_(mail.outbox[0].subject, '%s Fully Reviewed' % self.preamble)
+            eq_(mail.outbox[0].subject, '%s Published' % self.preamble)
 
-            assert os.path.exists(self.file.mirror_file_path)
+            assert storage.exists(self.file.mirror_file_path)
 
             eq_(self.check_log_count(amo.LOG.APPROVE_VERSION.id), 1)
+
+            self._check_score(amo.REVIEWED_ADDON_FULL)
+
+    def to_preliminary_premium(self, statuses):
+        for type_ in amo.ADDON_PREMIUMS:
+            self.addon.update(premium_type=type_)
+            for status in helpers.NOMINATED_STATUSES:
+                self.setup_data(status)
+                self.assertRaises(AssertionError,
+                                  self.helper.handler.process_preliminary)
+
+    def test_nomination_to_preliminary_premium(self):
+        self.to_preliminary_premium(helpers.NOMINATED_STATUSES)
 
     def test_nomination_to_preliminary(self):
         for status in helpers.NOMINATED_STATUSES:
@@ -461,9 +452,11 @@ class TestReviewHelper(test_utils.TestCase):
             eq_(mail.outbox[0].subject,
                 '%s Preliminary Reviewed' % self.preamble)
 
-            assert os.path.exists(self.file.mirror_file_path)
+            assert storage.exists(self.file.mirror_file_path)
 
             eq_(self.check_log_count(amo.LOG.PRELIMINARY_VERSION.id), 1)
+
+            self._check_score(amo.REVIEWED_ADDON_FULL)
 
     def test_nomination_to_sandbox(self):
         for status in helpers.NOMINATED_STATUSES:
@@ -473,12 +466,12 @@ class TestReviewHelper(test_utils.TestCase):
             eq_(self.addon.highest_status, amo.STATUS_PUBLIC)
             eq_(self.addon.status, amo.STATUS_NULL)
             eq_(self.addon.versions.all()[0].files.all()[0].status,
-                amo.STATUS_DISABLED)
+                amo.STATUS_OBSOLETE)
 
             eq_(len(mail.outbox), 1)
-            eq_(mail.outbox[0].subject, '%s Reviewed' % self.preamble)
+            eq_(mail.outbox[0].subject, '%s Rejected' % self.preamble)
 
-            assert not os.path.exists(self.file.mirror_file_path)
+            assert not storage.exists(self.file.mirror_file_path)
             eq_(self.check_log_count(amo.LOG.REJECT_VERSION.id), 1)
 
     def test_email_unicode_monster(self):
@@ -519,6 +512,9 @@ class TestReviewHelper(test_utils.TestCase):
         self.assertRaises(AssertionError,
                           self.helper.handler.process_public)
 
+    def test_preliminary_to_preliminary_premium(self):
+        self.to_preliminary_premium(helpers.PRELIMINARY_STATUSES)
+
     def test_preliminary_to_preliminary(self):
         for status in helpers.PRELIMINARY_STATUSES:
             self.setup_data(status)
@@ -531,8 +527,10 @@ class TestReviewHelper(test_utils.TestCase):
             eq_(mail.outbox[0].subject,
                 '%s Preliminary Reviewed' % self.preamble)
 
-            assert os.path.exists(self.file.mirror_file_path)
+            assert storage.exists(self.file.mirror_file_path)
             eq_(self.check_log_count(amo.LOG.PRELIMINARY_VERSION.id), 1)
+
+            self._check_score(amo.REVIEWED_ADDON_PRELIM)
 
     def test_preliminary_to_sandbox(self):
         for status in helpers.PRELIMINARY_STATUSES:
@@ -540,13 +538,32 @@ class TestReviewHelper(test_utils.TestCase):
             self.helper.handler.process_sandbox()
 
             for file in self.helper.handler.data['addon_files']:
-                eq_(file.status, amo.STATUS_DISABLED)
+                eq_(file.status, amo.STATUS_OBSOLETE)
 
             eq_(len(mail.outbox), 1)
-            eq_(mail.outbox[0].subject, '%s Reviewed' % self.preamble)
+            eq_(mail.outbox[0].subject, '%s Rejected' % self.preamble)
 
-            assert not os.path.exists(self.file.mirror_file_path)
+            assert not storage.exists(self.file.mirror_file_path)
             eq_(self.check_log_count(amo.LOG.REJECT_VERSION.id), 1)
+
+    def test_preliminary_upgrade_to_sandbox(self):
+        self.setup_data(amo.STATUS_LITE)
+        eq_(self.addon.status, amo.STATUS_LITE)
+        eq_(self.file.status, amo.STATUS_LITE)
+
+        a = create_addon_file(self.addon.name, '2.2', amo.STATUS_LITE,
+                              amo.STATUS_UNREVIEWED)
+        self.version = a['version']
+
+        self.addon.update(status=amo.STATUS_LITE_AND_NOMINATED)
+        self.helper = self.get_helper()
+        self.helper.set_data(self.get_data())
+
+        self.helper.handler.process_sandbox()
+        eq_(self.addon.status, amo.STATUS_LITE)
+        eq_(self.file.status, amo.STATUS_LITE)
+        f = File.objects.get(pk=a['file'].id)
+        eq_(f.status, amo.STATUS_OBSOLETE)
 
     def test_preliminary_to_super_review(self):
         for status in helpers.PRELIMINARY_STATUSES:
@@ -579,7 +596,6 @@ class TestReviewHelper(test_utils.TestCase):
                 ('Mozilla Add-ons: Delicious Bookmarks 2.1.072 flagged for '
                  'Admin Review'))
 
-            eq_(self.check_log_count(amo.LOG.ESCALATE_VERSION.id), 1)
             eq_(self.check_log_count(amo.LOG.REQUEST_SUPER_REVIEW.id), 1)
 
     def test_pending_to_public(self):
@@ -592,10 +608,13 @@ class TestReviewHelper(test_utils.TestCase):
                 eq_(file.status, amo.STATUS_PUBLIC)
 
             eq_(len(mail.outbox), 1)
-            eq_(mail.outbox[0].subject, '%s Fully Reviewed' % self.preamble)
+            eq_(mail.outbox[0].subject, '%s Published' % self.preamble)
 
-            assert os.path.exists(self.file.mirror_file_path)
+            assert storage.exists(self.file.mirror_file_path)
             eq_(self.check_log_count(amo.LOG.APPROVE_VERSION.id), 1)
+
+            if status == amo.STATUS_PUBLIC:
+                self._check_score(amo.REVIEWED_ADDON_UPDATE)
 
     def test_pending_to_sandbox(self):
         for status in helpers.PENDING_STATUSES:
@@ -603,12 +622,12 @@ class TestReviewHelper(test_utils.TestCase):
             self.helper.handler.process_sandbox()
 
             for file in self.helper.handler.data['addon_files']:
-                eq_(file.status, amo.STATUS_DISABLED)
+                eq_(file.status, amo.STATUS_OBSOLETE)
 
             eq_(len(mail.outbox), 1)
             assert 'did not meet the criteria' in mail.outbox[0].body
 
-            assert not os.path.exists(self.file.mirror_file_path)
+            assert not storage.exists(self.file.mirror_file_path)
             eq_(self.check_log_count(amo.LOG.REJECT_VERSION.id), 1)
 
     def test_operating_system_present(self):
@@ -663,8 +682,8 @@ class TestReviewHelper(test_utils.TestCase):
         for status in REVIEW_ADDON_STATUSES:
             for process in ['process_sandbox', 'process_preliminary',
                             'process_public']:
-                if (status == amo.STATUS_UNREVIEWED
-                    and process == 'process_public'):
+                if (status == amo.STATUS_UNREVIEWED and
+                        process == 'process_public'):
                     continue
                 self.version.update(reviewed=None)
                 self.setup_data(status)
@@ -679,7 +698,7 @@ class TestReviewHelper(test_utils.TestCase):
                 self.setup_data(status)
                 getattr(self.helper.handler, process)()
                 assert File.objects.get(pk=self.file.pk).reviewed, (
-                       'Reviewed for status %r, %s()' % (status, process))
+                    'Reviewed for status %r, %s()' % (status, process))
 
 
 def test_page_title_unicode():
@@ -699,7 +718,7 @@ def test_send_email_autoescape():
     eq_(mail.outbox[0].body.count(s), len(ctx))
 
 
-class TestCompareLink(test_utils.TestCase):
+class TestCompareLink(amo.tests.TestCase):
     fixtures = ['base/addon_3615', 'base/platforms']
 
     def setUp(self):
@@ -733,3 +752,62 @@ class TestCompareLink(test_utils.TestCase):
         file = File.objects.create(version=self.version,
                                    platform_id=amo.PLATFORM_WIN.id)
         eq_(file.pk, helpers.file_compare(self.current, self.version).pk)
+
+
+class TestGetPosition(amo.tests.TestCase):
+    fixtures = ['webapps/337141-steamcube']
+
+    def setUp(self):
+        # Add a public, reviewed app for measure.
+        self.public_app = Addon.objects.get(pk=337141)
+        # Took 4 days for this app to get reviewed.
+        self.public_app.latest_version.update(nomination=self.days_ago(7),
+            reviewed=self.days_ago(3))
+
+    def test_public_app(self):
+        eq_(helpers.get_position(self.public_app), False)
+
+    def test_pending_app(self):
+        # Took 8 days for some app to get reviewed.
+        approved_app = amo.tests.app_factory()
+        approved_app.latest_version.update(nomination=self.days_ago(10),
+            reviewed=self.days_ago(2))
+
+        # Add to the queue 2 pending apps for good measure.
+        amo.tests.app_factory(status=amo.STATUS_PENDING).latest_version.update(
+            nomination=self.days_ago(3))
+        amo.tests.app_factory(status=amo.STATUS_PENDING).latest_version.update(
+            nomination=self.days_ago(1))
+
+        pending_app = amo.tests.app_factory(status=amo.STATUS_PENDING)
+        pending_app.latest_version.update(nomination=self.days_ago(2))
+
+        pos = helpers.get_position(pending_app)
+
+        # It took 12 days for 2 apps to get reviewed, giving us an average of
+        # 6 days to go from pending->public, but we've already waited 2 days.
+        eq_(pos['days'], 4.0)
+
+        # There is one pending app in front of us.
+        eq_(pos['pos'], 2)
+
+        # There are three pending apps.
+        eq_(pos['total'], 3)
+
+
+def test_version_status():
+    addon = Addon()
+    version = Version()
+    version.all_files = [File(status=amo.STATUS_PUBLIC),
+                         File(status=amo.STATUS_DELETED)]
+    eq_(u'Published,Deleted', helpers.version_status(addon, version))
+
+    version.all_files = [File(status=amo.STATUS_UNREVIEWED)]
+    eq_(u'Awaiting Preliminary Review', helpers.version_status(addon, version))
+
+    with patch.object(settings, 'MARKETPLACE', True):
+        version.all_files = [File(status=amo.STATUS_PENDING)]
+        eq_(u'Pending approval', helpers.version_status(addon, version))
+
+        version.deleted = True
+        eq_(u'Deleted', helpers.version_status(addon, version))

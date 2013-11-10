@@ -19,7 +19,7 @@
             "localized_string_clean": null,
             "created": "2010-09-12 07:28:44",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2010-01-02 12:34:56",
             "id": 13252966,
             "localized_string": "Thank You for your generous contribution"
         }
@@ -31,7 +31,7 @@
             "localized_string_clean": null,
             "created": "2010-09-12 07:27:48",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2010-01-02 12:34:56",
             "id": 13252965,
             "localized_string": "Future: This is line one.\n\nThis is line two"
         }
@@ -43,7 +43,7 @@
             "localized_string_clean": null,
             "created": "2010-09-12 07:27:48",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2010-01-02 12:34:56",
             "id": 13252964,
             "localized_string": "Why: This is line one.\n\nThis is line two"
         }
@@ -55,7 +55,7 @@
             "localized_string_clean": "it does cool stuff",
             "created": "2010-09-12 07:17:04",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2010-01-02 12:34:56",
             "id": 13252951,
             "localized_string": "it does cool stuff"
         }
@@ -67,7 +67,7 @@
             "localized_string_clean": "Do step 1, then do step 2",
             "created": "2010-09-12 07:23:53",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2010-01-02 12:34:56",
             "id": 13252958,
             "localized_string": "Do step 1, then do step 2"
         }
@@ -79,7 +79,7 @@
             "localized_string_clean": null,
             "created": "2010-09-12 07:25:39",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2010-01-02 12:34:56",
             "id": 13252963,
             "localized_string": "nobody1@nowhere.com"
         }
@@ -91,7 +91,7 @@
             "localized_string_clean": null,
             "created": "2010-09-12 07:17:04",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2010-01-02 12:34:56",
             "id": 13252949,
             "localized_string": "http://www.somewhere.com/"
         }
@@ -103,7 +103,7 @@
             "localized_string_clean": null,
             "created": "2010-09-12 07:17:04",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2010-01-02 12:34:56",
             "id": 13259250,
             "localized_string": "My Cool Add-on"
         }
@@ -126,7 +126,6 @@
             "trusted": false,
             "total_contributions": "0.00",
             "locale_disambiguation": null,
-            "binary": false,
             "guid": "nobody1@nowhere.com",
             "weekly_downloads": 75,
             "support_url": null,
@@ -145,14 +144,12 @@
             "description": 13252958,
             "default_locale": "en-US",
             "target_locale": null,
-            "get_satisfaction_product": "",
             "prerelease": false,
             "thankyou_note": 13252966,
             "admin_review": false,
             "slug": "a228107",
             "external_software": false,
             "highest_status": 1,
-            "get_satisfaction_company": "",
             "name": 13259250,
             "created": "2010-09-12 07:17:04",
             "type": 1,
@@ -241,7 +238,6 @@
         "pk": 54686910,
         "model": "users.userprofile",
         "fields": {
-            "sandboxshown": false,
             "display_collections_fav": false,
             "display_collections": true,
             "occupation": "",
@@ -256,14 +252,11 @@
             "username": "theauthor1",
             "bio": 13252970,
             "failed_login_attempts": 0,
-            "firstname": "",
             "deleted": false,
-            "lastname": "",
             "emailhidden": false,
             "last_login_attempt_ip": "",
             "last_login_attempt": null,
             "password": "nope",
-            "nickname": "theauthor",
             "resetcode_expires": null,
             "resetcode": "",
             "created": "2010-09-12 07:19:31",
@@ -278,7 +271,6 @@
         "pk": 54686911,
         "model": "users.userprofile",
         "fields": {
-            "sandboxshown": false,
             "display_collections_fav": false,
             "display_collections": true,
             "occupation": "",
@@ -293,14 +285,11 @@
             "username": "theauthor2",
             "bio": 13252971,
             "failed_login_attempts": 0,
-            "firstname": "",
             "deleted": false,
-            "lastname": "",
             "emailhidden": false,
             "last_login_attempt_ip": "",
             "last_login_attempt": null,
             "password": "nope",
-            "nickname": "theauthor2",
             "resetcode_expires": null,
             "resetcode": "",
             "created": "2010-09-12 07:19:31",

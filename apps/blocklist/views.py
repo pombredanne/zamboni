@@ -1,24 +1,23 @@
+import base64
 import collections
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime
 from operator import attrgetter
 import time
-import uuid
 
 from django.core.cache import cache
-from django.conf import settings
 from django.db.models import Q, signals as db_signals
 from django.shortcuts import get_object_or_404
 from django.utils.cache import patch_cache_control
+from django.utils.encoding import smart_str
 
 import jingo
-import redisutils
 
 from amo.utils import sorted_groupby
 from amo.tasks import flush_front_end_cache_urls
 from versions.compare import version_int
-from .models import (BlocklistItem, BlocklistPlugin, BlocklistGfx,
-                     BlocklistApp, BlocklistDetail)
+from .models import (BlocklistApp, BlocklistCA, BlocklistDetail, BlocklistGfx,
+                     BlocklistItem, BlocklistPlugin)
 
 
 App = collections.namedtuple('App', 'guid min max')
@@ -28,13 +27,13 @@ BlItem = collections.namedtuple('BlItem', 'rows os modified block_id')
 def blocklist(request, apiver, app, appver):
     key = 'blocklist:%s:%s:%s' % (apiver, app, appver)
     # Use md5 to make sure the memcached key is clean.
-    key = hashlib.md5(key).hexdigest()
-    response = cache.get(key)
+    key = hashlib.md5(smart_str(key)).hexdigest()
+    cache.add('blocklist:keyversion', 1)
+    version = cache.get('blocklist:keyversion')
+    response = cache.get(key, version=version)
     if response is None:
         response = _blocklist(request, apiver, app, appver)
-        cache.set(key, response, 60 * 60)
-        # This gets cleared with the clear_blocklist signal handler.
-        redisutils.connections['master'].sadd('blocklist:keys', key)
+        cache.set(key, response, 60 * 60, version=version)
     patch_cache_control(response, max_age=60 * 60)
     return response
 
@@ -44,28 +43,35 @@ def _blocklist(request, apiver, app, appver):
     items = get_items(apiver, app, appver)[0]
     plugins = get_plugins(apiver, app, appver)
     gfxs = BlocklistGfx.objects.filter(Q(guid__isnull=True) | Q(guid=app))
+    cas = None
+
+    try:
+        cas = BlocklistCA.objects.all()[0]
+        # base64encode does not allow str as argument
+        cas = base64.b64encode(cas.data.encode('utf-8'))
+    except IndexError:
+        pass
+
     # Find the latest created/modified date across all sections.
     all_ = list(items.values()) + list(plugins) + list(gfxs)
     last_update = max(x.modified for x in all_) if all_ else datetime.now()
     # The client expects milliseconds, Python's time returns seconds.
     last_update = int(time.mktime(last_update.timetuple()) * 1000)
-    return jingo.render(request, 'blocklist/blocklist.xml',
-                        dict(items=items, plugins=plugins, gfxs=gfxs,
-                             apiver=apiver, appguid=app, appver=appver,
-                             last_update=last_update),
+    data = dict(items=items, plugins=plugins, gfxs=gfxs, apiver=apiver,
+                appguid=app, appver=appver, last_update=last_update, cas=cas)
+    return jingo.render(request, 'blocklist/blocklist.xml', data,
                         content_type='text/xml')
 
 
 def clear_blocklist(*args, **kw):
     # Something in the blocklist changed; invalidate all responses.
-    redis = redisutils.connections['master']
-    keys = redis.smembers('blocklist:keys')
-    cache.delete_many(keys)
-    redis.delete('blocklist:keys')
+    cache.add('blocklist:keyversion', 1)
+    cache.incr('blocklist:keyversion')
     flush_front_end_cache_urls.delay(['/blocklist/*'])
 
 
-for m in BlocklistItem, BlocklistPlugin, BlocklistGfx, BlocklistApp:
+for m in (BlocklistItem, BlocklistPlugin, BlocklistGfx, BlocklistApp,
+          BlocklistCA, BlocklistDetail):
     db_signals.post_save.connect(clear_blocklist, sender=m,
                                  dispatch_uid='save_%s' % m)
     db_signals.post_delete.connect(clear_blocklist, sender=m,
@@ -75,7 +81,7 @@ for m in BlocklistItem, BlocklistPlugin, BlocklistGfx, BlocklistApp:
 def get_items(apiver, app, appver=None):
     # Collapse multiple blocklist items (different version ranges) into one
     # item and collapse each item's apps.
-    addons = (BlocklistItem.uncached
+    addons = (BlocklistItem.objects.no_cache()
               .select_related('details')
               .filter(Q(app__guid__isnull=True) | Q(app__guid=app))
               .order_by('-modified')
@@ -90,7 +96,7 @@ def get_items(apiver, app, appver=None):
             rs = list(rs)
             rr.append(rs[0])
             rs[0].apps = [App(r.app_guid, r.app_min, r.app_max)
-                           for r in rs if r.app_guid]
+                          for r in rs if r.app_guid]
         os = [r.os for r in rr if r.os]
         items[guid] = BlItem(rr, os[0] if os else None, rows[0].modified,
                              rows[0].block_id)
@@ -101,15 +107,20 @@ def get_items(apiver, app, appver=None):
 def get_plugins(apiver, app, appver=None):
     # API versions < 3 ignore targetApplication entries for plugins so only
     # block the plugin if the appver is within the block range.
-    plugins = (BlocklistPlugin.uncached.select_related('details')
-               .filter(Q(guid__isnull=True) | Q(guid=app)))
+    plugins = (BlocklistPlugin.objects.no_cache().select_related('details')
+               .filter(Q(app__isnull=True) | Q(app__guid=app) |
+                       Q(app__guid__isnull=True))
+               .extra(select={'app_guid': 'blapps.guid',
+                              'app_min': 'blapps.min',
+                              'app_max': 'blapps.max'}))
     if apiver < 3 and appver is not None:
         def between(ver, min, max):
             if not (min and max):
                 return True
             return version_int(min) < ver < version_int(max)
         app_version = version_int(appver)
-        plugins = [p for p in plugins if between(app_version, p.min, p.max)]
+        plugins = [p for p in plugins if between(app_version, p.app_min,
+                                                 p.app_max)]
     return list(plugins)
 
 

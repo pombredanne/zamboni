@@ -39,12 +39,13 @@ if (typeof diff_match_patch !== 'undefined') {
 
 var config = {
     diff_context: 2,
-    needreview_pattern: /\.(js|jsm|xul|xml|x?html?|manifest|sh|py)$/i
+    needreview_pattern: /\.(js|jsm|xul|xml|x?html?|manifest|webapp|sh|py)$/i
 };
 
 if (typeof SyntaxHighlighter !== 'undefined') {
     /* Turn off double click on the syntax highlighter. */
     SyntaxHighlighter.defaults['quick-code'] = false;
+    SyntaxHighlighter.defaults['auto-links'] = false;
     SyntaxHighlighter.amo_vars = {'deletions': {}, 'additions': {}, 'is_diff': false};
 
     SyntaxHighlighter.Highlighter.prototype.getLineNumbersHtml = function(code, lineNumbers) {
@@ -71,7 +72,7 @@ if (typeof SyntaxHighlighter !== 'undefined') {
         return html;
     };
 
-    SyntaxHighlighter.Highlighter.prototype.getLineHtml = function(lineIndex, lineNumber, code)	{
+    SyntaxHighlighter.Highlighter.prototype.getLineHtml = function(lineIndex, lineNumber, code) {
         var classes = [
             'original',
             'line',
@@ -90,8 +91,11 @@ if (typeof SyntaxHighlighter !== 'undefined') {
 
         /* HTML parsing with regex warning disclaimer. This lib writes out
          * well formed lines with <code> and <a>. We want a hint
-         * of the line length without all the syntax highlighting in it. */
-        var raw = code.replace(/<.*?>/g, '').replace(/&.*?;/g, ' ');
+         * of the line length without all the syntax highlighting in it.
+         * We also need to expand tab characters to the long end of
+         * likely values to make sure long tab-indented lines are
+         * processed. */
+        var raw = code.replace(/<.*?>/g, '').replace(/&.*?;/g, ' ').replace(/\t/g, '        ');
         if (raw.length > 80) {
             classes.push('longline');
         }
@@ -122,13 +126,11 @@ jQuery.fn.numberInput = function(increment) {
 
         var height = $self.outerHeight() / 2;
 
-        var $dom = $('<span>').attr({ 'class': 'number-combo' })
-                     .append($('<a>').attr({ 'class': 'number-combo-button-down',
-                                             'href': '#' })
-                                     .text('↓'))
-                     .append($('<a>').attr({ 'class': 'number-combo-button-up',
-                                             'href': '#' })
-                                     .text('↑'));
+        var $dom = $('<span>', { 'class': 'number-combo' })
+                     .append($('<a>', { 'class': 'number-combo-button-down',
+                                        'href': '#', 'text': '↓' }))
+                     .append($('<a>', { 'class': 'number-combo-button-up',
+                                        'href': '#', 'text': '↑' }));
 
         var $up = $dom.find('.number-combo-button-up').click(_pd(function(event, count) {
             count = count || (event.ctrlKey ? increment : 1) || 1;
@@ -143,7 +145,7 @@ jQuery.fn.numberInput = function(increment) {
 
         $.each(['change', 'keypress', 'input'], function(i, event) {
             $self.bind(event, function() {
-                $self.val($self.val().replace(/\D+/, ""));
+                $self.val($self.val().replace(/\D+/, ''));
             });
         });
         $self.keypress(function(event) {
@@ -164,6 +166,22 @@ jQuery.fn.numberInput = function(increment) {
     return this;
 };
 
+jQuery.fn.appendMessage = function(message) {
+    $(this).each(function() {
+        var $self = $(this),
+            $container = $self.find('.message-inner');
+
+        if (!$container.length) {
+            $container = $('<div>', { 'class': 'message-inner' });
+            $self.append($('<div>', { 'class': 'message' }).append($container))
+                 .addClass('message-container');
+        }
+
+        $container.append($('<div>')[typeof message == "string" ? 'text' : 'html'](message));
+    });
+    return this;
+};
+
 function bind_viewer(nodes) {
     $.each(nodes, function(x) {
         nodes['$'+x] = $(nodes[x]);
@@ -174,48 +192,36 @@ function bind_viewer(nodes) {
         this.hidden = false;
         this.top = null;
         this.last = null;
-        this.fix_vertically = function($inner, $outer) {
-            var $self = this;
-            if (!$self.top) {
-                $self.top = $outer.position().top;
-            }
-            function update() {
-                var sb_bottom = $self.top + $outer.height() - $inner.height();
-                if ($(window).scrollTop() > sb_bottom) {
-                    $inner.css({'position': 'absolute', 'top': sb_bottom});
-                } else if ($(window).scrollTop() > $self.top) {
-                    $inner.css({'position': 'fixed', 'top': 0});
-                } else {
-                    $inner.css({'position': 'absolute', 'top': $self.top});
-                }
-            }
-            $(window).scroll(debounce(update), 200);
-            update();
-        };
         this.size_line_numbers = function($node, deleted) {
             /* We need to re-size the line numbers correctly depending upon
                the wrapping. */
 
-            var self = this;
-            $node.each(function(){
+            $node.each(function() {
+                /* Be sure to make all size calculations before modifying
+                 * the DOM so that we don't force unnecessary reflows. */
+
                 var $self = $(this),
-                    long_lines = $(this).find('td.code div.longline');
+                    long_lines = $(this).find('td.code div.longline'),
+                    changes = [];
                 /* Use the longline hint to guess at long lines and
                  * see what needs resizing. */
                 $.each(long_lines, function() {
                     var $this = $(this),
                         k = parseInt($this.attr('class').match(/index(\d+)/)[1], 10);
-                    $self.find('td.gutter div.index' + k).css('height',  $this.height() + 'px');
+                    changes.push(['td.gutter div.index' + k + ':eq(0)', $this.height() + 'px']);
+                });
+                $.each(changes, function(i, change) {
+                    $self.find(change[0]).css('height', change[1]);
                 });
             });
-            this.updateViewport(true);
+            this.update_viewport(true);
         };
         this.compute = function(node) {
             var $diff = node.find('#diff'),
                 $content = node.find('#content');
 
             if ($content && !$diff.length) {
-                SyntaxHighlighter.highlight($content);
+                SyntaxHighlighter.highlight({}, $content[0]);
                 // Note SyntaxHighlighter has nuked the node and replaced it.
                 this.size_line_numbers(node.find('#content'), false);
             }
@@ -230,20 +236,82 @@ function bind_viewer(nodes) {
 
                 /* Reset the syntax highlighter variables. */
                 SyntaxHighlighter.amo_vars = {'deletions': {}, 'additions': {}, 'is_diff': true};
-                SyntaxHighlighter.highlight($diff);
+                SyntaxHighlighter.highlight({}, $diff[0]);
                 // Note SyntaxHighlighter has nuked the node and replaced it.
                 $diff = node.find('#diff');
                 this.size_line_numbers($diff, true);
+            }
 
+            this.compute_messages(node);
+
+            if (window.location.hash && window.location.hash != 'top') {
+                window.location = window.location;
+            }
+
+            this.show_selected();
+        };
+        this.message_type_map = {
+            'error': 'error',
+            'warning': 'warning',
+            'notice': 'info'
+        };
+        this.compute_messages = function(node) {
+            var $diff = node.find('#diff'),
+                path = this.nodes.$files.find('a.file.selected').attr('data-short'),
+                messages = [];
+
+            if (this.messages) {
+                if (this.messages.hasOwnProperty(''))
+                    messages = messages.concat(this.messages['']);
+                if (this.messages.hasOwnProperty(path))
+                    messages = messages.concat(this.messages[path]);
+            }
+
+            _.each(messages, function(message) {
+                var $line = $('#L' + message.line),
+                    title = $line.attr('title'),
+                    html = ['<div>',
+                            format('<strong>{0}{1}: {2}</strong>',
+                                   message.type[0].toUpperCase(),
+                                   message.type.substr(1),
+                                   message.message)];
+
+                $.each([].concat(message.description), function(i, msg) {
+                    html.push('<p>', msg, '</p>');
+                });
+
+                html.push('</div>');
+                var $dom = $(html.join(''));
+
+                if (message.line != null && $line.length) {
+                    $line.addClass(message.type)
+                         .parent().appendMessage($dom);
+
+                    $('.code .' + $line.parent().attr('class').match(/number\d+/)[0] + ':eq(0)')
+                         .addClass(message.type);
+                } else {
+                    $('#diff-wrapper').before(
+                        $('<div>', { 'class': 'notification-box' })
+                            .addClass(this.message_type_map[message.type])
+                            .append($dom));
+                }
+            }, this);
+
+            if ($diff.length || messages) {
                 /* Build out the diff bar based on the line numbers. */
-                var $sb = $diff.siblings('.diff-bar').eq(0),
-                    $gutter = $diff.find('td.gutter'),
-                    $lines = $gutter.find('div.line a');
+                var $sb = $('.diff-bar'),
+                    $gutter = $('td.gutter'),
+                    $lines = $gutter.find('div.line > a');
+
+                $sb.empty();
 
                 if ($lines.length) {
+                    /* Be sure to make all size calculations before modifying
+                     * the DOM so that we don't force unnecessary reflows. */
+                    var changes = [];
                     var flush = function($line, bottom) {
                         var height = (bottom - $start.offset().top) * 100 / $gutter.height(),
-                            style = { 'height': height + "%" };
+                            style = { 'height': Math.min(height, 100) + "%" };
 
                         if ($prev && !$prev.attr('class')) {
                             style['border-top-width'] = '1px';
@@ -254,15 +322,14 @@ function bind_viewer(nodes) {
                             style['margin-bottom'] = '-1px';
                         }
 
-                        $sb.append($('<a>', { 'href': $start.attr('href'), 'class': $start.attr('class'),
-                                              'css': style }));
+                        changes.push([$start, style]);
 
                         $prev = $start;
                         $start = $line;
                     };
 
                     var $prev, $start = null;
-                    $lines.each(function () {
+                    $lines.each(function() {
                         var $line = $(this);
                         if (!$start) {
                             $start = $line;
@@ -270,7 +337,18 @@ function bind_viewer(nodes) {
                             flush($line, $line.offset().top);
                         }
                     });
-                    flush(null, $gutter.offset().bottom);
+                    flush(null, $gutter.offset().top + $gutter.height());
+
+                    $.each(changes, function(i, change) {
+                        var $start = change[0], style = change[1];
+
+                        var $link = $('<a>', { 'href': $start.attr('href'), 'class': $start.attr('class'),
+                                               'css': style }).appendTo($sb);
+
+                        if ($start.is('.error, .notice, .warning')) {
+                            $link.appendMessage($start.parent().find('.message-inner > div').clone());
+                        }
+                    });
 
                     this.$diffbar = $sb;
                     this.$viewport = $('<div>', { 'class': 'diff-bar-viewport' });
@@ -278,46 +356,169 @@ function bind_viewer(nodes) {
                     $sb.append(this.$viewport);
 
                     $diff.addClass('diff-bar-height');
-                    $sb.show();
+                    $sb.removeClass('js-hidden');
 
-                    this.updateViewport(true);
+                    this.update_viewport(true);
                 }
             }
+        };
+        this.update_validation = function(data) {
+            var viewer = this;
 
-            if (window.location.hash && window.location.hash != 'top') {
-                window.location = window.location;
+            $('#validating').hide();
+            if (data.validation) {
+                this.validation = data.validation;
+
+                this.messages = {};
+                _.each(data.validation.messages, function(message) {
+                    // Skip warnings for known libraries.
+                    if (message.id.join('/') == 'testcases_content/test_packed_packages/blacklisted_js_library')
+                        return;
+
+                    var path = [].concat(message.file).join("/");
+
+                    if (!this.messages[path]) {
+                        this.messages[path] = [];
+                    }
+                    this.messages[path].push(message);
+                }, this);
+
+                this.known_files = {};
+                var metadata = data.validation.metadata;
+                if (metadata) {
+                    if (metadata.jetpack_sdk_version) {
+                        $('#jetpack-version').show()
+                            .find('span').text(metadata.jetpack_sdk_version);
+                    }
+
+                    var identified_files = {};
+                    (function process_files(prefix, metadata) {
+                        if (metadata.identified_files) {
+                            var files = metadata.identified_files;
+                            for (var path in files) {
+                                var file = files[path];
+                                path = prefix + path;
+                                viewer.known_files[path] = file;
+                            }
+                        }
+
+                        if (metadata.sub_packages) {
+                            for (var prefix in metadata.sub_packages) {
+                                process_files(prefix, metadata.sub_packages[prefix]);
+                            }
+                        }
+                    })('', metadata);
+                }
+
+                this.nodes.$files.find('.file').each(function() {
+                    var $self = $(this);
+
+                    var known = viewer.known_files[$self.attr('data-short')];
+                    if (known) {
+                        var msg = ['Identified:'];
+                        if ('library' in known) {
+                            msg.push(
+                                format('    Library: {library} {version}\n',
+                                       known));
+                        }
+                        msg.push(format('    Original path: {0}', known.path));
+
+                        $self.attr('title', msg.join('\n'))
+                             .addClass('known')
+                             .addClass('tooltip');
+                    }
+
+                    var messages = viewer.messages[$self.attr('data-short')];
+                    if (messages) {
+                        var types = {};
+                        $.each(messages, function(i, message) {
+                            types[message.type] = true;
+                        });
+                        for (var type in types) {
+                            $self.addClass(type);
+                        }
+                    }
+                });
+
+                this.nodes.$files.find('.directory').each(function() {
+                    var $self = $(this);
+                    var $ul = $self.parent().next();
+
+                    $.each(['warning', 'error', 'notice'], function(i, type) {
+                        if ($ul.find('.' + type + ':eq(0)').length) {
+                            $self.addClass(type);
+                        }
+                    });
+                    if (!$ul.find('.file:not(.known):eq(0)').length) {
+                        $self.addClass('known');
+                    }
+                });
+
+                this.compute_messages($('#content-wrapper'));
+            }
+
+            if (data.error) {
+                $('#validating').after(
+                    $('<div>', { 'class': 'notification-box error',
+                                 'text': format('{0} {1}',
+                                                $("#metadata").attr('data-validation-failed'),
+                                                data.error) }));
             }
         };
-        this.updateViewport = function(resize) {
-            var $viewport = this.$viewport,
-                $gutter = this.$gutter,
-                $diffbar = this.$diffbar;
-
-            if (!$viewport) {
-                return;
+        this.fix_vertically = function($node, changes, resize) {
+            var rect = $node.parent()[0].getBoundingClientRect(),
+                window_height = $(window).height();
+            if (resize) {
+                changes.push([$node, { 'height': Math.min(rect.bottom - rect.top,
+                                                 window_height) + 'px' }]);
             }
 
-            var gutter = $gutter[0].getBoundingClientRect(),
-                gutter_height = gutter.bottom - gutter.top,
-                window_height = $(window).height(),
-                diffbar_top = -Math.min(0, gutter.top) * 100 / gutter_height + "%";
+            if (rect.bottom <= window_height) {
+                changes.push([$node, { 'position': 'absolute', 'top': '', 'bottom': '0' }]);
+            } else if (rect.top > 0) {
+                changes.push([$node, { 'position': 'absolute', 'top': '0', 'bottom': '' }]);
+            } else {
+                changes.push([$node, { 'position': 'fixed', 'top': '0px', 'bottom': '' }]);
+            }
+        };
+        this.update_viewport = function(resize) {
+            /* Be sure to make all size calculations before modifying
+             * the DOM so that we don't force unnecessary reflows. */
+
+            var $viewport = this.$viewport,
+                changes = [];
 
             if (resize) {
-                var height = gutter_height + Math.min(0, gutter.top) - Math.max(gutter.bottom - window_height, 0);
-
-                $viewport.css({ 'height': height * 100 / gutter_height + "%", 'top': diffbar_top });
-
-                $diffbar.css({ 'height': Math.min($("#diff-wrapper").height(), window_height) + "px" });
-            } else {
-                $viewport.css({ 'top': diffbar_top });
+                var height = $('#controls-inner').height() / $('#metadata').width();
+                changes.push([$('#files-inner'), { 'padding-bottom': height + 'em' }]);
             }
 
-            if (gutter.bottom <= window_height) {
-                $diffbar.css({ 'position': 'absolute', 'top': '', 'bottom': '0' });
-            } else if (gutter.top > 0) {
-                $diffbar.css({ 'position': 'absolute', 'top': '0', 'bottom': '' });
-            } else {
-                $diffbar.css({ 'position': 'fixed', 'top': '0px', 'bottom': '' });
+            this.fix_vertically(this.nodes.$files, changes, resize);
+
+            if ($viewport) {
+                var $gutter = this.$gutter,
+                    $diffbar = this.$diffbar,
+                    gr = $gutter[0].getBoundingClientRect(),
+                    gh = gr.bottom - gr.top,
+                    height = Math.max(0, Math.min(gr.bottom, $(window).height())
+                                       - Math.max(gr.top, 0));
+
+                changes.push([$viewport,
+                              { 'height': Math.min(height / gh * 100, 100) + '%',
+                                'top': -Math.min(0, gr.top) / gh * 100 + '%' }]);
+
+                this.fix_vertically($diffbar, changes, resize);
+            }
+
+            $.each(changes, function (i, change) {
+                change[0].css(change[1]);
+            });
+
+            if (resize) {
+                /* Opera does not handle max-height:100% properly in
+                 * this case, and I won't place any bets on IE. */
+                var $wrapper = $('#files-wrapper');
+                $wrapper.css({ 'max-height': $wrapper.parent().height() + 'px' });
             }
         };
         this.toggle_leaf = function($leaf) {
@@ -348,6 +549,23 @@ function bind_viewer(nodes) {
             } else {
                 $('.breadcrumbs').append(format('<li>{0}</li>', $link.attr('data-short')));
             }
+
+            this.show_selected();
+        };
+        this.show_selected = function() {
+            var $sel = this.nodes.$files.find('.selected'),
+                $cont = $('#files-wrapper');
+
+            if ($sel.position().top < 0) {
+                $cont.scrollTop($cont.scrollTop() + $sel.position().top);
+            } else {
+                /* Unfortunately, jQuery does not provide anything
+                   comparable to clientHeight, which we can't do without */
+                var offset = $sel.position().top + $sel.outerHeight() - $cont[0].clientHeight;
+                if (offset > 0) {
+                    $cont.scrollTop($cont.scrollTop() + offset);
+                }
+            }
         };
         this.load = function($link) {
             /* Accepts a jQuery wrapped node, which is part of the tree.
@@ -357,6 +575,7 @@ function bind_viewer(nodes) {
                 $old_wrapper = $('#content-wrapper');
             $old_wrapper.hide();
             this.nodes.$thinking.show();
+            this.update_viewport(true);
             if (location.hash != 'top') {
                 if (history.pushState !== undefined) {
                     this.last = $link.attr('href');
@@ -372,9 +591,6 @@ function bind_viewer(nodes) {
                         var $new_wrapper = $('#content-wrapper');
                         self.compute($new_wrapper);
                         $new_wrapper.slideDown();
-                        if (self.hidden) {
-                            self.toggle_files('hide');
-                        }
                     }
                 }
             );
@@ -397,48 +613,67 @@ function bind_viewer(nodes) {
             });
             return k;
         };
-        this.toggle_wrap = function(state) {
+        this.toggle_wrap = function(state, quick) {
             /* Toggles the content wrap in the page, starts off wrapped */
             this.wrapped = (state == 'wrap' || !this.wrapped);
             $('code').toggleClass('unwrapped');
+            if (!quick) {
+                this.size_line_numbers($('#content-wrapper'), false);
+            }
+        };
+        this.toggle_files = function(action) {
+            var collapse = null;
+            if (action == 'hide')
+                collapse = true;
+            else if (action == 'show')
+                collapse = false;
+
+            $('#file-viewer').toggleClass('collapsed-files', collapse);
             this.size_line_numbers($('#content-wrapper'), false);
         };
-        this.toggle_files = function(state) {
-            this.hidden = (state == 'hide' || !this.hidden);
-            if (this.hidden) {
-                this.nodes.$files.hide();
-                this.nodes.$commands.detach().appendTo('div.featured-inner:first');
-                this.nodes.$thinking.addClass('full');
-            } else {
-                this.nodes.$files.show();
-                this.nodes.$commands.detach().appendTo(this.nodes.$files);
-                this.nodes.$thinking.removeClass('full');
+        this.toggle_known = function(hide) {
+            if (hide == null)
+                hide = storage.get('files/hide-known');
+            else
+                storage.set('files/hide-known', hide ? 'true' : '');
+
+            $('#file-viewer').toggleClass('hide-known-files', !!hide);
+            var known = $('#toggle-known');
+            if (known.length) {
+                known[0].checked = !!hide;
             }
-            $('#content-wrapper').toggleClass('full');
-            this.size_line_numbers($('#content-wrapper'), false);
         };
         this.next_changed = function(offset) {
             var $files = this.nodes.$files.find('a.file'),
                 selected = $files[this.get_selected()],
-                isDiff = $('#diff').length;
+                isDiff = $('#diff').length,
+                filter = (isDiff ? '.diff' : '') + ':not(.known)';
 
-            var a = [], list = a;
-            $files.each(function () {
+            var list = [];
+            $files.each(function() {
+                var $file = $(this);
                 if (this == selected) {
                     list = [selected];
-                } else if (config.needreview_pattern.test($(this).attr('data-short')) && (!isDiff || $(this).hasClass('diff'))) {
+                } else if (($file.is('.notice, .warning, .error') ||
+                            config.needreview_pattern.test($file.attr('data-short'))) &&
+                           $file.is(filter)) {
                     list.push(this);
                 }
             });
 
-            list = list.concat(a).slice(offset);
+            list = list.slice(offset);
             if (list.length) {
                 this.select($(list[0]));
-                $("#top")[0].scrollIntoView(true);
+                var $top = $("#top");
+                if ($top.length) {
+                    $top[0].scrollIntoView(true);
+                }
             }
         };
         this.next_delta = function(forward) {
-            var $deltas = $('td.code .line.add, td.code .line.delete'),
+            var classes = $("#diff").length ? 'add delete' : 'warning notice error',
+                $deltas = $(classes.split(/ /g)
+                                   .map(function(className) { return 'td.code .line.' + className; }).join(', ')),
                 $lines = $('td.code .line');
             $lines.indexOf = Array.prototype.indexOf;
 
@@ -474,23 +709,23 @@ function bind_viewer(nodes) {
         };
     }
 
-    var viewer = new Viewer();
+    var viewer = new Viewer(),
+        storage = z.Storage();
 
     if (viewer.nodes.$files.find('li').length == 1) {
-        viewer.toggle_files();
-        $('#files-down').parent().hide();
-        $('#files-up').parent().hide();
-        $('#files-expand-all').parent().hide();
+        viewer.toggle_files('hide');
+        $('#files-down, #files-up, #files-expand-all').hide();
     }
 
     viewer.nodes.$files.find('.directory').click(_pd(function() {
         viewer.toggle_leaf($(this));
     }));
 
-    if ($('#diff').length) {
-        $(window).resize(debounce(function () { viewer.updateViewport(true); }));
-        $(window).scroll(debounce(function () { viewer.updateViewport(false); }));
-    }
+    $(window).resize(_.throttle(function() { viewer.update_viewport(true); }, 10))
+             .scroll(_.throttle(function() { viewer.update_viewport(false); }, 10));
+
+    $('#toggle-known').change(function () { viewer.toggle_known(this.checked); });
+    viewer.toggle_known();
 
     $('#files-up').click(_pd(function() {
         viewer.next_changed(-1);
@@ -522,16 +757,36 @@ function bind_viewer(nodes) {
         });
     }));
 
+    if ($('body').attr('data-validate-url')) {
+        $('#validating').css('display', 'block');
+
+        $.ajax({type: 'POST',
+                url: $('body').attr('data-validate-url'),
+                data: {},
+                success: function(data) {
+                    if (typeof data != "object")
+                        data = { error: data };
+                    viewer.update_validation(data);
+                },
+                error: function(XMLHttpRequest, textStatus, errorThrown) {
+                    viewer.update_validation({ error: errorThrown });
+                },
+                dataType: 'json'
+        });
+    }
+
     viewer.nodes.$files.find('.file').click(_pd(function() {
         viewer.select($(this));
-        viewer.toggle_wrap('wrap');
+        viewer.toggle_wrap('wrap', true);
     }));
 
     $(window).bind('popstate', function() {
         if (viewer.last != location.pathname) {
             viewer.nodes.$files.find('.file').each(function() {
                 if ($(this).attr('href') == location.pathname) {
-                    viewer.select($(this));
+                    if (!$(this).is('.selected')) {
+                        viewer.select($(this));
+                    }
                 }
             });
         }
@@ -539,7 +794,7 @@ function bind_viewer(nodes) {
 
     var prefixes = {},
         keys = {};
-    $('#commands code').each(function () {
+    $('#commands code').each(function() {
         var $code = $(this),
             $link = $code.parents('tr').find('a'),
             key = $code.text();
@@ -552,7 +807,9 @@ function bind_viewer(nodes) {
 
     var buffer = '';
     $(document).bind('keypress', function(e) {
-        if (e.charCode && !(e.altKey || e.ctrlKey || e.metaKey)) {
+        if (e.charCode && !(e.altKey || e.ctrlKey || e.metaKey) &&
+                ![HTMLInputElement, HTMLSelectElement, HTMLTextAreaElement]
+                    .some(function (iface) { return e.target instanceof iface })) {
             buffer += String.fromCharCode(e.charCode);
             if (keys.hasOwnProperty(buffer)) {
                 e.preventDefault();
@@ -572,27 +829,27 @@ function bind_viewer(nodes) {
 
         var rule = stylesheet.cssRules[0],
             tabstopsKey = 'apps/files/tabstops',
-            localTabstopsKey = tabstopsKey + ':' + $('#metadata').attr('data-slug'),
-            storage = z.Storage();
+            localTabstopsKey = tabstopsKey + ':' + $('#metadata').attr('data-slug');
 
         $("#tab-stops-container").show();
 
         var $tabstops = $('#tab-stops')
             .numberInput(4)
             .val(Number(storage.get(localTabstopsKey) || storage.get(tabstopsKey)) || 4)
-            .change(function() {
+            .change(function(event, global) {
                 rule.style.tabSize = rule.style.MozTabSize = $(this).val();
-                storage.set(localTabstopsKey, $(this).val());
+                if (!global)
+                    storage.set(localTabstopsKey, $(this).val());
                 storage.set(tabstopsKey, $(this).val());
             })
-            .change();
+            .trigger('change', true);
     }
 
     return viewer;
 }
 
+var viewer = null;
 $(document).ready(function() {
-    var viewer = null;
     var nodes = { files: '#files', thinking: '#thinking', commands: '#commands' };
     function poll_file_extraction() {
         $.getJSON($('#extracting').attr('data-url'), function(json) {
@@ -628,4 +885,21 @@ $(document).ready(function() {
         viewer.selected(viewer.nodes.$files.find('a.selected'));
         viewer.compute($('#content-wrapper'));
     }
+
+    var $left = $('#id_left'),
+        $right = $('#id_right');
+
+    $left.find('option:not([value])').attr('disabled', true);
+
+    var $left_options = $left.find('option:not([disabled])'),
+        $right_options = $right.find('option:not([disabled])');
+
+    $right.change(function(event) {
+        var right = $right.val();
+        $left_options.attr('disabled', function() { return this.value == right; });
+    }).change();
+    $left.change(function(event) {
+        var left = $left.val();
+        $right_options.attr('disabled', function() { return this.value == left; });
+    }).change();
 });

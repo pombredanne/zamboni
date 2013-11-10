@@ -3,7 +3,7 @@ $(document).ready(function(){
 var catFixture = {
     setup: function() {
         this.sandbox = tests.createSandbox('#addon-cats');
-        initCatFields();
+        initCatFields(this.sandbox);
     },
     teardown: function() {
         this.sandbox.remove();
@@ -13,7 +13,7 @@ var catFixture = {
 module('initCatFields', catFixture);
 
 test('Default with initial categories', function() {
-    var scope = $("#addon-cats-fx", self.sandbox);
+    var scope = $("#addon-cats-fx", this.sandbox);
     var checkedChoices = $("input:checked", scope);
     equals(checkedChoices.length, 2);
     equals(checkedChoices[0].id, "id_form-0-categories_1");
@@ -21,23 +21,24 @@ test('Default with initial categories', function() {
 
     // 2 categories are selected, the other category should be disabled.
     var max = scope.parent("div").attr("data-max-categories");
-    equals(parseInt(max), 2);
-    var disabledChoices = $("input:disabled", scope);
+    equals(parseInt(max, 10), 2);
+    var disabledChoices = $("input:disabled", this.sandbox);
     equals(disabledChoices.length, 1);
     equals(disabledChoices[0].id, "id_form-0-categories_0");
 });
 
 test('Default without initial categories', function() {
-    equals($("#addon-cats-tb input:checked", self.sandbox).length, 0);
+    equals($("#addon-cats-tb input:checked", this.sandbox).length, 0);
 });
 
 
 module('addonUploaded', {
     setup: function() {
         this._FormData = z.FormData;
-        z.FormData = tests.StubOb(z.FormData, {
+        this.FormDataStub = tests.StubOb(z.FormData, {
             send: function() {}
         });
+        z.FormData = this.FormDataStub;
         this.sandbox = tests.createSandbox('#file-upload-template');
         $.fx.off = true;
 
@@ -201,7 +202,14 @@ test('HTML in filename (on error)', function() {
 });
 
 test('HTML in filename (on success)', function() {
-    var results = {};
+    $.mockjax({
+        url: '/poll-for-results-success',
+        responseText: {
+            error: ""
+        },
+        status: 200
+    });
+    var results = {url: '/poll-for-results-success'};
     $(this.el).trigger("upload_success",
                        [{name: "tester's add-on2.xpi"}, results]);
     equals($('#upload-status-text', this.sandbox).text(),
@@ -246,6 +254,29 @@ asyncTest('400 JSON error after polling', function() {
     });
 });
 
+test('append form data callback', function() {
+    var called = false,
+        self = this;
+    $('#upload-file-input', this.sandbox).addonUploader({
+        appendFormData: function(formData) {
+            called = true;
+            ok(formData.append);
+        }
+    });
+    $(this.el).trigger('change');
+    ok(called);
+});
+
+test('Unrecognized file type', function() {
+    var errors;
+    $(this.el).bind('upload_errors', function(e, file, error_msgs) {
+        errors = error_msgs;
+    });
+    this.file.name = 'somefile.pdf';
+    $(this.el).trigger('change');
+    equals(errors[0], "The filetype you uploaded isn't recognized.");
+});
+
 
 module('fileUpload', {
     setup: function() {
@@ -280,7 +311,7 @@ test('Clicking delete screenshot marks checkbox.', function() {
     // $.fx.off sets all animation durations to 0
     $.fx.off = true;
     $(".edit-previews-text a.remove", this.sandbox).trigger('click');
-    equals($(".delete input", this.sandbox).attr("checked"), true);
+    equals($(".delete input", this.sandbox).attr("checked"), 'checked');
     equals($(".preview:visible", this.sandbox).length, 0);
     $.fx.off = false;
 });
@@ -294,8 +325,7 @@ module('addon platform chooser', {
         this.sandbox.remove();
     },
     check: function(sel) {
-        $(sel, this.sandbox).attr('checked',true);
-        $(sel, this.sandbox).trigger('change');
+        $(sel, this.sandbox).attr('checked', 'checked').trigger('change');
     }
 });
 
@@ -305,8 +335,8 @@ test('platforms > ALL', function() {
     this.check('input[value="3"]');
     // Check ALL platforms:
     this.check('input[value="1"]');
-    equals($('input[value="2"]', this.sandbox).attr('checked'), false);
-    equals($('input[value="3"]', this.sandbox).attr('checked'), false);
+    equals($('input[value="2"]', this.sandbox).attr('checked'), undefined);
+    equals($('input[value="3"]', this.sandbox).attr('checked'), undefined);
 });
 
 test('ALL > platforms', function() {
@@ -314,7 +344,7 @@ test('ALL > platforms', function() {
     this.check('input[value="1"]');
     // Check any other platform:
     this.check('input[value="2"]');
-    equals($('input[value="1"]', this.sandbox).attr('checked'), false);
+    equals($('input[value="1"]', this.sandbox).attr('checked'), undefined);
 });
 
 test('mobile / desktop', function() {
@@ -323,7 +353,7 @@ test('mobile / desktop', function() {
     // Check ALL mobile platforms:
     this.check('input[value="9"]');
     // desktop platforms are still checked:
-    equals($('input[value="1"]', this.sandbox).attr('checked'), true);
+    equals($('input[value="1"]', this.sandbox).attr('checked'), 'checked');
 });
 
 test('mobile > ALL', function() {
@@ -332,7 +362,7 @@ test('mobile > ALL', function() {
     // Check Android:
     this.check('input[value="7"]');
     // ALL mobile is no longer checked:
-    equals($('input[value="9"]', this.sandbox).attr('checked'), false);
+    equals($('input[value="9"]', this.sandbox).attr('checked'), undefined);
 });
 
 test('ALL > mobile', function() {
@@ -342,50 +372,50 @@ test('ALL > mobile', function() {
     // Check ALL mobile platforms:
     this.check('input[value="9"]');
     // Specific platforms are no longer checked:
-    equals($('input[value="7"]', this.sandbox).attr('checked'), false);
-    equals($('input[value="8"]', this.sandbox).attr('checked'), false);
+    equals($('input[value="7"]', this.sandbox).attr('checked'), undefined);
+    equals($('input[value="8"]', this.sandbox).attr('checked'), undefined);
 });
 
-
-module('slugified fields', {
-    setup: function() {
-        this.sandbox = tests.createSandbox('#slugified-field');
-    },
-    teardown: function() {
-        this.sandbox.remove();
-    }
-});
-
-asyncTest('non-customized', function() {
-    load_unicode();
-    tests.waitFor(function() {
-        return z == null || z.unicode_letters;
-    }).thenDo(function() {
-        $("#id_name").val("password exporter");
-        slugify();
-        equals($("#id_slug").val(), 'password-exporter');
-        $("#id_name").val("password exporter2");
-        slugify();
-        equals($("#id_slug").val(), 'password-exporter2');
-        start();
-    });
-});
-
-asyncTest('customized', function() {
-    load_unicode();
-    tests.waitFor(function() {
-        return z == null || z.unicode_letters;
-    }).thenDo(function() {
-        $("#id_name").val("password exporter");
-        slugify();
-        equals($("#id_slug").val(), 'password-exporter');
-        $("#id_slug").attr("data-customized", 1);
-        $("#id_name").val("password exporter2");
-        slugify();
-        equals($("#id_slug").val(), 'password-exporter');
-        start();
-    });
-});
+// TODO(Kumar) uncomment when bug 706597 is fixed
+// module('slugified fields', {
+//     setup: function() {
+//         this.sandbox = tests.createSandbox('#slugified-field');
+//     },
+//     teardown: function() {
+//         this.sandbox.remove();
+//     }
+// });
+//
+// asyncTest('non-customized', function() {
+//     load_unicode();
+//     tests.waitFor(function() {
+//         return z == null || z.unicode_letters;
+//     }).thenDo(function() {
+//         $("#id_name").val("password exporter");
+//         slugify();
+//         equals($("#id_slug").val(), 'password-exporter');
+//         $("#id_name").val("password exporter2");
+//         slugify();
+//         equals($("#id_slug").val(), 'password-exporter2');
+//         start();
+//     });
+// });
+//
+// asyncTest('customized', function() {
+//     load_unicode();
+//     tests.waitFor(function() {
+//         return z == null || z.unicode_letters;
+//     }).thenDo(function() {
+//         $("#id_name").val("password exporter");
+//         slugify();
+//         equals($("#id_slug").val(), 'password-exporter');
+//         $("#id_slug").attr("data-customized", 1);
+//         $("#id_name").val("password exporter2");
+//         slugify();
+//         equals($("#id_slug").val(), 'password-exporter');
+//         start();
+//     });
+// });
 
 
 module('exclude platforms', {
@@ -414,7 +444,7 @@ module('exclude platforms', {
     }
 });
 
-test('mobile', function() {
+test('mobile / android', function() {
     var sb = this.sandbox;
     results = {
         validation: {
@@ -435,19 +465,13 @@ test('mobile', function() {
                        [{name: 'somefile.txt'}, results]);
 
     // All desktop platforms disabled:
-    equals($('.desktop-platforms input:eq(0)', sb).attr('disabled'), true);
-    equals($('.desktop-platforms input:eq(1)', sb).attr('disabled'), true);
-    equals($('.desktop-platforms input:eq(2)', sb).attr('disabled'), true);
-    equals($('.desktop-platforms input:eq(3)', sb).attr('disabled'), true);
-    equals($('.desktop-platforms label:eq(0)', sb).hasClass('platform-disabled'),
-           true);
+    equal($('.desktop-platforms input:disabled', sb).length, 4);
+    ok($('.desktop-platforms label:eq(0)', sb).hasClass('platform-disabled'));
 
     ok($('.platform ul.errorlist', sb).length > 0, 'Message shown to user');
 
     // All mobile platforms not disabled:
-    equals($('.mobile-platforms input:eq(0)', sb).attr('disabled'), false);
-    equals($('.mobile-platforms input:eq(1)', sb).attr('disabled'), false);
-    equals($('.mobile-platforms input:eq(2)', sb).attr('disabled'), false);
+    equal($('.mobile-platforms input:disabled', sb).length, 0);
 });
 
 test('existing platforms', function() {
@@ -470,10 +494,76 @@ test('existing platforms', function() {
     $(this.el).trigger("upload_success_results",
                        [{name: 'somefile.txt'}, results]);
 
-    equals($('.desktop-platforms input:eq(0)', sb).attr('disabled'), false);
-    equals($('.desktop-platforms input:eq(1)', sb).attr('disabled'), true);
+    equals($('.desktop-platforms input:eq(0)', sb).attr('disabled'), undefined);
+    equals($('.desktop-platforms input:eq(1)', sb).attr('disabled'), 'disabled');
     equals($('.desktop-platforms label:eq(0)', sb).hasClass('platform-disabled'),
            false);
+});
+
+
+module('perf-tests', {
+    setup: function() {
+        this.sandbox = tests.createSandbox('#file-perf-tests');
+        initPerfTests(this.sandbox);
+    },
+    teardown: function() {
+        this.sandbox.remove();
+    }
+});
+
+asyncTest('success', function() {
+    var $sb = this.sandbox;
+    $('.start-perf-tests', $sb).attr('href', '/file-perf-stub1');
+    $.mockjax({
+        url: '/file-perf-stub1',
+        responseText: {success: true},
+        status: 200,
+        responseTime: 0
+    });
+    $('.start-perf-tests', $sb).trigger('click');
+    tests.waitFor(function() {
+        return $('.perf-results', $sb).attr('data-got-response') == '1';
+    }).thenDo(function() {
+        // TODO(Kumar) add checks for polling
+        equals($('.perf-results', $sb).text(), 'Waiting for test results...')
+        start();
+    });
+});
+
+asyncTest('failure', function() {
+    var $sb = this.sandbox;
+    $('.start-perf-tests', $sb).attr('href', '/file-perf-stub2');
+    $.mockjax({
+        url: '/file-perf-stub2',
+        responseText: {success: false},
+        status: 200,
+        responseTime: 0
+    });
+    $('.start-perf-tests', $sb).trigger('click');
+    tests.waitFor(function() {
+        return $('.perf-results', $sb).attr('data-got-response') == '1';
+    }).thenDo(function() {
+        equals($('.perf-results', $sb).text(), 'Internal Server Error')
+        start();
+    });
+});
+
+asyncTest('500 error', function() {
+    var $sb = this.sandbox;
+    $('.start-perf-tests', $sb).attr('href', '/file-perf-stub3');
+    $.mockjax({
+        url: '/file-perf-stub3',
+        responseText: '',
+        status: 500,
+        responseTime: 0
+    });
+    $('.start-perf-tests', $sb).trigger('click');
+    tests.waitFor(function() {
+        return $('.perf-results', $sb).attr('data-got-response') == '1';
+    }).thenDo(function() {
+        equals($('.perf-results', $sb).text(), 'Internal Server Error')
+        start();
+    });
 });
 
 

@@ -1,0 +1,15 @@
+{% extends 'developers/base_impala.html' %}
+
+{% block title %}{{ hub_page_title(_('Developer Agreement')) }}{% endblock %}
+
+{% block content %}
+{# TODO(marketplace-docs): Uncomment this when we have legit policies pages.
+  {{ hub_breadcrumbs(items=[(url('mkt.developers.docs', doc_name='policies'), _("App Policies")),
+                            (None, _("Developer Agreement"))]) }}
+#}
+{{ hub_breadcrumbs(items=[(None, _('Developer Agreement'))]) }}
+<h1>{{ _('Developer Agreement') }}</h1>
+<div class="primary prose" role="main">
+  {{ dev_agreement() }}
+</div>
+{% endblock %}

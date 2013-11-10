@@ -8,7 +8,7 @@
       {{ _('Resume') }}</a>
     </li>
   {% endif %}
-  {% if check_addon_ownership(request, addon) %}
+  {% if check_addon_ownership(request, addon) and addon.can_be_deleted() %}
     <li>
       <a href="#" class="delete-addon tooltip"
          title="{{ _('Delete this add-on.') }}">{{ _('Delete') }}</a>
@@ -20,12 +20,12 @@
 {% else %}
   {% if check_addon_ownership(request, addon, dev=True) %}
     <li>
-      <a href="{{ url('devhub.addons.edit', addon.slug) }}" class="tooltip"
+      <a href="{{ addon.get_dev_url() }}" class="tooltip"
          title="{{ _("Edit details about this add-on's listing.") }}">
         {{ _('Edit Listing') }}</a>
     </li>
     <li>
-      <a href="{{ url('devhub.versions', addon.slug) }}#version-upload" class="tooltip"
+      <a href="{{ addon.get_dev_url('versions') }}#version-upload" class="tooltip"
          title="{{ _('Upload a new version of this add-on.') }}">
         {{ _('New Version') }}</a>
     </li>
@@ -40,8 +40,7 @@
   {% endif %}
   {% if not addon.disabled_by_user %}
     <li>
-      <a href="{{ locale_url('/statistics/addon/{0}')|f(addon.id) }}" class="tooltip"
-      {# <a href="{{ url('stats.overview', addon.slug) }}" class="tooltip" #}
+      <a href="{{ url('stats.overview', addon.slug) }}" class="tooltip"
          title="{{ _('Daily statistics on downloads and users.') }}">
         {{ _('Statistics') }}</a>
     </li>
@@ -49,11 +48,17 @@
   <li>
     <a href="#" class="more-actions">{{ _('More') }}</a>
     <div class="more-actions-popup popup hidden">
-      {% set manage_urls = (
-        (url('devhub.addons.owner', addon.slug), _('Manage Authors & License')),
-        (url('devhub.addons.profile', addon.slug), _('Manage Developer Profile')),
-        (url('devhub.addons.payments', addon.slug), _('Manage Payments')),
-        (url('devhub.versions', addon.slug), _('Manage Status & Versions'))) %}
+      {% set manage_urls = [
+        (addon.get_dev_url('owner'), _('Manage Authors & License')),
+        (addon.get_dev_url('profile'), _('Manage Developer Profile')),
+        (addon.get_dev_url('payments'), _('Manage Payments')),
+        (addon.get_dev_url('versions'), _('Manage Status & Versions')),
+      ] %}
+      {% if addon.is_premium() and waffle.switch('allow-refund') %}
+        {% do manage_urls.insert(3,
+          (addon.get_dev_url('refunds'), loc('Manage Refunds'))
+        ) %}
+      {% endif %}
       <ul>
         {% for url, title in manage_urls %}
           <li><a href="{{ url }}">{{ title }}</a></li>

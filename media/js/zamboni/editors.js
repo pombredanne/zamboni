@@ -1,58 +1,61 @@
-$(function() {
+(function() {
     if($('.daily-message').length) {
         initDailyMessage();
     }
 
     var show_comments = function(e) {
-        e.preventDefault()
-        var me = e.target;
-        $(me).hide()
-        $(me).next().show()
-        $(me).parents('tr').next().show()
-    }
+        e.preventDefault();
+        var $me = $(e.target);
+        $me.hide();
+        $me.next().show();
+        $me.parents('tr').next().show();
+    };
 
     var hide_comments = function(e) {
         e.preventDefault();
-        var me = e.target;
-        $(me).hide();
-        $(me).prev().show()
-        $(me).parents('tr').next().hide()
-    }
+        var $me = $(e.target);
+        $me.hide();
+        $me.prev().show();
+        $me.parents('tr').next().hide();
+    };
 
 
     $('a.show').click(show_comments);
     $('a.hide').click(hide_comments);
 
-    if ($('#queue-search').length) {
-        initQueueSearch($('#queue-search'));
+    if ($('.queue-search').length) {
+        initQueueSearch($('.queue-search'));
     }
 
     if($('#review-actions').length > 0) {
         initReviewActions();
     }
 
-    if($('#monthly').exists()) {
+    if($('#monthly.highcharts-container').length) {
         initPerformanceStats();
     }
 
-    if($('#scroll_sidebar').exists()) {
+    if($('#scroll_sidebar').length && !$('body.mobile, body.tablet').length &&
+       !z.capabilities.mobile) {
         initScrollingSidebar();
     }
 
-    if($('#addon-queue').exists()) {
+    if($('#addon-queue').length) {
         initQueue();
     }
 
     // Show add-on ID when icon is clicked
-    if ($("#addon[data-id], #persona[data-id]").exists()) {
+    if ($("#addon[data-id], #persona[data-id]").length) {
       $("#addon .icon").click(function() {
         window.location.hash = "id=" + $("#addon, #persona").attr("data-id");
-      })
+      });
     }
-});
+})();
+
 
 function initReviewActions() {
     var groups = $('#id_canned_response').find('optgroup');
+
     function showForm(element, pageload) {
         var $element = $(element),
             value = $element.find('input').val(),
@@ -61,7 +64,7 @@ function initReviewActions() {
         pageload = pageload || false;
         $element.closest('.review-actions').addClass('on');
         $('.review-actions .action_nav ul li').removeClass('on-tab');
-        $element.find('input').attr('checked', true);
+        $element.find('input').prop('checked', true);
 
         $element.addClass('on-tab');
 
@@ -76,6 +79,7 @@ function initReviewActions() {
         $data_toggle.filter('[data-value*="' + value + '"]').show();
 
         toggle_input();
+        togglePermissions(value);
 
         /* Fade out canned responses */
         var label = $element.text().trim();
@@ -83,7 +87,9 @@ function initReviewActions() {
         groups.filter("[label='"+label+"']").css('color', '#444');
     }
 
-    $('#review-actions .action_nav ul li').click(function(){ showForm(this); });
+    $('#review-actions .action_nav ul li:not(.disabled)').click(function() {
+        showForm(this);
+    });
 
     /* Canned Response stuff */
     $('.review-actions-canned select').change(function() {
@@ -100,8 +106,24 @@ function initReviewActions() {
 
     if($files_input.length == 1 || ! $('#review-actions .review-actions-files').attr('data-uncheckable')) {
         // Add a dummy, disabled input
-        $files_input.attr({'checked': true}).hide();
+        $files_input.prop('checked', true).hide();
         $files_input.after($('<input>', {'type': 'checkbox', 'checked': true, 'disabled': true}));
+    }
+
+    function togglePermissions(action) {
+        // Check/Uncheck/Disable default permissions associated with the action.
+        var $reviewerActions = $('.review-actions-visibility');
+        var $permissions = $('input[name="action_visibility"]');
+        $permissions.prop('checked', true).prop('disabled', false);
+
+        var disable_list = $reviewerActions.data('default-visibility')[action];
+        if (disable_list) {
+            _.each(disable_list.disabled, function(v) {
+                $permissions.filter('[value="' + v + '"]')
+                            .prop('disabled', true)
+                            .prop('checked', false);
+            });
+        }
     }
 
     function toggle_input(){
@@ -109,7 +131,7 @@ function initReviewActions() {
             $files_checked = $files_input.filter(':checked'),
             disable_submit = $files_checked.length < 1 && $('.review-actions-files').is(':visible');
 
-        $('.review-actions-save input').attr('disabled', disable_submit);
+        $('.review-actions-save input').prop('disabled', disable_submit);
 
         // If it's not :visible, we can assume it's been replaced with a dummy :disabled input
         $('#review-actions-files-warning').toggle($files_checked.filter(':enabled:visible').length > 1);
@@ -121,15 +143,16 @@ function initReviewActions() {
 
     $('.files .install').click(_pd(function(){
         var $this = $(this),
-            installer = $this.is('[data-type=search-tools]') ? z.installSearch : z.installAddon;
-        installer($this.text(), $this.attr('href'), "")
+            installer = $this.is('[data-type="search-tools"]') ? z.installSearch : z.installAddon;
+        installer($this.text(), $this.attr('href'), "");
     }));
 
 
     /* Who's currently on this page? */
     var addon_id = $('#addon').attr('data-id');
+    var url = $('#addon').attr('data-url');
     function check_currently_viewing() {
-        $.post('/en-US/editors/review_viewing', {'addon_id': addon_id}, function(d){
+        $.post(url, {'addon_id': addon_id}, function(d){
             var show = d.is_user != 1 && typeof d.current_name != "undefined",
                        $current = $('.currently_viewing_warning');
 
@@ -146,7 +169,9 @@ function initReviewActions() {
             setTimeout(check_currently_viewing, d.interval_seconds * 1000);
         });
     }
-    check_currently_viewing();
+    if (!(z.capabilities.localStorage && window.localStorage['dont_poll'])) {
+        check_currently_viewing();
+    }
 
     /* Item History */
     $('#review-files tr.listing-header').click(function() {
@@ -170,7 +195,29 @@ function initReviewActions() {
         eh_setting = $(this).attr('data-num');
         storage.set('editors_history', eh_setting);
         toggleHistory();
+        highlightHistory();
     }));
+
+    function highlightHistory() {
+        $('#history a').removeClass('on');
+        $(format('#history a[data-num="{0}"]', eh_setting)).addClass('on');
+    }
+    highlightHistory();
+
+    function check_receipt() {
+        var $node = $('#receipt-check-result');
+        if ($node) {
+            $.getJSON($node.data('url'), function(data) {
+                if (data.status) {
+                    $node.text(gettext('Receipt checked by app.'));
+                } else {
+                    $node.text(gettext('Receipt was not checked by app.'));
+                    setTimeout(check_receipt, 10000);
+                }
+            });
+        }
+    }
+    check_receipt();
 }
 
 function insertAtCursor(textarea, text) {
@@ -205,8 +252,9 @@ function initDailyMessage(doc) {
         return;
     }
     $motd.find('.close').show();
-    if (storage.get('motd_closed') == $('p', $motd).text()) {
-        $motd.hide();
+    if (storage.get('motd_closed') != $('p', $motd).text()) {
+        // You haven't read this spam yet? Here, I have something to show you.
+        $motd.slideDown();
     }
     $motd.find('.close').click(function(e) {
         e.stopPropagation();
@@ -219,30 +267,58 @@ function initDailyMessage(doc) {
 function initQueue() {
     var url = $('#addon-queue').attr('data-url'),
         addon_ids = $.map($('.addon-row'), function(el) {
-        return $(el).attr('data-addon');
-    });
-    (function checkCurrentlyViewing() {
-        $.post(url, {'addon_ids': addon_ids.join(',')}, function(data) {
-            $('#addon-queue .locked').removeClass('locked');
-            $.each(data, function(k, v) {
-                $('#addon-' + k).addClass('locked');
-            });
-            setTimeout(checkCurrentlyViewing, 2000);
+            return $(el).attr('data-addon');
         });
-    })();
+    if(!(('localStorage' in window) && window.localStorage['dont_poll'])) {
+        (function checkCurrentlyViewing() {
+            $.post(url, {'addon_ids': addon_ids.join(',')}, function(data) {
+                $('#addon-queue .locked').removeClass('locked')
+                                         .removeAttr('title');
+                $.each(data, function(k, v) {
+                    $('#addon-' + k).addClass('locked')
+                                    .attr('title',
+                                          format(gettext('{name} was viewing this add-on first.'),
+                                                 {name: v}));
+                });
+                setTimeout(checkCurrentlyViewing, 2000);
+            });
+        })();
+    }
+
+    var pop = $('#popup-notes').hide(),
+        loadNotes = function(e) {
+            var addon_id = $(e.click_target).closest('tr').attr('data-addon');
+            pop.html(gettext('Loading&hellip;'));
+            $.get(pop.attr('data-url') + addon_id, function(data) {
+                pop.html('');
+                var empty = true;
+                if(data.releasenotes) {
+                    pop.append($('<strong>', {'text': gettext('Version Notes')}));
+                    pop.append($('<div>', {'class': 'version-notes', 'text': data.releasenotes}));
+                    empty = false;
+                }
+                if(data.approvalnotes) {
+                    pop.append($('<strong>', {'text': gettext('Notes for Reviewers')}));
+                    pop.append($('<div>', {'class': 'version-notes', 'text': data.approvalnotes}));
+                    empty = false;
+                }
+                if(empty) {
+                    pop.append($('<em>', {'text': gettext('No version notes found')}));
+                }
+            });
+            return true;
+        };
+
+    $('.addon-version-notes a').each(function(i, el) {
+        $(pop).popup(el, { pointTo: el, callback: loadNotes, width: 500});
+    });
+
 }
 
-
 function initQueueSearch(doc) {
-    $('#toggle-queue-search', doc).click(function(e) {
-        e.preventDefault();
-        $(e.target).blur();
-        if ($('#advanced-search:visible', doc).length) {
-            $('#advanced-search', doc).slideUp();
-        } else {
-            $('#advanced-search', doc).slideDown();
-        }
-    });
+    $('.toggle-queue-search').click(_pd(function(e) {
+        $('.advanced-search').slideToggle();
+    }));
 
     $('#id_application_id', doc).change(function(e) {
         var maxVer = $('#id_max_version', doc),
@@ -267,58 +343,34 @@ function initQueueSearch(doc) {
 
 
 function initScrollingSidebar() {
-    var $sb = $('#scroll_sidebar'),
-        $sb_parent = $sb.parent(),
-        sb_top = $sb_parent.offset().top,
-        sb_height = $sb.height(),
-        $addon = $('#addon'),
-        addon_top = $addon.offset().top,
-        current_state = false,
-        addon_height_current = 0;
+    var $window = $(window),
+        $sb = $('#scroll_sidebar'),
+        addon_top = $('#addon').offset().top,
+        current_state = false;
 
-    function updateState(state){
-        if(state == current_state) return;
-
-        if(state == "bottom") {
-            $sb.css({'position': 'absolute', 'top': addon_height_current - sb_height});
-        } else if(state == "middle") {
-            $sb.css({'position': 'fixed', 'top': 0});
-        } else if(state == "top") {
-            $sb.css({'position': 'absolute', 'top': 0});
-        }
+    function setSticky(state) {
+        if (state == current_state) return;
+        current_state = state;
+        $sb.toggleClass('sticky', state);
     }
 
-    $(window).scroll(debounce(function(){
-        var scroll_top = $(window).scrollTop(),
-            addon_height = $addon.height();
-
-        if(addon_height_current != addon_height) {
-            $sb_parent.css('height', addon_height);
-            addon_height_current = addon_height;
-        }
-
-        if(addon_top + addon_height < scroll_top + sb_height) {
-            updateState('bottom', addon_height);
-        } else if(scroll_top > sb_top) {
-            updateState('middle');
-        } else {
-            updateState('top');
-        }
-    }), 200);
+    $window.scroll(_.throttle(function() {
+        setSticky(window.scrollY > addon_top);
+    }, 20));
 }
 
 
 function initPerformanceStats() {
     var container = $('#monthly'),
         groups = {'usercount': $('#reviews_user').text(),
-                  'teamavg': gettext('Average Reviews')}
+                  'teamavg': gettext('Average Reviews')};
 
     /* View Other User Stats */
     $('#select_user').change(function(){
         var $this = $(this),
             user = $this.val();
 
-        if(user != "") {
+        if(user !== "") {
             window.location.href = $this.attr('data-url') + user;
         }
     });
@@ -392,4 +444,5 @@ function initPerformanceStats() {
     }
 
 }
+
 

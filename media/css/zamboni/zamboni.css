@@ -20,6 +20,10 @@
     visibility: hidden;
 }
 
+* {
+    word-wrap: break-word;
+}
+
 /************************************/
 /*             ELEMENTS             */
 /************************************/
@@ -34,11 +38,8 @@ li.usertag {
     overflow: hidden;
 }
 
-html {
-    background-color: #fff;
-    background-image: url(../../img/zamboni/global/bg-header.png);
-    background-position: left top;
-    background-repeat: repeat-x;
+#tabzilla-wrapper {
+    background: #fff url(../../img/zamboni/global/bg-header.png) repeat-x;
 }
 
 header {
@@ -128,6 +129,13 @@ ul.errorlist {
     color: #ccc;
 }
 
+.disabled,
+.disabled a[href],
+.disabled label,
+.disabled h3 {
+    color: #888 !important;
+}
+
 /************************************/
 /*             GRADIENTS            */
 /************************************/
@@ -136,8 +144,7 @@ ul.errorlist {
 **/
 
 /* 'listing header' */
-.listing-header,
-#aux-nav > ul li ul li {
+.listing-header {
     background-color: #E0EFFD;
     background: -webkit-gradient(
         linear,
@@ -151,8 +158,7 @@ ul.errorlist {
 
 /* 'listing footer' */
 .listing-footer,
-.tab-wrapper .fm-control,
-.section-teaser .teaser-header {
+.tab-wrapper .fm-control {
     background-color: #E0EFFD;
     background: -webkit-gradient(
         linear,
@@ -238,6 +244,7 @@ button,
 input[type=submit],
 input[type=button] {
     padding: .2em .95em .3em;
+    cursor: pointer;
 }
 
 .button span,
@@ -283,7 +290,7 @@ input[type=button]:focus {
     box-shadow: inset 0 0 2px rgba(255,255,255,1);
 }
 
-a.button:active {
+a.button:active, button.button:active {
     border-color: #03c;
     background-image: url("../../img/zamboni/button-blue-on.png");
     background: -moz-linear-gradient(top, #39f 40%, #6fb7ff 60%);
@@ -349,8 +356,9 @@ button.link {
 }
 
 .cta a.button.disabled,
+a.button.disabled,
 a.button[disabled],
-button:disabled,
+button.button:disabled,
 input[type=submit]:disabled,
 input[type=button]:disabled {
     background: #a6a6a6;
@@ -478,7 +486,7 @@ input[type=button].caution {
     color: #333;
     background: #fc0 url("../../img/zamboni/button-caution.png") 0 50% repeat-x;
     background: -moz-linear-gradient(rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0) 60%),
-                -moz-repeating-linear-gradient(-45deg, #F0B500, #F0B500 7px, #FFD000 7px, #FFD000 14px);
+    -moz-repeating-linear-gradient(-45deg, #F0B500, #F0B500 7px, #FFD000 7px, #FFD000 14px);
     border-color: #a70;
     text-shadow: 0 1px 0 #ffe56b;
 }
@@ -491,7 +499,7 @@ input[type=button].caution.concealed {
     color: #859fae;
     border-color: #a70;
     background: -moz-linear-gradient(rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.6) 60%),
-                -moz-repeating-linear-gradient(-45deg, #F0B500, #F0B500 7px, #FFD000 7px, #FFD000 14px);
+    -moz-repeating-linear-gradient(-45deg, #F0B500, #F0B500 7px, #FFD000 7px, #FFD000 14px);
 }
 
 a.button.caution: hover,
@@ -509,7 +517,7 @@ a.button.caution:active {
     border-color: #850;
     background-image: url("../../img/zamboni/button-caution-on.png");
     background: -moz-linear-gradient(rgba(255, 255, 255, 0) 40%, rgba(255, 255, 255, 0.3) 60%),
-                -moz-repeating-linear-gradient(45deg, #F0B500, #F0B500 7px, #FFD000 7px, #FFD000 14px);
+    -moz-repeating-linear-gradient(45deg, #F0B500, #F0B500 7px, #FFD000 7px, #FFD000 14px);
     -moz-box-shadow: inset 0 0 5px rgba(0,0,0,.5);
     -webkit-box-shadow: inset 0 0 5px rgba(0,0,0,.5);
 }
@@ -625,8 +633,7 @@ a.button.concealed:active {
 
 .install.featuredaddon,
 .install.lite,
-.install.unreviewed,
-.install.selfhosted {
+.install.unreviewed {
     padding: 2px;
     -moz-border-radius: .95em .95em .95em 0;
     -webkit-border-radius: .95em;
@@ -636,8 +643,7 @@ a.button.concealed:active {
 
 .html-rtl .install.featuredaddon,
 .html-rtl .install.lite,
-.html-rtl .install.unreviewed,
-.html-rtl .install.selfhosted {
+.html-rtl .install.unreviewed {
     -moz-border-radius: .95em .95em 0 .95em;
     -webkit-border-radius: .95em;
     -webkit-border-bottom-left-radius: .95em;
@@ -661,13 +667,6 @@ a.button.concealed:active {
     color: #333;
 }
 
-.install.selfhosted {
-    background: #d3ecf6;
-}
-.install.selfhosted strong {
-    color: #235;
-}
-
 /** =Button =icons *********/
 .button.add b,
 .button.download b,
@@ -681,7 +680,12 @@ a.button.concealed:active {
 }
 
 .button.add b { background-position: 25% 0; }
-.button.add.prominent b { background-position: 25% -49px; }
+.button.add.prominent b {
+    background-position: 25% -49px;
+    position: relative;
+    right: 1px;
+    top: 2px;
+}
 .button.download b { background-position: 25% -100px; }
 .button.download.prominent b { background-position: 25% -150px; }
 .button.add.caution b { background-position: 25% -400px; }
@@ -725,7 +729,7 @@ a.button.concealed:active {
 .other .button.bsd,
 .other .button.solaris,
 .windows .button.windows {
-      display: inherit;
+    display: inherit;
 }
 
 th, td {
@@ -764,10 +768,10 @@ div.popup-shim {
 .thunderbird .install-note .msg, .thunderbird.app { background-image: url(../../img/app-icons/small/thunderbird.png); }
 .sunbird .install-note .msg, .sunbird.app { background-image: url(../../img/app-icons/small/sunbird.png); }
 .seamonkey .install-note .msg, .seamonkey.app { background-image: url(../../img/app-icons/small/seamonkey.png); }
+.android .install-note .msg, .android.app { background-image: url(../../img/app-icons/small/android.png); }
 .mz.app { background-image: url(../../img/app-icons/small/mozilla.png); }
 
 .install-note .msg.m-unreviewed,
-.install-note .msg.m-selfhosted,
 .popup.warning .msg {
     background-image: url(../../img/zamboni/icons/alert-32x32.png);
 }
@@ -849,6 +853,10 @@ div.popup-shim {
     z-index: 2000;
 }
 
+.install a * {
+   pointer-events: none;
+}
+
 /* http://nicolasgallagher.com/demo/pure-css-speech-bubbles/bubbles.html */
 /* Creates the larger triangle. */
 .install-note:before,
@@ -928,6 +936,7 @@ div.popup-shim {
     position: absolute;
     padding: 0.5em 1em;
     pointer-events: none;
+    z-index: 16389;
 }
 
 #tooltip.error {
@@ -1061,6 +1070,7 @@ ul.license li.copyr { background-position: 0 -260px; }
     position: relative;
     padding: .5em;
     -moz-border-radius: .25em;
+    border-radius: .25em;
 }
 .persona-small .persona-inner {
     max-width: 206px;
@@ -1071,8 +1081,72 @@ ul.license li.copyr { background-position: 0 -260px; }
 .persona-hover .persona-inner {
     background: #c8e8f2;
 }
+.persona-install {
+    border: 0.25em solid #C8E8F2;
+    bottom: -3px;
+    display: none;
+    left: 0;
+    position: absolute;
+}
+.addons-column .persona-install {
+    left: -3px;
+}
+.with-details .persona-install {
+    bottom: 53px;
+}
+.persona-preview:hover .incompat-browser {
+    display: block;
+}
+.persona-install.incompat-browser {
+    left: 1px;
+}
+.addons-column .persona-install.incompat-browser {
+    left: -2px;
+}
+.persona-install button {
+    border-radius: 1px;
+    height: 25px;
+    min-width: 65px;
+}
+.persona .persona-install.incompat-browser button.disabled {
+    background: #fff;
+    border-color: #888;
+    text-shadow: none;
+}
+.persona-install.incompat-browser button img {
+    display: none;
+}
+.persona-install button .disabled-icon {
+    display: none;
+}
+.persona-install button span {
+    border-left: 0;
+    border-right: 0;
+    margin: 0;
+    padding: 0;
+    white-space: inherit;
+}
+.persona-install.incompat-browser button:hover {
+    cursor: default;
+}
+.persona-install.incompat-browser button .disabled-icon {
+    display: inline;
+}
+.persona-install button div {
+    bottom: 2px;
+    position: relative;
+}
+.persona-install button div img {
+    border: 0;
+    margin: 0;
+    padding: 0;
+}
 .persona-hover .persona-install {
     display: block;
+}
+#more-personas .persona-install {
+    bottom: 0;
+    left: 0;
 }
 .persona-preview {
     position: relative;
@@ -1084,6 +1158,66 @@ ul.license li.copyr { background-position: 0 -260px; }
     background: transparent no-repeat right top;
     border: .25em solid #c8e8f2 !important;
 }
+.persona-preview span.review-decal {
+    border-radius: 0 0 1px 0;
+    font-weight: normal;
+    left: 3px;
+    padding: 3px 5px;
+    top: 3px;
+}
+.addons-column .persona-preview .review-decal {
+    left: 0;
+    top: 0;
+}
+.review-decal:hover {
+    cursor: pointer;
+}
+.persona-hover .review-decal {
+    background: #fff;
+}
+.persona-preview .approved {
+    color: #339900;
+}
+.persona-preview .rejected {
+    color: red;
+}
+.persona-preview .artist-tools {
+    background: #F5F5F5;
+    border-radius: 1px 0 0 0;
+    bottom: 0;
+    display: none;
+    opacity: .95;
+    padding: 4px 8px;
+    position: absolute;
+    right: 0;
+}
+.with-details .artist-tools {
+    bottom: 54px;
+}
+.persona-hover .artist-tools {
+    display: inline-block;
+}
+.persona-preview .artist-tools:hover {
+    opacity: 1;
+}
+.persona-inner .persona-preview span.artist-tools a {
+    padding: 0;
+    min-height: 0;
+}
+.persona-inner .persona-preview span.artist-tools a:hover {
+    background: none;
+}
+.persona-preview .artist-tools img {
+    height: 18px;
+    width: 18px;
+}
+.artist-tools.incompat-browser {
+    bottom: 55px;
+    right: 3px;
+}
+.addons-column .artist-tools.incompat-browser {
+    bottom: 3px;
+}
 .persona-hover .persona-preview [data-browsertheme] {
     border-color: #fff !important;
 }
@@ -1093,10 +1227,18 @@ ul.license li.copyr { background-position: 0 -260px; }
 .persona-large .persona-preview [data-browsertheme] {
     height: 100px;
 }
+#persona-summary .unreviewed {
+    background: none;
+}
+
+.persona.pending-notice {
+    padding-left: 10px;
+}
 
 .persona-preview .created,
 .persona-preview .users,
-.persona-preview .reviews {
+.persona-preview .reviews,
+.persona-preview .review-decal {
     background-color: #c8e8f2;
     display: inline-block;
     padding: .25em .5em;
@@ -1115,7 +1257,8 @@ ul.license li.copyr { background-position: 0 -260px; }
 
 .persona-hover .created,
 .persona-hover .users,
-.persona-hover .reviews {
+.persona-hover .reviews,
+.persona-hover .review-decal {
     background-color: #fff;
 }
 
@@ -1135,6 +1278,8 @@ ul.license li.copyr { background-position: 0 -260px; }
 .personas-featured .persona-list-3col {
     border: 1px solid #E0EFFD;
     -moz-border-radius: 5px;
+    border-radius: 5px;
+    padding-top: .5em;
 }
 
 .featured.personas-home {
@@ -1143,12 +1288,51 @@ ul.license li.copyr { background-position: 0 -260px; }
 
 .personas-home .intro {
     font-size: 1.4em;
-    width: 450px;
+    width: 400px;
 }
 
-#featured-addons.personas-home .featured-inner {
-    background: #fff url(../../img/zamboni/personas/promo-browser.png) no-repeat left bottom;
-    height: 345px;
+#featured-addons.personas-home .featured-inner.themes {
+    -moz-border-radius: 3px 3px 0 0;
+    -webkit-border-radius: 3px 3px 0 0;
+    border-radius: 3px 3px 0 0;
+}
+
+#featured-addons.personas-home .featured-inner.themes {
+    background: #fff url(../../img/zamboni/personas/theme-promo.png) no-repeat -392px 140px;
+    /* TODO(cvan): Retina-ize the right way. If cvan hasn't done this by the time you've read this, bug him. */
+    background-size: 120% auto;
+    height: 320px;
+}
+
+.html-rtl #featured-addons.personas-home .featured-inner.themes {
+    background-position: 260px 140px;
+}
+
+/*
+@media screen and (-webkit-min-device-pixel-ratio: 2), screen and (min--moz-device-pixel-ratio: 2), screen and (min-device-pixel-ratio: 2) {
+    #featured-addons.personas-home .featured-inner.themes {
+        background-image: url(../../img/zamboni/personas/theme-promo.png);
+        background-size: 120% auto;
+    }
+}
+*/
+
+#featured-addons.personas-home .featured-inner.complete-themes {
+    -moz-border-radius: 0 0 3px 3px;
+    -webkit-border-radius: 0 0 3px 3px;
+    border-radius: 0 0 3px 3px;
+    border-top: 0;
+    background: #e5f0fc url(../../img/zamboni/personas/complete-theme-promo.png) no-repeat 367px 0;
+    background-size: 120% auto;
+}
+
+.html-rtl #featured-addons.personas-home .featured-inner.complete-themes {
+    background-position: -500px 0;
+}
+
+.featured-inner.complete-themes h2,
+.featured-inner.complete-themes .intro {
+    width: 350px;
 }
 
 .personas-home .intro .more-info {
@@ -1156,12 +1340,20 @@ ul.license li.copyr { background-position: 0 -260px; }
     float: none;
 }
 
+.html-rtl .personas-home .intro .more-info {
+    background-position: 0 -302px;
+}
+
 #featured-addons .personas-slider {
     float: right;
-    height: 340px; /* 4 personas @ 85px; */
+    height: 255px; /* 3 personas @ 85px; */
     width: 30%;
     overflow: hidden;
-    margin-bottom: 0;
+    margin: 30px 0 0;
+}
+
+.html-rtl #featured-addons .personas-slider {
+    float: left;
 }
 
 /************************************/
@@ -1205,7 +1397,7 @@ fieldset legend { /* based on h3 */
 }
 
 .user-input h3 {
-  margin: 0 0 .5em;
+    margin: 0 0 .5em;
 }
 
 fieldset ol,
@@ -1231,6 +1423,7 @@ fieldset li {
 }
 
 input[type="text"],
+input[type="url"],
 input[type="password"],
 select,
 textarea {
@@ -1248,6 +1441,7 @@ select {
 }
 
 input[type="text"]:focus,
+input[type="url"]:focus,
 input[type="password"]:focus,
 select:focus,
 textarea:focus {
@@ -1335,6 +1529,7 @@ form .error .errorlist li {
 }
 
 form .error input[type="text"],
+form .error input[type="url"],
 form .error input[type="password"],
 form .error select,
 form .error textarea {
@@ -1478,6 +1673,10 @@ form .error .note.error {
     padding-left: 3.3%;
 }
 
+.html-rtl #featured-addons ul {
+    padding-left: 0;
+}
+
 #featured-addons li.addon {
     width: 30%;
     padding: 0;
@@ -1579,23 +1778,26 @@ form .error .note.error {
 
 .category-landing .addons-column {
     float: left;
-    padding: 0 2% 0 0;
     width: 32%;
     border: 0;
+    padding: 0;
+    margin-right: 14px;
 }
 
 .html-rtl .category-landing .addons-column {
     float: right;
-    padding: 0 0 2% 0;
+    padding: 0;
+    margin-left: 14px;
+    margin-right: 0;
 }
 
-.category-landing .addons-column:last-child {
-    padding-right: 0;
+.category-landing .addons-column.last {
+    margin-right: 0;
 }
 
-.html-rtl .category-landing .addons-column:last-child {
-    padding-right: 2%;
-    padding-left: 0;
+.html-rtl .category-landing .addons-column.last {
+    margin-right: 14px;
+    margin-left: 0;
 }
 
 .category-landing .addons-column h3 {
@@ -1617,11 +1819,31 @@ form .error .note.error {
     text-decoration: underline;
 }
 
-.category-landing .addons-column ul {
+.category-landing .addons-column ul, .category-landing .info-message {
     border: 1px solid #E0EFFD;
     -moz-border-radius: 5px;
+    border-radius: 5px;
     padding: 0;
     margin: 0;
+}
+.category-landing .info-message {
+    clear: both;
+    padding: 1em;
+}
+
+.category-landing .info-message .view-all {
+    padding: 0;
+    font-weight: normal;
+    margin-bottom: 0;
+    width: 80%;
+}
+
+.category-landing .info-message h3 {
+    margin: 0;
+    color: #444;
+}
+.category-landing .info-message .view-all a {
+    font-weight: bold;
 }
 
 .category-landing .addons-column ul.personas {
@@ -1719,9 +1941,8 @@ form .error .note.error {
 
 .html-rtl.category-landing .view-all a:link,
 .html-rtl.category-landing .view-all a:visited {
-    padding-right: 0;
-    padding-left: 10px;
     background: transparent url(../../img/zamboni/icons/arrow-left-blue.png) 0 55% no-repeat;
+    padding: 0 0 0 10px;
 }
 
 .category-landing .view-all a:hover,
@@ -1840,14 +2061,6 @@ form .error .note.error {
     overflow: visible;
 }
 
-.listing .item h3 {
-    float: left;
-}
-
-.html-rtl .listing .item h3 {
-    float: right;
-}
-
 .item .install,
 .results .item .install {
     float: left;
@@ -1959,6 +2172,10 @@ form .error .note.error {
 .versions .primary > .warning {
     background: #fff;
     border: 1px solid #e0effd;
+}
+
+.other-categories a {
+    display: block;
 }
 
 .versions .primary > .warning h2 {
@@ -2488,25 +2705,18 @@ form .error .note.error {
 }
 
 .install-wrapper.lite .install strong,
-.install-wrapper.unreviewed .install strong,
-.install-wrapper.selfhosted .install strong {
+.install-wrapper.unreviewed .install strong {
     display: none;
 }
 
 .install-wrapper.lite .install-note strong,
-.install-wrapper.unreviewed .install-note strong,
-.install-wrapper.selfhosted .install-note strong {
+.install-wrapper.unreviewed .install-note strong {
     display: inherit;
 }
 
 .install-wrapper.lite,
-.install-wrapper.unreviewed,
-.install-wrapper.selfhosted {
+.install-wrapper.unreviewed {
     padding: 0.4em;
-}
-
-.install-wrapper.selfhosted {
-    background: #D3ECF6;
 }
 
 .install-wrapper.lite,
@@ -2582,16 +2792,21 @@ td .addon-rating,
     text-indent: -999px;
     background: white;
     position: absolute;
-    right: 108px;
+    right: 99px;
     overflow: hidden;
 }
 
+.html-rtl .arrow {
+    right: auto;
+    left: 99px;
+}
+
 .arrow.prev {
-    top: -15px;
+    top: 11px;
 }
 
 .arrow.next {
-    top: 355px;
+    top: 304px;
 }
 
 .arrow:before {
@@ -2935,11 +3150,15 @@ label > .optional {
     outline: 0;
 }
 
+/* Redundant [type=text] selector to override django admin styles
+ * with higher specificity
+ */
 .edit_with_prefix span {
     border-right: 0 none;
     padding: 2px 2px 2px 5px;
 }
-.edit_with_prefix input {
+.edit_with_prefix input, .edit_with_prefix input[type=text] {
+    border: 1px solid #5875a0;
     border-left: 0 none;
 }
 
@@ -2947,6 +3166,7 @@ label > .optional {
     border-left: 0 none;
     padding: 2px 5px 2px 2px;
 }
+
 .edit_with_suffix input {
     border-right: 0 none;
 }
@@ -3036,12 +3256,6 @@ label > .optional {
    background-position: left bottom;
 }
 
-.ajax-loading #upload-status-text {
-   background-image: url(../../img/zamboni/loading-white.gif);
-   background-repeat: no-repeat;
-   background-position: right top;
-}
-
 .collections-contributors tr a {
     display: none;
 }
@@ -3061,8 +3275,12 @@ label > .optional {
     clear:both;
 }
 
-.featured div.meta {
+.featured .meta {
     margin-top: 0;
+}
+
+.featured .meta ul {
+    margin: 0;
 }
 
 .meta li {
@@ -3099,7 +3317,10 @@ label > .optional {
     margin-top: 2em;
 }
 
-input.placeholder {
+input:-moz-placeholder {
+    color: #ccc;
+}
+input::-webkit-placeholder {
     color: #ccc;
 }
 
@@ -3147,23 +3368,6 @@ td.input {
 }
 #id_name {
     display: block;
-}
-.ui-autocomplete {
-    background-color: #fff;
-    border: 1px solid black;
-    width: 300px;
-    z-index: 11;
-}
-.ui-autocomplete span {
-    line-height: 32px;
-}
-.ui-autocomplete a {
-    display: block;
-    padding: 2px;
-    cursor: pointer;
-}
-.ui-autocomplete img {
-    float:left;
 }
 #addons-list a.remove,
 #addons-list a.comment,
@@ -3213,6 +3417,9 @@ td.input {
 
 .contributor span {
     position: relative;
+}
+#contributor-ac-error {
+    margin: 0;
 }
 .make-owner {
     margin-left: 1em;
@@ -3269,15 +3476,6 @@ a.outlink:hover {
 }
 
 
-
-#addon-collector-logo {
-    float: right;
-}
-.html-rtl #addon-collector-logo {
-    float: left;
-}
-
-
 /* Widgets! they're just fancy <a> tags donchaknow */
 .collection_widgets {
     margin-top: .5em;
@@ -3294,7 +3492,7 @@ a.outlink:hover {
     background-image: url(../../img/zamboni/icons/collections.png);
     background-repeat: no-repeat;
     padding-left: 22px;
-    margin-right: 1em;
+    margin-right: 7px;
     height: 16px;
     line-height: 16px;
 }
@@ -3361,6 +3559,19 @@ input.ui-autocomplete-loading {
     background-position: right center;
 }
 
+.suggested-amount.ajax-loading,
+#contribute-box .ajax-loading {
+    background-image: url(../../img/zamboni/loading-white.gif);
+    background-repeat: no-repeat;
+    background-position: right center;
+    padding-right: 30px;
+}
+
+#contribute-box .ajax-loading {
+    margin-left: 0px;
+    font-weight: bold;
+}
+
 #popup-staging .popup {
     display: none;
 }
@@ -3413,34 +3624,40 @@ input.ui-autocomplete-loading {
     border-style: solid;
     border-top-color: #003595;
 }
+#locale-popup:after {
+  right: 53px;
+}
+#locale-popup:before {
+  right: 48px;
+}
 #locale-popup section {
-    display: block;
-    overflow-y: auto;
-    height: 300px;
-    line-height: 30px;
+  display: block;
+  height: 300px;
+  line-height: 30px;
+  margin-right: -10px;
+  overflow-y: auto;
 }
 #locale-popup section a {
-    display: block;
+  display: block;
 }
-
-#locale-popup section > div,
-#locale-popup section > ul {
-    border-top: 1px dotted #a4cfde;
-    margin-bottom: 0;
+#locale-popup section a:hover {
+  background-color: #eefafe;
+  text-decoration: none;
 }
-#locale-popup section > div:first-child,
-#locale-popup section > ul:first-child {
-    border-top: none;
+#locale-popup section a em {
+  color: #98bfef;
 }
-
+#locale-popup section ul {
+  margin: 0;
+}
 #existing_locales a.remove {
-    float: right;
-    display: block;
-    margin: 4px;
+  display: block;
+  float: right;
+  margin: 4px 8px;
+  line-height: 18px;
 }
-
 #existing_locales a.remove:hover {
-    background-color: #2A4364;
+  background-color: #2a4364;
 }
 
 .trans [lang] {

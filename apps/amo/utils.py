@@ -1,9 +1,17 @@
+import chardet
+import codecs
+import collections
+import contextlib
+import datetime
+import errno
+import functools
 import hashlib
 import itertools
 import operator
 import os
 import random
 import re
+import shutil
 import time
 import unicodedata
 import urllib
@@ -16,21 +24,46 @@ from django.conf import settings
 from django.contrib import messages
 from django.core import paginator
 from django.core.cache import cache
+from django.core.files.storage import (FileSystemStorage,
+                                       default_storage as storage)
+from django.core.mail import EmailMessage, EmailMultiAlternatives
 from django.core.serializers import json
-from django.core.validators import ValidationError, validate_slug
-from django.core.mail import send_mail as django_send_mail
-from django.utils.translation import trans_real
-from django.utils.functional import Promise
+from django.core.validators import validate_slug, ValidationError
+from django.forms.fields import Field
+from django.http import HttpRequest
+from django.template import Context, loader
+from django.utils import translation
 from django.utils.encoding import smart_str, smart_unicode
+from django.utils.functional import Promise
+from django.utils.http import urlquote
 
-from easy_thumbnails import processors
+import bleach
+import elasticutils.contrib.django as elasticutils
+import html5lib
+import jinja2
+import pyes.exceptions as pyes
 import pytz
+from babel import Locale
+from cef import log_cef as _log_cef
+from django_statsd.clients import statsd
+from easy_thumbnails import processors
+from html5lib.serializer.htmlserializer import HTMLSerializer
+from jingo import env
 from PIL import Image, ImageFile, PngImagePlugin
 
+import amo.search
 from amo import ADDON_ICON_SIZES
-from . import logger_log as log
+from amo.urlresolvers import get_outgoing_url, reverse
 from translations.models import Translation
-from versions.models import ApplicationsVersions
+from users.models import UserNotification
+from users.utils import UnsubscribeCode
+
+from . import logger_log as log
+
+metlog = settings.METLOG
+
+
+days_ago = lambda n: datetime.datetime.now() - datetime.timedelta(days=n)
 
 
 def urlparams(url_, hash=None, **query):
@@ -93,7 +126,8 @@ def paginate(request, queryset, per_page=20, count=None):
     ``.count()`` on the queryset.  This can be good if the queryset would
     produce an expensive count query.
     """
-    p = paginator.Paginator(queryset, per_page)
+    p = (ESPaginator if isinstance(queryset, (amo.search.ES, elasticutils.S))
+         else paginator.Paginator)(queryset, per_page)
 
     if count is not None:
         p._count = count
@@ -110,54 +144,172 @@ def paginate(request, queryset, per_page=20, count=None):
     except (paginator.EmptyPage, paginator.InvalidPage):
         paginated = p.page(1)
 
-    base = request.build_absolute_uri(request.path)
-
-    paginated.url = u'%s?%s' % (base, request.GET.urlencode())
+    paginated.url = u'%s?%s' % (request.path, request.GET.urlencode())
     return paginated
 
 
 def send_mail(subject, message, from_email=None, recipient_list=None,
-              fail_silently=False, use_blacklist=True):
+              fail_silently=False, use_blacklist=True, perm_setting=None,
+              manage_url=None, headers=None, cc=None, real_email=False,
+              html_message=None, attachments=None):
     """
-    A wrapper around django.core.mail.send_mail.
+    A wrapper around django.core.mail.EmailMessage.
 
     Adds blacklist checking and error logging.
     """
+    from amo.helpers import absolutify
+    import users.notifications as notifications
     if not recipient_list:
         return True
 
-    if not from_email:
-        from_email = settings.DEFAULT_FROM_EMAIL
+    if isinstance(recipient_list, basestring):
+        raise ValueError('recipient_list should be a list, not a string.')
+
+    connection = get_email_backend(real_email)
+
+    # Check against user notification settings
+    if perm_setting:
+        if isinstance(perm_setting, str):
+            perm_setting = notifications.NOTIFICATIONS_BY_SHORT[perm_setting]
+        perms = dict(UserNotification.objects
+                                     .filter(user__email__in=recipient_list,
+                                             notification_id=perm_setting.id)
+                                     .values_list('user__email', 'enabled'))
+
+        d = perm_setting.default_checked
+        recipient_list = [e for e in recipient_list
+                          if e and perms.setdefault(e, d)]
 
     # Prune blacklisted emails.
     if use_blacklist:
         white_list = []
         for email in recipient_list:
-            if email.lower() in settings.EMAIL_BLACKLIST:
+            if email and email.lower() in settings.EMAIL_BLACKLIST:
                 log.debug('Blacklisted email removed from list: %s' % email)
             else:
                 white_list.append(email)
     else:
         white_list = recipient_list
 
-    try:
-        if white_list:
-            result = django_send_mail(subject, message, from_email, white_list,
-                                      fail_silently=False)
+    if not from_email:
+        from_email = settings.DEFAULT_FROM_EMAIL
+
+    if cc:
+        # If not basestring, assume it is already a list.
+        if isinstance(cc, basestring):
+            cc = [cc]
+
+    if not headers:
+        headers = {}
+
+    def send(recipient, message, html_message=None, attachments=None):
+        backend = EmailMultiAlternatives if html_message else EmailMessage
+
+        result = backend(subject, message,
+                         from_email, recipient, cc=cc, connection=connection,
+                         headers=headers, attachments=attachments)
+
+        if html_message:
+            result.attach_alternative(html_message, 'text/html')
+
+        try:
+            result.send(fail_silently=False)
+            return result
+        except Exception as e:
+            log.error('send_mail failed with error: %s' % e)
+            if not fail_silently:
+                raise
+            return False
+
+    if white_list:
+        if perm_setting:
+            html_template = loader.get_template('amo/emails/unsubscribe.html')
+            text_template = loader.get_template('amo/emails/unsubscribe.ltxt')
+            if not manage_url:
+                manage_url = urlparams(absolutify(
+                    reverse('users.edit', add_prefix=False)),
+                    'acct-notify')
+            for recipient in white_list:
+                # Add unsubscribe link to footer.
+                token, hash = UnsubscribeCode.create(recipient)
+                unsubscribe_url = absolutify(reverse('users.unsubscribe',
+                    args=[token, hash, perm_setting.short],
+                    add_prefix=False))
+
+                context = {
+                    'message': message,
+                    'manage_url': manage_url,
+                    'unsubscribe_url': unsubscribe_url,
+                    'perm_setting': perm_setting.label,
+                    'SITE_URL': settings.SITE_URL,
+                    'mandatory': perm_setting.mandatory,
+                    # Hide "Unsubscribe" links in Marketplace emails
+                    # (bug 802379).
+                    'show_unsubscribe': not settings.MARKETPLACE
+                }
+                # Render this template in the default locale until
+                # bug 635840 is fixed.
+                with no_translation():
+                    message_with_unsubscribe = text_template.render(
+                        Context(context, autoescape=False))
+
+                if html_message:
+                    context['message'] = html_message
+                    with no_translation():
+                        html_message_with_unsubscribe = html_template.render(
+                            Context(context, autoescape=False))
+                        result = send([recipient], message_with_unsubscribe,
+                                      html_message_with_unsubscribe,
+                                      attachments=attachments)
+                else:
+                    result = send([recipient], message_with_unsubscribe,
+                                  attachments=attachments)
         else:
-            result = True
-    except Exception as e:
-        result = False
-        log.error('send_mail failed with error: %s' % e)
-        if not fail_silently:
-            raise
+            result = send(recipient_list, message=message,
+                          html_message=html_message, attachments=attachments)
+    else:
+        result = True
 
     return result
+
+
+def send_mail_jinja(subject, template, context, *args, **kwargs):
+    """Sends mail using a Jinja template with autoescaping turned off.
+
+    Jinja is especially useful for sending email since it has whitespace
+    control.
+    """
+    # Get a jinja environment so we can override autoescaping for text emails.
+    autoescape_orig = env.autoescape
+    env.autoescape = False
+    template = env.get_template(template)
+    msg = send_mail(subject, template.render(**context), *args, **kwargs)
+    env.autoescape = autoescape_orig
+    return msg
+
+
+def send_html_mail_jinja(subject, html_template, text_template, context,
+                         *args, **kwargs):
+    """Sends HTML mail using a Jinja template with autoescaping turned off."""
+    autoescape_orig = env.autoescape
+    env.autoescape = False
+
+    html_template = env.get_template(html_template)
+    text_template = env.get_template(text_template)
+
+    msg = send_mail(subject, text_template.render(**context),
+                    html_message=html_template.render(**context), *args,
+                    **kwargs)
+
+    env.autoescape = autoescape_orig
+
+    return msg
 
 
 class JSONEncoder(json.DjangoJSONEncoder):
 
     def default(self, obj):
+        from versions.models import ApplicationsVersions
 
         unicodable = (Translation, Promise)
 
@@ -221,7 +373,7 @@ def randslice(qs, limit, exclude=None):
 SLUG_OK = '-_~'
 
 
-def slugify(s, ok=SLUG_OK, lower=True, spaces=False):
+def slugify(s, ok=SLUG_OK, lower=True, spaces=False, delimiter='-'):
     # L and N signify letter/number.
     # http://www.unicode.org/reports/tr44/tr44-4.html#GC_Values_Table
     rv = []
@@ -233,20 +385,24 @@ def slugify(s, ok=SLUG_OK, lower=True, spaces=False):
             rv.append(' ')
     new = ''.join(rv).strip()
     if not spaces:
-        new = re.sub('[-\s]+', '-', new)
+        new = re.sub('[-\s]+', delimiter, new)
     return new.lower() if lower else new
 
 
-def slug_validator(s, ok=SLUG_OK, lower=True):
+def slug_validator(s, ok=SLUG_OK, lower=True, spaces=False, delimiter='-',
+                   message=validate_slug.message, code=validate_slug.code):
     """
     Raise an error if the string has any punctuation characters.
 
     Regexes don't work here because they won't check alnums in the right
     locale.
     """
-    if not (s and slugify(s, ok, lower) == s):
-        raise ValidationError(validate_slug.message,
-                              code=validate_slug.code)
+    if not (s and slugify(s, ok, lower, spaces, delimiter) == s):
+        raise ValidationError(message, code=code)
+
+
+def raise_required():
+    raise ValidationError(Field.default_error_messages['required'])
 
 
 def clear_messages(request):
@@ -257,6 +413,48 @@ def clear_messages(request):
     """
     for message in messages.get_messages(request):
         pass
+
+
+def clean_nl(string):
+    """
+    This will clean up newlines so that nl2br can properly be called on the
+    cleaned text.
+    """
+
+    html_blocks = ['blockquote', 'ol', 'li', 'ul']
+
+    if not string:
+        return string
+
+    def parse_html(tree):
+        prev_tag = ''
+        for i, node in enumerate(tree.childNodes):
+            if node.type == 4:  # Text node
+                value = node.value
+
+                # Strip new lines directly inside block level elements.
+                if node.parent.name in html_blocks:
+                    value = value.strip('\n')
+
+                # Remove the first new line after a block level element.
+                if (prev_tag in html_blocks and value.startswith('\n')):
+                    value = value[1:]
+
+                tree.childNodes[i].value = value
+            else:
+                tree.insertBefore(parse_html(node), node)
+                tree.removeChild(node)
+
+            prev_tag = node.name
+        return tree
+
+    parse = parse_html(html5lib.parseFragment(string))
+
+    walker = html5lib.treewalkers.getTreeWalker('simpletree')
+    stream = walker(parse)
+    serializer = HTMLSerializer(quote_attr_values=True,
+                                omit_optional_tags=False)
+    return serializer.render(stream)
 
 
 # From: http://bit.ly/eTqloE
@@ -296,22 +494,30 @@ def patched_load(self):
 Image.Image.load = patched_load
 
 
-def resize_image(src, dst, size, remove_src=True):
-    """Resizes and image from src, to dst. Returns width and height."""
+def resize_image(src, dst, size=None, remove_src=True, locally=False):
+    """Resizes and image from src, to dst. Returns width and height.
+
+    When locally is True, src and dst are assumed to reside
+    on the local disk (not in the default storage). When dealing
+    with local files it's up to you to ensure that all directories
+    exist leading up to the dst filename.
+    """
     if src == dst:
         raise Exception("src and dst can't be the same: %s" % src)
 
-    dirname = os.path.dirname(dst)
-    if not os.path.exists(dirname):
-        os.makedirs(dirname)
+    open_ = open if locally else storage.open
+    delete = os.unlink if locally else storage.delete
 
-    im = Image.open(src)
-    im = im.convert('RGBA')
-    im = processors.scale_and_crop(im, size)
-    im.save(dst, 'png')
+    with open_(src, 'rb') as fp:
+        im = Image.open(fp)
+        im = im.convert('RGBA')
+        if size:
+            im = processors.scale_and_crop(im, size)
+    with open_(dst, 'wb') as fp:
+        im.save(fp, 'png')
 
     if remove_src:
-        os.remove(src)
+        delete(src)
 
     return im.size
 
@@ -319,8 +525,8 @@ def resize_image(src, dst, size, remove_src=True):
 def remove_icons(destination):
     for size in ADDON_ICON_SIZES:
         filename = '%s-%s.png' % (destination, size)
-        if os.path.exists(filename):
-            os.remove(filename)
+        if storage.exists(filename):
+            storage.delete(filename)
 
 
 class ImageCheck(object):
@@ -332,8 +538,12 @@ class ImageCheck(object):
         try:
             self._img.seek(0)
             self.img = Image.open(self._img)
+            # PIL doesn't tell us what errors it will raise at this point,
+            # just "suitable ones", so let's catch them all.
+            self.img.verify()
             return True
-        except IOError:
+        except:
+            log.error('Error decoding image', exc_info=True)
             return False
 
     def is_animated(self, size=100000):
@@ -368,47 +578,40 @@ class MenuItem():
     url, text, selected, children = ('', '', False, [])
 
 
-def send_abuse_report(request, obj, url, message):
-    """Send email about an abusive addon/user/relationship."""
-    if request.user.is_anonymous():
-        user_name = 'An anonymous user'
-    else:
-        user_name = '%s (%s)' % (request.amo_user.name,
-                                 request.amo_user.email)
-
-    subject = 'Abuse Report for %s' % obj.name
-    msg = u'%s reported abuse for %s (%s%s).\n\n%s'
-    msg = msg % (user_name, obj.name, settings.SITE_URL, url, message)
-    msg += '\n\nhttp://translate.google.com/#auto|en|%s' % message
-
-    log.debug('Abuse reported by %s for %s: %s.' %
-              (smart_str(user_name), obj.id, smart_str(obj.name)))
-    send_mail(subject, msg, recipient_list=(settings.FLIGTAR,))
-
-
 def to_language(locale):
     """Like django's to_language, but en_US comes out as en-US."""
     # A locale looks like en_US or fr.
     if '_' in locale:
-        return to_language(trans_real.to_language(locale))
+        return to_language(translation.trans_real.to_language(locale))
     # Django returns en-us but we want to see en-US.
     elif '-' in locale:
         lang, region = locale.split('-')
         return '%s-%s' % (lang, region.upper())
     else:
-        return trans_real.to_language(locale)
+        return translation.trans_real.to_language(locale)
+
+
+def get_locale_from_lang(lang):
+    """Pass in a language (u'en-US') get back a Locale object courtesy of
+    Babel.  Use this to figure out currencies, bidi, names, etc."""
+    # Special fake language can just act like English for formatting and such
+    if not lang or lang == 'dbg':
+        lang = 'en'
+    return Locale(translation.to_locale(lang))
 
 
 class HttpResponseSendFile(http.HttpResponse):
 
     def __init__(self, request, path, content=None, status=None,
-                 content_type='application/octet-stream'):
+                 content_type='application/octet-stream', etag=None):
         self.request = request
         self.path = path
         super(HttpResponseSendFile, self).__init__('', status=status,
                                                    content_type=content_type)
         if settings.XSENDFILE:
-            self['X-SENDFILE'] = path
+            self[settings.XSENDFILE_HEADER] = path
+        if etag:
+            self['ETag'] = '"%s"' % etag
 
     def __iter__(self):
         if settings.XSENDFILE:
@@ -430,18 +633,37 @@ class HttpResponseSendFile(http.HttpResponse):
             return wrapper()
 
 
+def redirect_for_login(request):
+    # We can't use urlparams here, because it escapes slashes,
+    # which a large number of tests don't expect
+    url = '%s?to=%s' % (reverse('users.login'),
+                        urlquote(request.get_full_path()))
+    return http.HttpResponseRedirect(url)
+
+
+def memoize_key(prefix, *args, **kwargs):
+    """Returns the memoize key."""
+    key = hashlib.md5()
+    for arg in itertools.chain(args, sorted(kwargs.items())):
+        key.update(str(arg))
+    return '%s:memoize:%s:%s' % (settings.CACHE_PREFIX,
+                                 prefix, key.hexdigest())
+
+
+def memoize_get(prefix, *args, **kwargs):
+    """Returns the content of the cache given the key."""
+    return cache.get(memoize_key(prefix, *args, **kwargs))
+
+
 def memoize(prefix, time=60):
     """
     A simple memoize that caches into memcache, using a simple
     key based on stringing args and kwargs. Keep args simple.
     """
     def decorator(func):
+        @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            key = hashlib.md5()
-            for arg in itertools.chain(args, kwargs):
-                key.update(str(arg))
-            key = '%s:memoize:%s:%s' % (settings.CACHE_PREFIX,
-                                        prefix, key.hexdigest())
+            key = memoize_key(prefix, *args, **kwargs)
             data = cache.get(key)
             if data is not None:
                 return data
@@ -450,6 +672,32 @@ def memoize(prefix, time=60):
             return data
         return wrapper
     return decorator
+
+
+def cache_ns_key(namespace, increment=False):
+    """
+    Returns a key with namespace value appended. If increment is True, the
+    namespace will be incremented effectively invalidating the cache.
+
+    Memcache doesn't have namespaces, but we can simulate them by storing a
+    "%(key)s_namespace" value. Invalidating the namespace simply requires
+    editing that key. Your application will no longer request the old keys,
+    and they will eventually fall off the end of the LRU and be reclaimed.
+    """
+    ns_key = 'ns:%s' % namespace
+    if increment:
+        try:
+            ns_val = cache.incr(ns_key)
+        except ValueError:
+            log.info('Cache increment failed for key: %s. Resetting.' % ns_key)
+            ns_val = epoch(datetime.datetime.now())
+            cache.set(ns_key, ns_val, 0)
+    else:
+        ns_val = cache.get(ns_key)
+        if ns_val is None:
+            ns_val = epoch(datetime.datetime.now())
+            cache.set(ns_key, ns_val, 0)
+    return '%s:%s' % (ns_val, ns_key)
 
 
 class Message:
@@ -472,6 +720,26 @@ class Message:
         if delete:
             cache.delete(self.key)
         return res
+
+
+@contextlib.contextmanager
+def guard(name):
+    """
+    A memcache based guard around a function such as extracting something on
+    to the file system, that you'd like to prevent from having race conditions.
+    Saves us doing lock files or similar.
+    """
+    msg = Message(name)
+    if msg.get():
+        # This is currently in progress.
+        yield True
+    else:
+        # This is not in progress, save a flag and delete on exit.
+        msg.save(True)
+        try:
+            yield False
+        finally:
+            msg.delete()
 
 
 class Token:
@@ -524,10 +792,326 @@ class Token:
         return False
 
 
-def get_email_backend():
+def get_email_backend(real_email=False):
     """Get a connection to an email backend.
 
     If settings.SEND_REAL_EMAIL is False, a debugging backend is returned.
     """
-    backend = None if settings.SEND_REAL_EMAIL else 'amo.mail.FakeEmailBackend'
+    if real_email or settings.SEND_REAL_EMAIL:
+        backend = None
+    else:
+        backend = 'amo.mail.FakeEmailBackend'
     return django.core.mail.get_connection(backend)
+
+
+class ESPaginator(paginator.Paginator):
+    """A better paginator for search results."""
+    # The normal Paginator does a .count() query and then a slice. Since ES
+    # results contain the total number of results, we can take an optimistic
+    # slice and then adjust the count.
+    def page(self, number):
+        # Fake num_pages so it looks like we can have results.
+        self._num_pages = float('inf')
+        number = self.validate_number(number)
+        self._num_pages = None
+
+        bottom = (number - 1) * self.per_page
+        top = bottom + self.per_page
+        page = paginator.Page(self.object_list[bottom:top], number, self)
+
+        # Force the search to evaluate and then attach the count.
+        list(page.object_list)
+        self._count = page.object_list.count()
+        return page
+
+
+def smart_path(string):
+    """Returns a string you can pass to path.path safely."""
+    if os.path.supports_unicode_filenames:
+        return smart_unicode(string)
+    return smart_str(string)
+
+
+def log_cef(name, severity, env, *args, **kwargs):
+    """Simply wraps the cef_log function so we don't need to pass in the config
+    dictionary every time.  See bug 707060.  env can be either a request
+    object or just the request.META dictionary"""
+
+    c = {'cef.product': getattr(settings, 'CEF_PRODUCT', 'AMO'),
+         'cef.vendor': getattr(settings, 'CEF_VENDOR', 'Mozilla'),
+         'cef.version': getattr(settings, 'CEF_VERSION', '0'),
+         'cef.device_version': getattr(settings, 'CEF_DEVICE_VERSION', '0'),
+         'cef.file': getattr(settings, 'CEF_FILE', 'syslog'), }
+
+    # The CEF library looks for some things in the env object like
+    # REQUEST_METHOD and any REMOTE_ADDR stuff.  Django not only doesn't send
+    # half the stuff you'd expect, but it specifically doesn't implement
+    # readline on its FakePayload object so these things fail.  I have no idea
+    # if that's outdated code in Django or not, but andym made this
+    # <strike>awesome</strike> less crappy so the tests will actually pass.
+    # In theory, the last part of this if() will never be hit except in the
+    # test runner.  Good luck with that.
+    if isinstance(env, HttpRequest):
+        r = env.META.copy()
+        if 'PATH_INFO' in r:
+            r['PATH_INFO'] = env.build_absolute_uri(r['PATH_INFO'])
+    elif isinstance(env, dict):
+        r = env
+    else:
+        r = {}
+    if settings.USE_METLOG_FOR_CEF:
+        return metlog.cef(name, severity, r, *args, config=c, **kwargs)
+    else:
+        return _log_cef(name, severity, r, *args, config=c, **kwargs)
+
+
+@contextlib.contextmanager
+def no_translation():
+    lang = translation.trans_real.get_language()
+    translation.trans_real.deactivate()
+    yield
+    translation.trans_real.activate(lang)
+
+
+def escape_all(v):
+    """Escape html in JSON value, including nested items."""
+    if isinstance(v, basestring):
+        v = jinja2.escape(smart_unicode(v))
+        v = bleach.linkify(v, nofollow=True, filter_url=get_outgoing_url)
+        return v
+    elif isinstance(v, list):
+        for i, lv in enumerate(v):
+            v[i] = escape_all(lv)
+    elif isinstance(v, dict):
+        for k, lv in v.iteritems():
+            v[k] = escape_all(lv)
+    elif isinstance(v, Translation):
+        v = jinja2.escape(smart_unicode(v.localized_string))
+    return v
+
+
+class LocalFileStorage(FileSystemStorage):
+    """Local storage to an unregulated absolute file path.
+
+    Unregulated means that, unlike the default file storage, you can write to
+    any path on the system if you have access.
+
+    Unlike Django's default FileSystemStorage, this class behaves more like a
+    "cloud" storage system. Specifically, you never have to write defensive
+    code that prepares for leading directory paths to exist.
+    """
+
+    def __init__(self, base_url=None):
+        super(LocalFileStorage, self).__init__(location='/', base_url=base_url)
+
+    def delete(self, name):
+        """Delete a file or empty directory path.
+
+        Unlike the default file system storage this will also delete an empty
+        directory path. This behavior is more in line with other storage
+        systems like S3.
+        """
+        full_path = self.path(name)
+        if os.path.isdir(full_path):
+            os.rmdir(full_path)
+        else:
+            return super(LocalFileStorage, self).delete(name)
+
+    def _open(self, name, mode='rb'):
+        if mode.startswith('w'):
+            parent = os.path.dirname(self.path(name))
+            try:
+                # Try/except to prevent race condition raising "File exists".
+                os.makedirs(parent)
+            except OSError as e:
+                if e.errno == errno.EEXIST and os.path.isdir(parent):
+                    pass
+                else:
+                    raise
+        return super(LocalFileStorage, self)._open(name, mode=mode)
+
+    def path(self, name):
+        """Actual file system path to name without any safety checks."""
+        return os.path.normpath(os.path.join(self.location,
+                                             self._smart_path(name)))
+
+    def _smart_path(self, string):
+        if os.path.supports_unicode_filenames:
+            return smart_unicode(string)
+        return smart_str(string)
+
+
+def strip_bom(data):
+    """
+    Strip the BOM (byte order mark) from byte string `data`.
+
+    Returns a new byte string.
+    """
+    for bom in (codecs.BOM_UTF32_BE,
+                codecs.BOM_UTF32_LE,
+                codecs.BOM_UTF16_BE,
+                codecs.BOM_UTF16_LE,
+                codecs.BOM_UTF8):
+        if data.startswith(bom):
+            data = data[len(bom):]
+            break
+    return data
+
+
+def smart_decode(s):
+    """Guess the encoding of a string and decode it."""
+    if isinstance(s, unicode):
+        return s
+    enc_guess = chardet.detect(s)
+    try:
+        return s.decode(enc_guess['encoding'])
+    except (UnicodeDecodeError, TypeError), exc:
+        msg = 'Error decoding string (encoding: %r %.2f%% sure): %s: %s'
+        log.error(msg % (enc_guess['encoding'],
+                         enc_guess['confidence'] * 100.0,
+                         exc.__class__.__name__, exc))
+        return unicode(s, errors='replace')
+
+
+def attach_trans_dict(model, addons):
+    """Put all translations into a translations dict."""
+    fields = model._meta.translated_fields
+    ids = {}
+    for addon in addons:
+        addon.translations = collections.defaultdict(list)
+        ids.update((getattr(addon, field.attname, None), addon)
+                   for field in fields)
+    ids.pop(None, None)
+    qs = (Translation.objects
+          .filter(id__in=ids, localized_string__isnull=False)
+          .values_list('id', 'locale', 'localized_string'))
+    for id, translations in sorted_groupby(qs, lambda x: x[0]):
+        ids[id].translations[id] = [(locale, string)
+                                    for id, locale, string in translations]
+
+
+def rm_local_tmp_dir(path):
+    """Remove a local temp directory.
+
+    This is just a wrapper around shutil.rmtree(). Use it to indicate you are
+    certain that your executing code is operating on a local temp dir, not a
+    directory managed by the Django Storage API.
+    """
+    return shutil.rmtree(path)
+
+
+def rm_local_tmp_file(path):
+    """Remove a local temp file.
+
+    This is just a wrapper around os.unlink(). Use it to indicate you are
+    certain that your executing code is operating on a local temp file, not a
+    path managed by the Django Storage API.
+    """
+    return os.unlink(path)
+
+
+def timestamp_index(index):
+    """Returns index-YYYYMMDDHHMMSS with the current time."""
+    return '%s-%s' % (index, datetime.datetime.now().strftime('%Y%m%d%H%M%S'))
+
+
+def create_es_index_if_missing(index, config=None, aliased=False):
+    """Creates an index if it's not present.
+
+    Returns the index name. It may change if it was aliased.
+
+    Options:
+
+    - index: name of the index.
+    - config: if provided, used as the settings option for the
+      ES calls.
+    - aliased: If set to true, the index is suffixed with a timestamp
+      and an alias with the index name is created.
+    """
+    es = amo.search.get_es()
+
+    if aliased:
+        alias = index
+        try:
+            indices = es.get_alias(alias)
+            if len(indices) > 1:
+                raise ValueError("The %r alias should not point to "
+                                 "several indices" % index)
+            # we're good here - the alias and the index exist
+            return indices[0]
+        except pyes.IndexMissingException:
+            # no alias exists, so we want to
+            # create a fresh one and a fresh index
+            index = timestamp_index(index)
+
+    if settings.IN_TEST_SUITE:
+        if not config:
+            config = {}
+        # Be nice to ES running on ci.mozilla.org
+        config.update({'number_of_shards': 3,
+                       'number_of_replicas': 0})
+    try:
+        es.create_index_if_missing(index, settings=config)
+        if aliased:
+            try:
+                es.add_alias(alias, [index])
+            except pyes.ElasticSearchException, exc:
+                log.info('ES error creating alias: %s' % exc)
+    except pyes.ElasticSearchException, exc:
+        log.info('ES error creating index: %s' % exc)
+
+    return index
+
+
+def timer(*func, **kwargs):
+    """
+    Outputs statsd timings for the decorated method, ignored if not
+    in test suite. It will give us a name that's based on the module name.
+
+    It will work without params. Or with the params:
+    key: a key to override the calculated one
+    test_only: only time while in test suite (default is True)
+    """
+    key = kwargs.get('key', None)
+    test_only = kwargs.get('test_only', True)
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kw):
+            if test_only and not settings.IN_TEST_SUITE:
+                return func(*args, **kw)
+            else:
+                name = (key if key else
+                        '%s.%s' % (func.__module__, func.__name__))
+                with statsd.timer('timer.%s' % name):
+                    return func(*args, **kw)
+        return wrapper
+
+    if func:
+        return decorator(func[0])
+    return decorator
+
+
+def find_language(locale):
+    """
+    Return a locale we support, or None.
+    """
+    if not locale:
+        return None
+
+    LANGS = settings.AMO_LANGUAGES + settings.HIDDEN_LANGUAGES
+
+    if locale in LANGS:
+        return locale
+
+    # Check if locale has a short equivalent.
+    loc = settings.SHORTER_LANGUAGES.get(locale)
+    if loc:
+        return loc
+
+    # Check if locale is something like en_US that needs to be converted.
+    locale = to_language(locale)
+    if locale in LANGS:
+        return locale
+
+    return None

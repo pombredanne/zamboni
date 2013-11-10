@@ -1,33 +1,52 @@
-from datetime import datetime
 import hashlib
 import os
 import random
 import re
 import string
 import time
+from base64 import decodestring
+from contextlib import contextmanager
+from datetime import datetime
 
-from django import forms
+from django import dispatch, forms
 from django.conf import settings
 from django.contrib.auth.models import User as DjangoUser
 from django.core import validators
-from django.db import models
+from django.core.exceptions import ObjectDoesNotExist
+from django.db import models, transaction
 from django.template import Context, loader
-from django.utils.encoding import smart_str
+from django.utils import translation
+from django.utils.encoding import smart_str, smart_unicode
 from django.utils.functional import lazy
 
 import caching.base as caching
 import commonware.log
+import tower
 from tower import ugettext as _
 
 import amo
 import amo.models
+from access.models import Group, GroupUser
 from amo.urlresolvers import reverse
-from translations.fields import PurifiedField
+from translations.fields import PurifiedField, save_signal
+from translations.query import order_by_translation
 
 log = commonware.log.getLogger('z.users')
 
 
 def get_hexdigest(algorithm, salt, raw_password):
+    if 'base64' in algorithm:
+        # These are getpersonas passwords with base64 encoded salts.
+        salt = decodestring(salt)
+        algorithm = algorithm.replace('+base64', '')
+
+    if algorithm.startswith('sha512+MD5'):
+        # These are persona specific passwords when we imported
+        # users from getpersonas.com. The password is md5 hashed
+        # and then sha512'd.
+        md5 = hashlib.new('md5', raw_password).hexdigest()
+        return hashlib.new('sha512', smart_str(salt + md5)).hexdigest()
+
     return hashlib.new(algorithm, smart_str(salt + raw_password)).hexdigest()
 
 
@@ -77,13 +96,7 @@ class UserEmailField(forms.EmailField):
                 'data-src': lazy_reverse('users.ajax')}
 
 
-class UserProfile(amo.models.ModelBase):
-    # nickname, firstname, & lastname are deprecated.
-    nickname = models.CharField(max_length=255, default='', null=True,
-                                blank=True)
-    firstname = models.CharField(max_length=255, default='', blank=True)
-    lastname = models.CharField(max_length=255, default='', blank=True)
-
+class UserProfile(amo.models.OnChangeMixin, amo.models.ModelBase):
     username = models.CharField(max_length=255, default='', unique=True)
     display_name = models.CharField(max_length=255, default='', null=True,
                                     blank=True)
@@ -99,8 +112,7 @@ class UserProfile(amo.models.ModelBase):
     display_collections = models.BooleanField(default=False)
     display_collections_fav = models.BooleanField(default=False)
     emailhidden = models.BooleanField(default=True)
-    homepage = models.URLField(max_length=255, blank=True, default='',
-                               verify_exists=False)
+    homepage = models.URLField(max_length=255, blank=True, default='')
     location = models.CharField(max_length=255, blank=True, default='')
     notes = models.TextField(blank=True, null=True)
     notifycompat = models.BooleanField(default=True)
@@ -111,24 +123,56 @@ class UserProfile(amo.models.ModelBase):
     resetcode = models.CharField(max_length=255, default='', blank=True)
     resetcode_expires = models.DateTimeField(default=datetime.now, null=True,
                                              blank=True)
-    sandboxshown = models.BooleanField(default=False)
+    read_dev_agreement = models.DateTimeField(null=True, blank=True)
+
     last_login_ip = models.CharField(default='', max_length=45, editable=False)
     last_login_attempt = models.DateTimeField(null=True, editable=False)
     last_login_attempt_ip = models.CharField(default='', max_length=45,
                                              editable=False)
     failed_login_attempts = models.PositiveIntegerField(default=0,
                                                         editable=False)
-
+    source = models.PositiveIntegerField(default=amo.LOGIN_SOURCE_UNKNOWN,
+                                         editable=False, db_index=True)
     user = models.ForeignKey(DjangoUser, null=True, editable=False, blank=True)
+    is_verified = models.BooleanField(default=True)
+    region = models.CharField(max_length=9, null=True, blank=True,
+                              editable=False)
+    lang = models.CharField(max_length=5, null=True, blank=True,
+                            editable=False)
 
     class Meta:
         db_table = 'users'
 
-    def __unicode__(self):
-        return '%s: %s' % (self.id, self.display_name or self.username)
+    def __init__(self, *args, **kw):
+        super(UserProfile, self).__init__(*args, **kw)
+        if self.username:
+            self.username = smart_unicode(self.username)
 
-    def get_url_path(self):
-        return reverse('users.profile', args=[self.id])
+    def __unicode__(self):
+        return u'%s: %s' % (self.id, self.display_name or self.username)
+
+    def is_anonymous(self):
+        return False
+
+    def get_user_url(self, name='profile', src=None, args=None):
+        """
+        We use <username> as the slug, unless it contains gross
+        characters - in which case use <id> as the slug.
+        """
+        # TODO: Remove this ASAP (bug 880767).
+        if settings.MARKETPLACE and name == 'profile':
+            return '#'
+        from amo.utils import urlparams
+        chars = '/<>"\''
+        slug = self.username
+        if not self.username or any(x in chars for x in self.username):
+            slug = self.id
+        args = args or []
+        url = reverse('users.%s' % name, args=[slug] + args)
+        return urlparams(url, src=src)
+
+    def get_url_path(self, src=None):
+        return self.get_user_url('profile', src=src)
 
     def flush_urls(self):
         urls = ['*/user/%d/' % self.id,
@@ -140,7 +184,32 @@ class UserProfile(amo.models.ModelBase):
     @amo.cached_property
     def addons_listed(self):
         """Public add-ons this user is listed as author of."""
-        return self.addons.valid().filter(addonuser__listed=True).distinct()
+        return self.addons.reviewed().exclude(type=amo.ADDON_WEBAPP).filter(
+            addonuser__user=self, addonuser__listed=True)
+
+    @property
+    def num_addons_listed(self):
+        """Number of public add-ons this user is listed as author of."""
+        return self.addons.reviewed().exclude(type=amo.ADDON_WEBAPP).filter(
+            addonuser__user=self, addonuser__listed=True).count()
+
+    @amo.cached_property
+    def apps_listed(self):
+        """Public apps this user is listed as author of."""
+        return self.addons.reviewed().filter(type=amo.ADDON_WEBAPP,
+            addonuser__user=self, addonuser__listed=True)
+
+    def my_addons(self, n=8):
+        """Returns n addons (anything not a webapp)"""
+        qs = self.addons.exclude(type=amo.ADDON_WEBAPP)
+        qs = order_by_translation(qs, 'name')
+        return qs[:n]
+
+    def my_apps(self, n=8):
+        """Returns n apps"""
+        qs = self.addons.filter(type=amo.ADDON_WEBAPP)
+        qs = order_by_translation(qs, 'name')
+        return qs[:n]
 
     @property
     def picture_dir(self):
@@ -167,14 +236,35 @@ class UserProfile(amo.models.ModelBase):
         return self.addonuser_set.exists()
 
     @amo.cached_property
+    def is_addon_developer(self):
+        return self.addonuser_set.exclude(
+            addon__type=amo.ADDON_PERSONA).exists()
+
+    @amo.cached_property
+    def is_app_developer(self):
+        return self.addonuser_set.filter(addon__type=amo.ADDON_WEBAPP).exists()
+
+    @amo.cached_property
+    def is_artist(self):
+        """Is this user a Personas Artist?"""
+        return self.addonuser_set.filter(
+            addon__type=amo.ADDON_PERSONA).exists()
+
+    @amo.cached_property
     def needs_tougher_password(user):
-        from access.acl import action_allowed_user
-        return (action_allowed_user(user, 'Editors', '%')
-                or action_allowed_user(user, 'Admin', '%'))
+        if user.source in amo.LOGIN_SOURCE_BROWSERIDS:
+            return False
+        from access import acl
+        return (acl.action_allowed_user(user, 'Admin', '%') or
+                acl.action_allowed_user(user, 'Addons', 'Edit') or
+                acl.action_allowed_user(user, 'Addons', 'Review') or
+                acl.action_allowed_user(user, 'Apps', 'Review') or
+                acl.action_allowed_user(user, 'Personas', 'Review') or
+                acl.action_allowed_user(user, 'Users', 'Edit'))
 
     @property
     def name(self):
-        return self.display_name or self.username
+        return smart_unicode(self.display_name or self.username)
 
     welcome_name = name
 
@@ -195,15 +285,33 @@ class UserProfile(amo.models.ModelBase):
         log.info(u"User (%s: <%s>) is being anonymized." % (self, self.email))
         self.email = None
         self.password = "sha512$Anonymous$Password"
-        self.firstname = ""
-        self.lastname = ""
-        self.nickname = None
         self.username = "Anonymous-%s" % self.id  # Can't be null
         self.display_name = None
         self.homepage = ""
         self.deleted = True
         self.picture_type = ""
         self.save()
+
+    @transaction.commit_on_success
+    def restrict(self):
+        from amo.utils import send_mail
+        log.info(u'User (%s: <%s>) is being restricted and '
+                 'its user-generated content removed.' % (self, self.email))
+        g = Group.objects.get(rules='Restricted:UGC')
+        GroupUser.objects.create(user=self, group=g)
+        self.reviews.all().delete()
+        self.collections.all().delete()
+
+        t = loader.get_template('users/email/restricted.ltxt')
+        send_mail(_('Your account has been restricted'),
+                  t.render(Context({})), None, [self.email],
+                  use_blacklist=False, real_email=True)
+
+    def unrestrict(self):
+        log.info(u'User (%s: <%s>) is being unrestricted.' % (self,
+                                                              self.email))
+        GroupUser.objects.filter(user=self,
+                                 group__rules='Restricted:UGC').delete()
 
     def generate_confirmationcode(self):
         if not self.confirmationcode:
@@ -215,10 +323,6 @@ class UserProfile(amo.models.ModelBase):
         # we have to fix stupid things that we defined poorly in remora
         if not self.resetcode_expires:
             self.resetcode_expires = datetime.now()
-
-        # TODO POSTREMORA (maintain remora's view of user names.)
-        if not self.firstname or self.lastname or self.nickname:
-            self.nickname = self.name
 
         delete_user = None
         if self.deleted and self.user:
@@ -232,6 +336,11 @@ class UserProfile(amo.models.ModelBase):
             delete_user.delete()
 
     def check_password(self, raw_password):
+        # BrowserID does not store a password.
+        if (self.source in amo.LOGIN_SOURCE_BROWSERIDS
+            and settings.MARKETPLACE):
+            return True
+
         if '$' not in self.password:
             valid = (get_hexdigest('md5', '', raw_password) == self.password)
             if valid:
@@ -241,10 +350,25 @@ class UserProfile(amo.models.ModelBase):
             return valid
 
         algo, salt, hsh = self.password.split('$')
-        return hsh == get_hexdigest(algo, salt, raw_password)
+        #Complication due to getpersonas account migration; we don't
+        #know if passwords were utf-8 or latin-1 when hashed. If you
+        #can prove that they are one or the other, you can delete one
+        #of these branches.
+        if '+base64' in algo and isinstance(raw_password, unicode):
+            if hsh == get_hexdigest(algo, salt, raw_password.encode('utf-8')):
+                return True
+            else:
+                try:
+                    return hsh == get_hexdigest(algo, salt,
+                                                raw_password.encode('latin1'))
+                except UnicodeEncodeError:
+                    return False
+        else:
+            return hsh == get_hexdigest(algo, salt, raw_password)
 
     def set_password(self, raw_password, algorithm='sha512'):
         self.password = create_password(algorithm, raw_password)
+        # Can't do CEF logging here because we don't have a request object.
 
     def email_confirmation_code(self):
         from amo.utils import send_mail
@@ -258,9 +382,9 @@ class UserProfile(amo.models.ModelBase):
         c = {'domain': domain, 'url': url, }
         send_mail(_("Please confirm your email address"),
                   t.render(Context(c)), None, [self.email],
-                  use_blacklist=False)
+                  use_blacklist=False, real_email=True)
 
-    def log_login_attempt(self, request, successful):
+    def log_login_attempt(self, successful):
         """Log a user's login attempt"""
         self.last_login_attempt = datetime.now()
         self.last_login_attempt_ip = commonware.log.get_remote_addr()
@@ -276,18 +400,33 @@ class UserProfile(amo.models.ModelBase):
 
         self.save()
 
-    def create_django_user(self):
+    def create_django_user(self, **kw):
         """Make a django.contrib.auth.User for this UserProfile."""
+        # Due to situations like bug 905984 and similar, a django user
+        # for this email may already exist. Let's try to find it first
+        # before creating a new one.
+        try:
+            self.user = DjangoUser.objects.get(email=self.email)
+            for k, v in kw.iteritems():
+                setattr(self.user, k, v)
+            self.save()
+            return self.user
+        except DjangoUser.DoesNotExist:
+            pass
+
         # Reusing the id will make our life easier, because we can use the
         # OneToOneField as pk for Profile linked back to the auth.user
         # in the future.
         self.user = DjangoUser(id=self.pk)
         self.user.first_name = ''
         self.user.last_name = ''
-        self.user.username = self.email  # f
+        self.user.username = 'uid-%d' % self.pk
         self.user.email = self.email
         self.user.password = self.password
         self.user.date_joined = self.created
+
+        for k, v in kw.iteritems():
+            setattr(self.user, k, v)
 
         if self.groups.filter(rules='*:*').count():
             self.user.is_superuser = self.user.is_staff = True
@@ -314,6 +453,93 @@ class UserProfile(amo.models.ModelBase):
             # Do an extra query to make sure this gets transformed.
             c = Collection.objects.using('default').get(id=c.id)
         return c
+
+    def purchase_ids(self):
+        """
+        I'm special casing this because we use purchase_ids a lot in the site
+        and we are not caching empty querysets in cache-machine.
+        That means that when the site is first launched we are having a
+        lot of empty queries hit.
+
+        We can probably do this in smarter fashion by making cache-machine
+        cache empty queries on an as need basis.
+        """
+        # Circular import
+        from amo.utils import memoize
+        from market.models import AddonPurchase
+
+        @memoize(prefix='users:purchase-ids')
+        def ids(pk):
+            return (AddonPurchase.objects.filter(user=pk)
+                                 .values_list('addon_id', flat=True)
+                                 .filter(type=amo.CONTRIB_PURCHASE)
+                                 .order_by('pk'))
+        return ids(self.pk)
+
+    def get_preapproval(self):
+        """
+        Returns the pre approval object for this user, or None if it does
+        not exist
+        """
+        try:
+            return self.preapprovaluser
+        except ObjectDoesNotExist:
+            pass
+
+    def has_preapproval_key(self):
+        """
+        Returns the pre approval paypal key for this user, or False if the
+        pre_approval doesn't exist or the key is blank.
+        """
+        return bool(getattr(self.get_preapproval(), 'paypal_key', ''))
+
+    @contextmanager
+    def activate_lang(self):
+        """
+        Activate the language for the user. If none is set will go to the site
+        default which is en-US.
+        """
+        lang = self.lang if self.lang else settings.LANGUAGE_CODE
+        old = translation.get_language()
+        tower.activate(lang)
+        yield
+        tower.activate(old)
+
+
+models.signals.pre_save.connect(save_signal, sender=UserProfile,
+                                dispatch_uid='userprofile_translations')
+
+
+@dispatch.receiver(models.signals.post_save, sender=UserProfile,
+                   dispatch_uid='user.post_save')
+def user_post_save(sender, instance, **kw):
+    if not kw.get('raw'):
+        from . import tasks
+        tasks.index_users.delay([instance.id])
+
+
+@dispatch.receiver(models.signals.post_delete, sender=UserProfile,
+                   dispatch_uid='user.post_delete')
+def user_post_delete(sender, instance, **kw):
+    if not kw.get('raw'):
+        from . import tasks
+        tasks.unindex_users.delay([instance.id])
+
+
+class UserNotification(amo.models.ModelBase):
+    user = models.ForeignKey(UserProfile, related_name='notifications')
+    notification_id = models.IntegerField()
+    enabled = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = 'users_notifications'
+
+    @staticmethod
+    def update_or_create(update={}, **kwargs):
+        rows = UserNotification.objects.filter(**kwargs).update(**update)
+        if not rows:
+            update.update(dict(**kwargs))
+            UserNotification.objects.create(**update)
 
 
 class RequestUserManager(amo.models.ManagerBase):
@@ -345,9 +571,17 @@ class RequestUser(UserProfile):
         # only used by a user attached to a request.
         if not users:
             return
+
+        # Touch this @cached_property so the answer is cached with the object.
+        user = users[0]
+        user.is_developer
+
+        # Until the Marketplace gets collections, these lookups are pointless.
+        if settings.MARKETPLACE:
+            return
+
         from bandwagon.models import CollectionAddon, CollectionWatcher
         SPECIAL = amo.COLLECTION_SPECIAL_SLUGS.keys()
-        user = users[0]
         qs = CollectionAddon.objects.filter(
             collection__author=user, collection__type__in=SPECIAL)
         addons = dict((type_, []) for type_ in SPECIAL)
@@ -357,14 +591,12 @@ class RequestUser(UserProfile):
         user.favorite_addons = addons[amo.COLLECTION_FAVORITES]
         user.watching = list((CollectionWatcher.objects.filter(user=user)
                              .values_list('collection', flat=True)))
-        # Touch this @cached_property so the answer is cached with the object.
-        user.is_developer
 
     def _cache_keys(self):
         # Add UserProfile.cache_key so RequestUser gets invalidated when the
         # UserProfile is changed.
         keys = super(RequestUser, self)._cache_keys()
-        return keys + (UserProfile(id=self.id).cache_key,)
+        return keys + (UserProfile._cache_key(self.id, 'default'),)
 
 
 class BlacklistedUsername(amo.models.ModelBase):
@@ -409,22 +641,6 @@ class BlacklistedEmailDomain(amo.models.ModelBase):
                 return True
 
 
-class PersonaAuthor(unicode):
-    """Stub user until the persona authors get imported."""
-
-    @property
-    def id(self):
-        """I don't want to change code depending on PersonaAuthor.id, so I'm
-        just hardcoding 0.  The only code using this is flush_urls."""
-        return 0
-
-    @property
-    def name(self):
-        return self
-
-    display_name = name
-
-
 class BlacklistedPassword(amo.models.ModelBase):
     """Blacklisted passwords"""
     password = models.CharField(max_length=255, unique=True, blank=False)
@@ -435,3 +651,21 @@ class BlacklistedPassword(amo.models.ModelBase):
     @classmethod
     def blocked(cls, password):
         return cls.objects.filter(password=password)
+
+
+class UserHistory(amo.models.ModelBase):
+    email = models.EmailField()
+    user = models.ForeignKey(UserProfile, related_name='history')
+
+    class Meta:
+        db_table = 'users_history'
+        ordering = ('-created',)
+
+
+@UserProfile.on_change
+def watch_email(old_attr={}, new_attr={}, instance=None,
+                sender=None, **kw):
+    new_email, old_email = new_attr.get('email'), old_attr.get('email')
+    if old_email and new_email != old_email:
+        log.debug('Creating user history for user: %s' % instance.pk)
+        UserHistory.objects.create(email=old_email, user_id=instance.pk)

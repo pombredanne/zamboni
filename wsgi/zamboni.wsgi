@@ -1,6 +1,10 @@
 import os
 import site
+import sys
 from datetime import datetime
+
+# Tell manage that we need to pull in the default settings file.
+os.environ['DJANGO_SETTINGS_MODULE'] = 'settings_local'
 
 # Remember when mod_wsgi loaded this file so we can track it in nagios.
 wsgi_loaded = datetime.now()
@@ -30,6 +34,7 @@ command.validate()
 # This is what mod_wsgi runs.
 django_app = django.core.handlers.wsgi.WSGIHandler()
 
+
 # Normally we could let WSGIHandler run directly, but while we're dark
 # launching, we want to force the script name to be empty so we don't create
 # any /z links through reverse.  This fixes bug 554576.
@@ -42,6 +47,9 @@ def application(env, start_response):
     return django_app(env, start_response)
 
 
+if manage.load_newrelic:
+    import newrelic.agent
+    application = newrelic.agent.wsgi_application()(application)
 # Uncomment this to figure out what's going on with the mod_wsgi environment.
 # def application(env, start_response):
 #     start_response('200 OK', [('Content-Type', 'text/plain')])

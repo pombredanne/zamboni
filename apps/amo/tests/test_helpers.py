@@ -1,24 +1,24 @@
 # -*- coding: utf-8 -*-
-from datetime import datetime
 import mimetypes
 import os
+from datetime import datetime, timedelta
+from urlparse import urljoin
 
 from django.conf import settings
-from django.core import mail
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import encoding
 
 import jingo
+import test_utils
 from mock import Mock, patch
 from nose.tools import eq_
 from pyquery import PyQuery
 
-import test_utils
-
 import amo
+import amo.tests
 from amo import urlresolvers, utils, helpers
-from amo.utils import ImageCheck, Message, Token
+from amo.utils import guard, ImageCheck, Message, Token
 from versions.models import License
 
 
@@ -42,8 +42,8 @@ def test_strip_html_none():
 
 
 def test_strip_controls():
-    """We want control codes like \x0c to disappear."""
-    eq_('I ove you', render('{{ "I \x0cove you"|strip_controls }}'))
+    # We want control codes like \x0c to disappear.
+    eq_('I ove you', helpers.strip_controls('I \x0cove you'))
 
 
 def test_finalize():
@@ -207,6 +207,30 @@ def test_urlparams_unicode():
     utils.urlparams(url)
 
 
+class TestSharedURL(amo.tests.TestCase):
+
+    def setUp(self):
+        self.webapp = Mock()
+        self.webapp.type = amo.ADDON_WEBAPP
+        self.webapp.app_slug = 'webapp'
+
+        self.addon = Mock()
+        self.addon.type = amo.ADDON_EXTENSION
+        self.addon.slug = 'addon'
+        self.addon.is_webapp.return_value = False
+
+    def test_addonurl(self):
+        expected = '/en-US/firefox/addon/addon/'
+        eq_(helpers.shared_url('addons.detail', self.addon), expected)
+        eq_(helpers.shared_url('apps.detail', self.addon), expected)
+        eq_(helpers.shared_url('detail', self.addon), expected)
+        eq_(helpers.shared_url('detail', self.addon, add_prefix=False),
+            '/addon/addon/')
+        eq_(helpers.shared_url('reviews.detail', self.addon, 1,
+                               add_prefix=False),
+            '/addon/addon/reviews/1/')
+
+
 def test_isotime():
     time = datetime(2009, 12, 25, 10, 11, 12)
     s = render('{{ d|isotime }}', {'d': time})
@@ -247,7 +271,7 @@ def test_external_url():
         settings.REDIRECT_SECRET_KEY = secretkey
 
 
-class TestLicenseLink(test_utils.TestCase):
+class TestLicenseLink(amo.tests.TestCase):
 
     def test_license_link(self):
         mit = License.objects.create(
@@ -275,6 +299,30 @@ class TestLicenseLink(test_utils.TestCase):
             s = render('{{ license_link(lic) }}', {'lic': lic})
             s = ''.join([s.strip() for s in s.split('\n')])
             eq_(s, ex)
+
+    def test_theme_license_link(self):
+        s = render('{{ license_link(lic) }}', {'lic': amo.LICENSE_COPYRIGHT})
+
+        ul = PyQuery(s)('.license')
+        eq_(ul.find('.icon').length, 1)
+        eq_(ul.find('.icon.copyr').length, 1)
+
+        text = ul.find('.text')
+        eq_(text.find('a').length, 0)
+        eq_(text.text(), 'All Rights Reserved')
+
+        s = render('{{ license_link(lic) }}', {'lic': amo.LICENSE_CC_BY_NC_SA})
+
+        ul = PyQuery(s)('.license')
+        eq_(ul.find('.icon').length, 3)
+        eq_(ul.find('.icon.cc-attrib').length, 1)
+        eq_(ul.find('.icon.cc-noncom').length, 1)
+        eq_(ul.find('.icon.cc-share').length, 1)
+
+        link = ul.find('.text a')
+        eq_(link.find('a').length, 0)
+        eq_(link.text(), 'Some rights reserved')
+        eq_(link.attr('href'), amo.LICENSE_CC_BY_NC_SA.url)
 
     def test_license_link_xss(self):
         mit = License.objects.create(
@@ -304,25 +352,6 @@ class TestLicenseLink(test_utils.TestCase):
             eq_(s, ex)
 
 
-class AbuseBase:
-    @patch('captcha.fields.ReCaptchaField.clean')
-    def test_abuse_anonymous(self, clean):
-        clean.return_value = ""
-        self.client.post(self.full_page, {'text': 'spammy'})
-        eq_(len(mail.outbox), 1)
-        assert 'spammy' in mail.outbox[0].body
-
-    def test_abuse_anonymous_fails(self):
-        r = self.client.post(self.full_page, {'text': 'spammy'})
-        assert 'recaptcha' in r.context['abuse_form'].errors
-
-    def test_abuse_logged_in(self):
-        self.client.login(username='regular@mozilla.com', password='password')
-        self.client.post(self.full_page, {'text': 'spammy'})
-        eq_(len(mail.outbox), 1)
-        assert 'spammy' in mail.outbox[0].body
-
-
 def get_image_path(name):
     return os.path.join(settings.ROOT, 'apps', 'amo', 'tests', 'images', name)
 
@@ -333,7 +362,7 @@ def get_uploaded_file(name):
                               content_type=mimetypes.guess_type(name)[0])
 
 
-class TestAnimatedImages(test_utils.TestCase):
+class TestAnimatedImages(amo.tests.TestCase):
 
     def test_animated_images(self):
         img = ImageCheck(open(get_image_path('animated.png')))
@@ -353,7 +382,7 @@ class TestAnimatedImages(test_utils.TestCase):
         assert img.is_image()
 
 
-class TestToken(test_utils.TestCase):
+class TestToken(amo.tests.TestCase):
 
     def test_token_pop(self):
         new = Token()
@@ -389,7 +418,7 @@ class TestToken(test_utils.TestCase):
         assert not new.well_formed()
 
 
-class TestMessage(test_utils.TestCase):
+class TestMessage(amo.tests.TestCase):
 
     def test_message_save(self):
         new = Message('abc')
@@ -415,8 +444,52 @@ class TestMessage(test_utils.TestCase):
         eq_(new.get(delete=True), '123')
         eq_(new.get(), None)
 
+    def test_guard(self):
+        with guard('abc') as locked:
+            eq_(locked, False)
+            eq_(Message('abc').get(), True)
+
+    def test_guard_copes(self):
+        try:
+            with guard('abc'):
+                1 / 0
+        except ZeroDivisionError:
+            pass
+
+        eq_(Message('abc').get(), None)
+
+    def test_guard_deletes(self):
+        with guard('abc'):
+            pass
+        eq_(Message('abc').get(), None)
+
+    def test_guard_blocks(self):
+        Message('abc').save(True)
+        with guard('abc') as locked:
+            eq_(locked, True)
+
 
 def test_site_nav():
     r = Mock()
     r.APP = amo.FIREFOX
     assert 'id="site-nav"' in helpers.site_nav({'request': r})
+
+
+def test_jinja_trans_monkeypatch():
+    # This tests the monkeypatch in manage.py that prevents localizers from
+    # taking us down.
+    render('{% trans come_on=1 %}% (come_on)s{% endtrans %}')
+    render('{% trans come_on=1 %}%(come_on){% endtrans %}')
+    render('{% trans come_on=1 %}%(come_on)z{% endtrans %}')
+
+
+def test_absolutify():
+    eq_(helpers.absolutify('/woo'), urljoin(settings.SITE_URL, '/woo'))
+    eq_(helpers.absolutify('https://addons.mozilla.org'),
+        'https://addons.mozilla.org')
+
+
+def test_timesince():
+    month_ago = datetime.now() - timedelta(days=30)
+    eq_(helpers.timesince(month_ago), u'1 month ago')
+    eq_(helpers.timesince(None), u'')

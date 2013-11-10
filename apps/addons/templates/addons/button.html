@@ -7,11 +7,15 @@
      data-addon="{{ addon.id }}"
      data-icon="{{ addon.icon_url }}"
      data-developers="{{ addon.meet_the_dev_url() }}"
+     data-versions="{{ url('addons.versions', addon.id) }}"
      data-name="{{ addon.name }}"
      {{ b.attrs()|xmlattr }}
   {% if compat %}
      data-min="{{ compat.min.version }}"
      data-max="{{ compat.max.version }}"
+     data-is-compatible="{{ version.is_compatible[0]|json }}"
+     data-is-compatible-app="{{ version.is_compatible_app(APP)|json }}"
+     data-compat-overrides="{{ version.compat_override_app_versions()|json }}"
      data-version="{{ version.version }}"
      data-compatible-apps="{{ version.compatible_apps[request.APP] }}"
      data-lastupdated-isotime="{{ version.created|isotime }}"
@@ -44,8 +48,10 @@
     {% endif %}
     {% for link in links %}
       {% set extra = "platform " + link.os.shortname if link.os else "" %}
-      <a class="button {{ b.button_class|join(' ') }} {{ extra }}"
-         data-hash="{{ link.file.hash }}"
+      <a class="button {{ b.button_class|join(' ') }} {{ extra }} {% if addon.is_webapp() %}disabled{% endif %}"
+         {% if not addon.is_premium() %}
+           data-hash="{{ link.file.hash }}"
+         {% endif %}
          {% if b.show_warning %}
            href="{{ b.addon.get_url_path() }}"
            data-realurl="{{ link.url }}"
@@ -89,8 +95,6 @@
       This add-on has been preliminarily reviewed by Mozilla.
       <a href="{{ url }}">Learn more</a>
     {% endtrans %} </p>
-  {% elif addon.is_selfhosted() %}
-    <p class="warning">{{ _("This add-on is hosted on the developer's own website and has not been reviewed by Mozilla.") }}</p>
   {% endif %}
 {% endif %}
 </div> {# install-shell #}

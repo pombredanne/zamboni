@@ -1,18 +1,10 @@
-from django.conf import settings
-
 import commonware.log
-import celery.task
 from celeryutils import task
-from hera.contrib.django_utils import flush_urls
 
 from devhub.models import ActivityLog, CommentLog, VersionLog
 from versions.models import Version
 
 log = commonware.log.getLogger('z.task')
-
-
-# We use celery.task.ping in /monitor, so we need it to return results.
-celery.task.PingTask.ignore_result = False
 
 
 @task
@@ -46,4 +38,3 @@ def add_versionlog(items, **kw):
                 # We need to save it twice to backdate the created date.
                 vl.created = al.created
                 vl.save()
-

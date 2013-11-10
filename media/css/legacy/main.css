@@ -104,8 +104,7 @@ button.link:active span {
 body,
 #title,
 .item h3,
-.section-teaser .addon-view h3,
-div.header-search input.text {
+.section-teaser .addon-view h3 {
     font-family: "helvetica neue", arial, helvetica, sans-serif;
     font-style: normal;
 }
@@ -353,14 +352,6 @@ select {
     padding: 0 1px 1px 1px;
 }
 
-textarea:focus,
-input[type='text']:focus,
-input[type='password']:focus,
-select:focus {
-    border-color: #888;
-    outline: 1px solid #ffffaa;
-}
-
 input.short {
     width: 4em;
 }
@@ -371,10 +362,6 @@ input.medium, textarea.medium {
 
 input.long, textarea.long {
     width: 30em;
-}
-
-input.placeholder {
-    color: #444;
 }
 
 textarea {
@@ -1049,119 +1036,6 @@ form.favorite {
 
 /* @end */
 
-/* @group Aux nav */
-
-#aux-nav {
-    font-size: 1em;
-    padding: 0;
-    text-align: right;
-    color: #757778;
-}
-
-#aux-nav p.context,
-#aux-nav ul {
-    float: right;
-    margin-bottom: 1em;
-    padding: 0.5em 1em 0 0;
-}
-
-#aux-nav a:link,
-#aux-nav a:visited,
-#aux-nav a:hover,
-#aux-nav a:focus,
-#aux-nav a:active {
-    color: #3d6db5;
-    white-space: nowrap;
-}
-
-/* @group Change */
-
-#aux-nav > ul {
-    margin: 0;
-    padding: 0;
-    border-right: 3px solid transparent;
-    position: relative;
-    z-index: 1;
-}
-
-#aux-nav p.tools a,
-#aux-nav ul.change a.return {
-    display: block;
-    padding: 0.5em 1em 0.5em;
-}
-
-#aux-nav > ul li ul li {
-    border-top: 1px solid #D0EBF4;
-    min-width: 11em;
-    text-align: left;
-    margin: 0;
-    padding: 0.3em 1em;
-}
-
-#aux-nav p.tools,
-#aux-nav > ul.change li ul li {
-    padding: 0;
-}
-
-#aux-nav > ul li ul li a {
-    background-repeat: no-repeat;
-    background-position: top left;
-    display: block;
-    margin: 0;
-}
-
-#aux-nav > ul.change li ul li a {
-    padding: 0.3em 0.3em 0.3em 45px;
-}
-
-#aux-nav > ul li ul li.mobile a,
-#aux-nav > ul li ul li.firefox a {
-    background: url(../../img/zamboni/app_icons/small.png) no-repeat 1em 0;
-}
-#aux-nav > ul li ul li.thunderbird a {
-    background: url(../../img/zamboni/app_icons/small.png) no-repeat 1em -50px;
-}
-#aux-nav > ul li ul li.sunbird a {
-    background: url(../../img/zamboni/app_icons/small.png) no-repeat 1em -100px;
-}
-#aux-nav > ul li ul li.seamonkey a {
-    background: url(../../img/zamboni/app_icons/small.png) no-repeat 1em -150px;
-}
-
-#aux-nav > ul a.controller:link,
-#aux-nav > ul a.controller:visited,
-#aux-nav > ul a.controller:focus,
-#aux-nav > ul a.controller:hover,
-#aux-nav > ul a.controller:active {
-    display: block;
-    padding: 0.5em 20px 0.5em 1em;
-    background: url(../../img/icons/arrows.gif) no-repeat;
-    background-position: 95% -65px;
-}
-
-#aux-nav > ul a.controller:focus,
-#aux-nav > ul a.controller:hover,
-#aux-nav > ul a.controller:active {
-    background-position: 95% -105px;
-}
-
-#aux-nav > ul ul {
-    display: none;
-    position: absolute;
-    right: -3px;
-    padding: 0;
-    border-right: 3px solid #A2C2D7;
-    border-bottom: 3px solid #A2C2D7;
-}
-
-#aux-nav ul.expanded {
-    border-right: 3px solid #A2C2D7;
-}
-
-/* @end */
-
-/* @end */
-
 /* @group Layout constructs */
 
 .primary {
@@ -1670,77 +1544,6 @@ form.favorite {
     margin-bottom: 0.8em;
     padding-bottom: 0.8em;
 }
-
-
-/* @group Homepage teaser */
-
-.section-teaser .featured-inner {
-    padding-bottom: 5em;
-    position: relative;
-}
-
-/* @group Teaser Header */
-
-.section-teaser .teaser-header {
-    background: url(../../img/bg/listing-footer.gif) repeat-x top left #fff;
-    -webkit-border-bottom-right-radius: 3px;
-    -webkit-border-bottom-left-radius: 3px;
-    -moz-border-radius: 0 0 3px 3px;
-    border-radius: 0 0 3px 3px;
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    width: 100%;
-    overflow: hidden;
-}
-.section-teaser .teaser-header ol {
-    margin: 0;
-    padding: 0 45px;
-    list-style-type: none;
-    border-top: 1px solid #AEC3CF;
-}
-
-.section-teaser .teaser-header ol li {
-    margin: 0 2.1em 0.5em 0;
-    padding: 0.5em 0 0 0;
-    float: left;
-    white-space: nowrap;
-    position: relative;
-    top: -1px;
-}
-
-.section-teaser .teaser-header ol li:first-child {
-    margin-left: 0;
-}
-
-.section-teaser .teaser-header ol li:last-child {
-    margin-right: 0;
-}
-
-.section-teaser .teaser-header a:link,
-.section-teaser .teaser-header a:visited,
-.section-teaser .teaser-header a:hover,
-.section-teaser .teaser-header a:focus,
-.section-teaser .teaser-header a:active {
-    color: #54647E;
-    text-decoration: none;
-    font-size: 0.923em;
-    font-weight: bold;
-}
-
-.section-teaser .teaser-header a:hover,
-.section-teaser .teaser-header a:focus,
-.section-teaser .teaser-header a:active {
-    color: #223355;
-}
-
-.section-teaser .teaser-header li.selected {
-    background-image: url(../../img/bg/panel-selected.png);
-    background-repeat: no-repeat;
-    background-position: center top;
-}
-
-/* @end */
 
 .teaser-items {
     margin: 0;
@@ -3151,18 +2954,6 @@ background-position:left -303px;
 
 /* @end */
 
-/* @group Aux nav */
-
-.html-rtl #aux-nav {
-    right: auto;
-    left: 0;
-    margin: 0 100px 0 0;
-    text-align: left;
-    background-position: top left;
-}
-
-/* @end */
-
 .html-rtl .stars {
     float: right;
     margin-left: 0.5em;
@@ -3540,6 +3331,7 @@ background-position:left -303px;
 
 .mobile #header #title strong,
 .developer-hub #header #title strong,
+.android #header #title strong,
 .firefox #header #title strong {
     color: #D64203;
 }
@@ -3569,6 +3361,10 @@ background-position:left -303px;
     color: #1408E5;
 }
 .seamonkey #aux-nav .change li.seamonkey {
+    display: none;
+}
+
+.android #aux-nav .change li.android {
     display: none;
 }
 

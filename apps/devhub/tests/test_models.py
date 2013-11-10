@@ -1,15 +1,19 @@
 from datetime import datetime, timedelta
+from os import path
+
+from django.core.urlresolvers import NoReverseMatch
+from django.test.utils import override_settings
 
 import jingo
-import test_utils
 from nose.tools import eq_
-from mock import Mock
+from mock import Mock, patch
 from pyquery import PyQuery as pq
 
 import amo
+import amo.tests
 from addons.models import Addon, AddonUser
 from bandwagon.models import Collection
-from devhub.models import ActivityLog, AddonLog, BlogPost
+from devhub.models import ActivityLog, ActivityLogAttachment, AddonLog, BlogPost
 from tags.models import Tag
 from files.models import File
 from reviews.models import Review
@@ -17,12 +21,15 @@ from users.models import UserProfile
 from versions.models import Version
 
 
-class TestActivityLog(test_utils.TestCase):
+TESTS_DIR = path.dirname(path.abspath(__file__))
+ATTACHMENTS_DIR = path.join(TESTS_DIR, 'attachments')
+
+
+class TestActivityLog(amo.tests.TestCase):
     fixtures = ['base/addon_3615']
 
     def setUp(self):
-        u = UserProfile(username='<script src="x.js">')
-        u.save()
+        u = UserProfile.objects.create(username='yolo')
         self.request = Mock()
         self.request.amo_user = self.user = u
         amo.set_user(u)
@@ -118,21 +125,33 @@ class TestActivityLog(test_utils.TestCase):
         eq_(len(entries), 1)
 
     def test_version_log(self):
-        request = self.request
         version = Version.objects.all()[0]
         amo.log(amo.LOG.REJECT_VERSION, version.addon, version,
                 user=self.request.amo_user)
         entries = ActivityLog.objects.for_version(version)
         eq_(len(entries), 1)
 
+    @patch('django.conf.settings.MARKETPLACE', True)
+    @patch('users.helpers._user_link', lambda *args: 'xss bob link')
+    def test_version_xss(self):
+        addon = Addon.objects.get()
+        addon.update(type=amo.ADDON_WEBAPP)
+        version = addon.latest_version
+        version.update(version='<script></script>')
+        amo.log(amo.LOG.APPROVE_VERSION, addon, version)
+
+        log = ActivityLog.objects.get()
+        assert not '<script' in log.to_string(), (
+            'Unescaped html detected in log output.')
+
     def test_version_log_transformer(self):
-        request = self.request
         addon = Addon.objects.get()
         version = addon.latest_version
         amo.log(amo.LOG.REJECT_VERSION, addon, version,
                 user=self.request.amo_user)
 
-        version_two = Version(addon=addon, license=version.license, version='1.2.3')
+        version_two = Version(addon=addon, license=version.license,
+                              version='1.2.3')
         version_two.save()
 
         amo.log(amo.LOG.REJECT_VERSION, addon, version_two,
@@ -144,25 +163,22 @@ class TestActivityLog(test_utils.TestCase):
         eq_(len(versions[0].all_activity), 1)
         eq_(len(versions[1].all_activity), 1)
 
-    def test_xss_arguments(self):
+    def test_xss_arguments_and_escaping(self):
         addon = Addon.objects.get()
+        addon.name = 'Delicious <script src="x.js">Bookmarks'
+        addon.save()
+        addon = addon.reload()
         au = AddonUser(addon=addon, user=self.user)
         amo.log(amo.LOG.CHANGE_USER_WITH_ROLE, au.user, au.get_role_display(),
                 addon)
         log = ActivityLog.objects.get()
-        eq_(log.to_string(),
-            u'&lt;script src=&#34;x.js&#34;&gt; role changed to Owner for '
-            '<a href="/en-US/firefox/addon/a3615/">Delicious Bookmarks</a>.')
 
-    def test_jinja_escaping(self):
-        addon = Addon.objects.get()
-        au = AddonUser(addon=addon, user=self.user)
-        amo.log(amo.LOG.CHANGE_USER_WITH_ROLE, au.user, au.get_role_display(),
-                addon)
-        log = ActivityLog.objects.get()
+        log_expected = ('yolo role changed to Owner for <a href="/en-US/'
+                        'firefox/addon/a3615/">Delicious &lt;script src='
+                        '&#34;x.js&#34;&gt;Bookmarks</a>.')
+        eq_(log.to_string(), log_expected)
         eq_(jingo.env.from_string('<p>{{ log }}</p>').render(log=log),
-            '<p>&lt;script src=&#34;x.js&#34;&gt; role changed to Owner for <a'
-            ' href="/en-US/firefox/addon/a3615/">Delicious Bookmarks</a>.</p>')
+            '<p>%s</p>' % log_expected)
 
     def test_tag_no_match(self):
         addon = Addon.objects.get()
@@ -174,7 +190,7 @@ class TestActivityLog(test_utils.TestCase):
         eq_(len(pq(text)('a')), 1)
 
 
-class TestVersion(test_utils.TestCase):
+class TestVersion(amo.tests.TestCase):
     fixtures = ['base/apps', 'base/users', 'base/addon_3615',
                 'base/thunderbird', 'base/platforms']
 
@@ -230,7 +246,7 @@ class TestVersion(test_utils.TestCase):
         eq_(self.addon.status, amo.STATUS_NULL)
 
 
-class TestActivityLogCount(test_utils.TestCase):
+class TestActivityLogCount(amo.tests.TestCase):
     fixtures = ['base/addon_3615']
 
     def setUp(self):
@@ -282,8 +298,18 @@ class TestActivityLogCount(test_utils.TestCase):
         eq_(result[0]['approval_count'], 1)
         eq_(result[0]['user'], self.user.pk)
 
+    def test_log_admin(self):
+        amo.log(amo.LOG['OBJECT_EDITED'], Addon.objects.get())
+        eq_(len(ActivityLog.objects.admin_events()), 1)
+        eq_(len(ActivityLog.objects.for_developer()), 0)
 
-class TestBlogPosts(test_utils.TestCase):
+    def test_log_not_admin(self):
+        amo.log(amo.LOG['EDIT_VERSION'], Addon.objects.get())
+        eq_(len(ActivityLog.objects.admin_events()), 0)
+        eq_(len(ActivityLog.objects.for_developer()), 1)
+
+
+class TestBlogPosts(amo.tests.TestCase):
 
     def test_blog_posts(self):
         BlogPost.objects.create(title='hi')
@@ -291,3 +317,74 @@ class TestBlogPosts(test_utils.TestCase):
         eq_(bp.count(), 1)
         eq_(bp[0].title, "hi")
 
+
+@override_settings(REVIEWER_ATTACHMENTS_PATH=ATTACHMENTS_DIR)
+class TestActivityLogAttachment(amo.tests.TestCase):
+    fixtures = ['base/addon_3615']
+
+    XSS_STRING = 'MMM <script>alert(bacon);</script>'
+
+    def setUp(self):
+        self.user = self._user()
+        addon = Addon.objects.get()
+        version = addon.latest_version
+        al = amo.log(amo.LOG.COMMENT_VERSION, addon, version, user=self.user)
+        self.attachment1, self.attachment2 = self._attachments(al)
+
+    def tearDown(self):
+        amo.set_user(None)
+
+    def _user(self):
+        """Create and return a user"""
+        u = UserProfile.objects.create(username='porkbelly')
+        amo.set_user(u)
+        return u
+
+    def _attachments(self, activity_log):
+        """
+        Create and return a tuple of ActivityLogAttachment instances.
+        """
+        ala1 = ActivityLogAttachment.objects.create(activity_log=activity_log,
+                                                    filepath='bacon.txt',
+                                                    mimetype='text/plain')
+        ala2 = ActivityLogAttachment.objects.create(activity_log=activity_log,
+                                                    filepath='bacon.jpg',
+                                                    description=self.XSS_STRING,
+                                                    mimetype='image/jpeg')
+        return ala1, ala2
+
+    def test_filename(self):
+        msg = ('ActivityLogAttachment().filename() returning '
+               'incorrect filename.')
+        eq_(self.attachment1.filename(), 'bacon.txt', msg)
+        eq_(self.attachment2.filename(), 'bacon.jpg', msg)
+
+    def test_full_path_dirname(self):
+        msg = ('ActivityLogAttachment().full_path() returning incorrect path.')
+        FAKE_PATH = '/tmp/attachments/'
+        with self.settings(REVIEWER_ATTACHMENTS_PATH=FAKE_PATH):
+            eq_(self.attachment1.full_path(), FAKE_PATH + 'bacon.txt', msg)
+            eq_(self.attachment2.full_path(), FAKE_PATH + 'bacon.jpg', msg)
+
+    def test_display_name(self):
+        msg = ('ActivityLogAttachment().display_name() returning '
+               'incorrect display name.')
+        eq_(self.attachment1.display_name(), 'bacon.txt', msg)
+
+    def test_display_name_xss(self):
+        self.assertNotIn('<script>', self.attachment2.display_name())
+
+    def test_is_image(self):
+        msg = ('ActivityLogAttachment().is_image() not correctly detecting '
+               'images.')
+        eq_(self.attachment1.is_image(), False, msg)
+        eq_(self.attachment2.is_image(), True, msg)
+
+    def test_get_absolute_url(self):
+        msg = ('ActivityLogAttachment().get_absolute_url() raising a '
+               'NoReverseMatch exception.')
+        try:
+            self.attachment1.get_absolute_url()
+            self.attachment2.get_absolute_url()
+        except NoReverseMatch:
+            assert False, msg

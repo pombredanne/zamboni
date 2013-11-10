@@ -47,9 +47,10 @@ def vacuum(master, slave):
     tmp.close()
 
     # It's hard to get Python to clean up the memory from slave.keys(), so
-    # we'll let the OS do it. argv[0] is a dummy argument, the rest get passed
-    # like a normal command line.
-    os.execl(sys.executable, 'argv[0]', sys.argv[0], sys.argv[1], tmp.name)
+    # we'll let the OS do it. You have to pass sys.executable both as the
+    # thing to run and so argv[0] is set properly.
+    os.execl(sys.executable, sys.executable, sys.argv[0],
+             sys.argv[1], tmp.name)
 
 
 def cleanup(master, slave, filename):
@@ -81,7 +82,7 @@ def cleanup(master, slave, filename):
         except RedisError:
             continue
         num += len(ks)
-        percent = round(float(num) / total[0] * 100, 1)
+        percent = round(float(num) / total[0] * 100, 1) if total[0] else 0
         total[1] += len(drop)
         log.debug('[%s %.1f%%] Dropping %s keys.' % (num, percent, len(drop)))
         pipe = master.pipeline()

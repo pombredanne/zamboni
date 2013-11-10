@@ -5,6 +5,8 @@ cd $WORKSPACE
 VENV=$WORKSPACE/venv
 VENDOR=$WORKSPACE/vendor
 LOCALE=$WORKSPACE/locale
+ES_HOST='jenkins-es20'
+SETTINGS=default
 
 echo "Starting build on executor $EXECUTOR_NUMBER..." `date`
 
@@ -14,6 +16,13 @@ if [ -z $1 ]; then
     echo "Continuing, but don't say you weren't warned."
 fi
 
+if [ -z $2 ]; then
+    echo "Warning: no settings file specified, using: default"
+    echo "Usage: ./build.sh <name> <settings>"
+else
+    SETTINGS=$2
+fi
+
 echo "Setup..." `date`
 
 # Make sure there's no old pyc files around.
@@ -21,12 +30,15 @@ find . -name '*.pyc' | xargs rm
 
 if [ ! -d "$VENV/bin" ]; then
   echo "No virtualenv found.  Making one..."
-  virtualenv $VENV
+  virtualenv $VENV --system-site-packages
 fi
 
 source $VENV/bin/activate
 
-pip install -q -r requirements/compiled.txt
+pip install -U --exists-action=w --no-deps -q \
+	--download-cache=$WORKSPACE/.pip-cache \
+	-f https://pyrepo.addons.mozilla.org/ \
+	-r requirements/compiled.txt -r requirements/test.txt
 
 # Create paths we want for addons
 if [ ! -d "/tmp/warez" ]; then
@@ -40,47 +52,59 @@ fi
 
 if [ ! -d "$VENDOR" ]; then
     echo "No vendor lib?  Cloning..."
-    git clone --recursive git://github.com/jbalogh/zamboni-lib.git $VENDOR
+    git clone --recursive git://github.com/mozilla/zamboni-lib.git $VENDOR
 fi
 
 # Update the vendor lib.
 echo "Updating vendor..."
-pushd $VENDOR && git pull && git submodule --quiet sync && git submodule update --init;
-popd
+git submodule --quiet foreach 'git submodule --quiet sync'
+git submodule --quiet sync && git submodule update --init --recursive
+
+if [ -z $SET_ES_TESTS ]; then
+    RUN_ES_TESTS=False
+else
+    RUN_ES_TESTS=True
+fi
 
 cat > settings_local.py <<SETTINGS
-from settings import *
-ROOT_URLCONF = '%s.urls' % ROOT_PACKAGE
+from lib.settings_base import *
+from ${SETTINGS}.settings import *
+ROOT_URLCONF = 'lib.urls_base'
 LOG_LEVEL = logging.ERROR
-# Database name has to be set because of sphinx
 DATABASES['default']['NAME'] = 'zamboni_$1'
 DATABASES['default']['HOST'] = 'localhost'
 DATABASES['default']['USER'] = 'hudson'
+DATABASES['default']['ENGINE'] = 'mysql_pool'
 DATABASES['default']['TEST_NAME'] = 'test_zamboni_$1'
 DATABASES['default']['TEST_CHARSET'] = 'utf8'
 DATABASES['default']['TEST_COLLATION'] = 'utf8_general_ci'
-CACHE_BACKEND = 'caching.backends.locmem://'
+CACHES = {
+    'default': {
+        'BACKEND': 'caching.backends.locmem.LocMemCache',
+    }
+}
 CELERY_ALWAYS_EAGER = True
+RUN_ES_TESTS = ${RUN_ES_TESTS}
+ES_HOSTS = ['${ES_HOST}:9200']
+ES_URLS = ['http://%s' % h for h in ES_HOSTS]
 ADDONS_PATH = '/tmp/warez'
 STATIC_URL = ''
 
-TEST_SPHINX_CATALOG_PATH = TMP_PATH + '/$1/data/sphinx'
-TEST_SPHINX_LOG_PATH = TMP_PATH + '/$1/log/serachd'
-TEST_SPHINXQL_PORT = 340${EXECUTOR_NUMBER}
-TEST_SPHINX_PORT = 341${EXECUTOR_NUMBER}
-
 SETTINGS
+
+# Update product details to pull in any changes (namely, 'dbg' locale)
+echo "Updating product details..."
+python manage.py update_product_details
 
 
 echo "Starting tests..." `date`
 export FORCE_DB='yes sir'
 
-# with-coverage excludes sphinx so it doesn't conflict with real builds.
-if [[ $2 = 'with-coverage' ]]; then
-    coverage run manage.py test -v 2 --noinput --logging-clear-handlers --with-xunit -a'!sphinx'
+if [[ $3 = 'with-coverage' ]]; then
+    coverage run manage.py test -v 2 --noinput --logging-clear-handlers --with-xunit
     coverage xml $(find apps lib -name '*.py')
 else
-    python manage.py test -v 2 --noinput --logging-clear-handlers --with-xunit
+    python manage.py test -v 2 --noinput --logging-clear-handlers --with-xunit --with-blockage --http-whitelist=127.0.0.1,localhost,${ES_HOST}
 fi
 
 

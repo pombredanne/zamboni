@@ -52,26 +52,62 @@
                   <td>{{ addon.compatible_apps[APP] }}</td>
                 </tr>
               {% endif %}
-              {# XXX future feature: 'Depends on' ... #}
+              {% set deps = addon.all_dependencies %}
+              {% if deps %}
+                <tr class="addon-dependencies">
+                  <th>
+                    {% if addon.is_webapp() %}
+                      {{ _('Required Apps') }}
+                    {% else %}
+                      {{ _('Required Add-ons') }}
+                    {% endif %}
+                  </th>
+                  <td>
+                    <ul>
+                      {% for d in deps %}
+                        <li><a href="{{ d.get_url_path() }}" target="_blank">
+                          {{ d.name }}</a></li>
+                      {% endfor %}
+                    </ul>
+                  </td>
+                </tr>
+              {% endif %}
               {# XXX future feature: 'Localizations' ... #}
               <tr>
                 <th>{{ _('Rating', 'advanced_search_form_rating') }}</th>
                 <td>{{ reviews_link(addon) }}</td>
               </tr>
-              {% if not addon.is_selfhosted() %}
+              <tr class="meta-stats">
+                <th>{{ _('Downloads', 'list_sortby_downloads') }}</th>
+                <td>
+                  <strong class="downloads">{{
+                    addon.total_downloads|numberfmt }}</strong>
+                  {% if addon.public_stats %}
+                    <a href="{{ url('stats.overview', addon.slug) }}">
+                      {{ _('View Statistics') }}</a>
+                  {% endif %}
+                </td>
+              </tr>
+              {% if addon.average_daily_users %}
                 <tr class="meta-stats">
-                  <th>{{ _('Downloads', 'list_sortby_downloads') }}</th>
+                  <th>{{ _('Average Daily Users') }}</th>
                   <td>
                     <strong class="downloads">{{
-                      addon.total_downloads|numberfmt }}</strong>
+                      addon.average_daily_users|numberfmt }}</strong>
                     {% if addon.public_stats %}
-                      {# TODO real reverse URL #}
-                      <a href="{{ locale_url('/statistics/addon/{0}'|f(addon.id)) }}">
+                      <a href="{{ url('stats.overview', addon.slug) }}">
                         {{ _('View Statistics') }}</a>
                     {% endif %}
                   </td>
                 </tr>
               {% endif %}
+              <tr class="meta-abuse">
+                <th>{{ _('Abuse Reports') }}</th>
+                <td>
+                  <a href="{{ url('editors.abuse_reports', addon.slug) }}">
+                    <strong>{{ addon.abuse_reports.count()|numberfmt }}</strong></a>
+                </td>
+              </tr>
               {% if not show_actions %}
                 {# Show privacy policy / eula if the button isn't shown #}
                 {# (Basically, on the editor review page) #}
@@ -79,7 +115,7 @@
                 <tr>
                   <th>{{ _('Privacy Policy') }}</th>
                   <td>
-                    <a href="{{ url('addons.privacy', addon.slug) }}">
+                    <a href="{{ addon.get_detail_url('privacy') }}">
                       {{ _('View Privacy Policy') }}</a>
                   </td>
                 </tr>
@@ -206,9 +242,9 @@
   {% endif %}
 
 
-  {% if not addon.is_selfhosted() and version and show_actions %}
-  <h3 id="releasenotes">{{ _('Release Notes', 'addons_display_release_notes') }}</h3>
-  {{ version_detail(addon, version, src="addon-detail") }}
+  {% if version and show_actions %}
+  <h3 id="releasenotes">{{ _('Version Notes', 'addons_display_release_notes') }}</h3>
+  {{ version_detail(addon, version, src="addon-detail-version") }}
   {% endif %}
 
   {% if abuse_form %}

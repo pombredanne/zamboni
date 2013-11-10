@@ -1,4 +1,8 @@
+from django.conf import settings
 from django.contrib import admin, messages
+from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
+from django.contrib.auth.models import User
+from django.core.validators import MaxLengthValidator
 from django.db.utils import IntegrityError
 
 import jingo
@@ -8,9 +12,33 @@ from .models import UserProfile, BlacklistedUsername, BlacklistedEmailDomain
 from . import forms
 
 
+class BetterDjangoUserAdmin(DjangoUserAdmin):
+
+    # Password is always empty for users registered through BrowserID.
+    if settings.MARKETPLACE:
+        fieldsets = list(DjangoUserAdmin.fieldsets)
+        fieldsets[0] = None, {'fields': ('username',)}
+
+    def formfield_for_dbfield(self, db_field, **kwargs):
+        """
+        Override password field to allow AMO's longer hashed passwords.
+        """
+        f = DjangoUserAdmin.formfield_for_dbfield(self, db_field, **kwargs)
+        if db_field.name == 'password':
+            f.max_length = 255
+            f.validators = [MaxLengthValidator(255)]
+            db_field.validators = [MaxLengthValidator(255)]
+        return f
+
+admin.site.unregister(User)
+admin.site.register(User, BetterDjangoUserAdmin)
+
+
 class UserAdmin(admin.ModelAdmin):
     list_display = ('__unicode__', 'email')
-    search_fields = ('^email',)
+    search_fields = ('id', '^email', '^username')
+    # A custom field used in search json in zadmin, not django.admin.
+    search_fields_response = 'email'
     inlines = (GroupUserInline,)
 
     # XXX TODO: Ability to edit the picture
@@ -18,7 +46,7 @@ class UserAdmin(admin.ModelAdmin):
     fieldsets = (
         (None, {
             'fields': ('email', 'username', 'display_name', 'password',
-                       'bio', 'homepage', 'location', 'occupation',),
+                       'bio', 'homepage', 'location', 'occupation'),
         }),
         ('Registration', {
             'fields': ('confirmationcode', 'resetcode',
@@ -27,7 +55,7 @@ class UserAdmin(admin.ModelAdmin):
         ('Flags', {
             'fields': ('deleted', 'display_collections',
                        'display_collections_fav', 'emailhidden',
-                       'notifycompat', 'notifyevents', 'sandboxshown'),
+                       'notifycompat', 'notifyevents'),
         }),
         ('Admin', {
             'fields': ('notes', 'picture_type'),

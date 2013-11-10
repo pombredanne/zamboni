@@ -1,19 +1,38 @@
 """
 Miscellaneous helpers that make Django compatible with AMO.
 """
-import re
 import threading
+
+from django.conf import settings
 
 import commonware.log
 
-from product_details import firefox_versions, thunderbird_versions
+from product_details import product_details
 
+import waffle
+
+from apps.search.utils import floor_version
 from constants.applications import *
 from constants.base import *
 from constants.licenses import *
+from constants.payments import *
 from constants.platforms import *
-from .log import (LOG, LOG_BY_ID, LOG_EDITORS, LOG_HIDE_DEVELOPER,
-                  LOG_KEEP, LOG_REVIEW_QUEUE, LOG_REVIEW_EMAIL_USER, log)
+from constants.search import *
+from .log import (LOG, LOG_BY_ID, LOG_ADMINS, LOG_EDITORS,
+                  LOG_HIDE_DEVELOPER, LOG_KEEP, LOG_REVIEW_QUEUE,
+                  LOG_REVIEW_EMAIL_USER, log)
+
+def patch_waffle():
+    suffix = getattr(settings, 'WAFFLE_TABLE_SUFFIX', None)
+    if suffix:
+        for m in [waffle.Flag, waffle.Switch, waffle.Sample]:
+            m._meta.db_table = '%s_%s' % (m._meta.db_table, suffix)
+        waffle.Flag.users.through._meta.db_table = '%s_users' % (
+            waffle.Flag._meta.db_table,)
+        waffle.Flag.groups.through._meta.db_table = '%s_groups' % (
+            waffle.Flag._meta.db_table,)
+
+patch_waffle()
 
 logger_log = commonware.log.getLogger('z.amo')
 
@@ -22,7 +41,7 @@ _locals.user = None
 
 
 def get_user():
-    return _locals.user
+    return getattr(_locals, 'user', None)
 
 
 def set_user(user):
@@ -78,5 +97,57 @@ class CachedProperty(object):
 
 # For unproven performance gains put firefox and thunderbird parsing
 # here instead of constants
-FIREFOX.latest_version = firefox_versions['LATEST_FIREFOX_VERSION']
-THUNDERBIRD.latest_version = thunderbird_versions['LATEST_THUNDERBIRD_VERSION']
+FIREFOX.latest_version = product_details.firefox_versions['LATEST_FIREFOX_VERSION']
+THUNDERBIRD.latest_version = product_details.thunderbird_versions['LATEST_THUNDERBIRD_VERSION']
+MOBILE.latest_version = FIREFOX.latest_version
+
+
+# This is a list of dictionaries that we should generate compat info for.
+# app: should match FIREFOX.id.
+# main: the app version we're generating compat info for.
+# versions: version numbers to show in comparisons.
+# previous: the major version before :main.
+
+if FIREFOX.latest_version:
+    COMPAT = {FIREFOX.id: (), THUNDERBIRD.id: (), SEAMONKEY.id: ()}
+
+    for app in (FIREFOX, THUNDERBIRD):
+        for v in range(int(float(floor_version(app.latest_version))), 5, -1):
+            v_str = floor_version(str(v))
+            COMPAT[app.id] += ({
+                'app': app.id,
+                'main': v_str,
+                'versions': (v_str, v_str + 'a2', v_str + 'a1'),
+                'previous': floor_version(str(v - 1))
+            },)
+
+    # This is because the oldest Thunderbird version is 6.0, and
+    # we need to include these older Firefox versions.
+    COMPAT[FIREFOX.id] += (
+        {'app': FIREFOX.id, 'main': '5.0', 'versions': ('5.0', '5.0a2', '5.0a1'),
+         'previous': '4.0'},
+        {'app': FIREFOX.id, 'main': '4.0', 'versions': ('4.0', '4.0a1', '3.7a'),
+         'previous': '3.6'},
+    )
+
+    COMPAT[SEAMONKEY.id] = ({
+        'app': SEAMONKEY.id,
+        'main': '2.3',
+        'versions': ('2.3', '2.3b', '2.3a'),
+        'previous': '2.2'
+    },)
+
+    COMPAT = COMPAT[FIREFOX.id] + COMPAT[THUNDERBIRD.id] + COMPAT[SEAMONKEY.id]
+    # Latest nightly version of Firefox.
+    NIGHTLY_VERSION = COMPAT[0]['main']
+
+    # Default minimum version of Firefox/Thunderbird for Add-on Packager.
+    DEFAULT_MINVER = COMPAT[4]['main']
+else:
+    # Why don't you have `product_details` like the rest of us?
+    logger_log.warning('You are missing `product_details`. '
+                       'Run `python manage.py update_product_details` now.')
+
+    COMPAT = {}
+    NIGHTLY_VERSION = '17.0'
+    DEFAULT_MINVER = '13.0'

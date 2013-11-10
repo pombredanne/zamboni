@@ -4,7 +4,6 @@ import jinja2
 
 from jingo import register
 
-import amo
 from amo.utils import urlparams
 from amo.urlresolvers import reverse
 from addons.helpers import persona_preview
@@ -19,7 +18,7 @@ def disco_persona_preview(context, persona, size='large', linked=True,
     if linked:
         url = reverse('discovery.addons.detail', args=[persona.addon.slug])
         url = settings.SERVICES_URL + url
-        if src in ('discovery-promo', 'discovery-featured'):
+        if src in ('discovery-video', 'discovery-promo', 'discovery-featured'):
             url = urlparams(url, src=src)
     return persona_preview(context, persona, size=size, linked=linked,
                            extra=extra, details=details, title=title,

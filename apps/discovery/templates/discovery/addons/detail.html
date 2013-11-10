@@ -27,13 +27,11 @@
   </li>
   <li><a href="{{ url('addons.detail', addon.slug, src='discovery-learnmore') }}"
          id="learn-more" class="button">{{ _('Learn More') }}</a></li>
-  {% with files = addon.current_version.all_files %}
-    {% if files and files[0].no_restart %}
-      <li id="no-restart">
-        <span id="no-restart-msg">{{ _('No restart required') }}</span>
-      </li>
-    {% endif %}
-  {% endwith %}
+  {% if addon.is_no_restart() %}
+    <li id="no-restart">
+      <span id="no-restart-msg">{{ _('No restart required') }}</span>
+    </li>
+  {% endif %}
   {% if addon.privacy_policy %}
     <li class="privacy"><a href="{{ url('addons.privacy', addon.slug, src='discovery-learnmore') }}">
       {{ _('View Privacy Policy') }}</a></li>
@@ -41,8 +39,12 @@
 </ul>
 
 {% if settings.PERF_THRESHOLD and addon.ts_slowness >= settings.PERF_THRESHOLD %}
-  {{ performance_note(amount=addon.ts_slowness) }}
+  {{ impala_performance_note(amount=addon.ts_slowness) }}
 {% endif %}
+
+{{ dependencies_note(addon, 'discovery') }}
+
+{{ upsell_note(addon, 'discovery') }}
 
 {% if addon.type != amo.ADDON_PERSONA %}
   {% if addon.all_previews|length > 0 %}

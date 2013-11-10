@@ -4,16 +4,18 @@ import shutil
 import tempfile
 
 from django.conf import settings
+from django.core import mail
 
 import mock
-import test_utils
 from nose.tools import eq_
 from PIL import Image
 
+import amo
+import amo.tests
 from addons.models import Addon
 from amo.tests.test_helpers import get_image_path
+from devhub import tasks
 from files.models import FileUpload
-from devhub.tasks import flag_binary, resize_icon, validator
 
 
 def test_resize_icon_shrink():
@@ -28,8 +30,8 @@ def test_resize_icon_shrink():
 def test_resize_icon_enlarge():
     """ Image stays the same, since the new size is bigger than both sides. """
 
-    resize_size = 100
-    final_size = (82, 31)
+    resize_size = 350
+    final_size = (339, 128)
 
     _uploader(resize_size, final_size)
 
@@ -37,8 +39,8 @@ def test_resize_icon_enlarge():
 def test_resize_icon_same():
     """ Image stays the same, since the new size is the same. """
 
-    resize_size = 82
-    final_size = (82, 31)
+    resize_size = 339
+    final_size = (339, 128)
 
     _uploader(resize_size, final_size)
 
@@ -46,15 +48,15 @@ def test_resize_icon_same():
 def test_resize_icon_list():
     """ Resize multiple images at once. """
 
-    resize_size = [32, 82, 100]
-    final_size = [(32, 12), (82, 31), (82, 31)]
+    resize_size = [32, 339, 350]
+    final_size = [(32, 12), (339, 128), (339, 128)]
 
     _uploader(resize_size, final_size)
 
 
 def _uploader(resize_size, final_size):
     img = get_image_path('mozilla.png')
-    original_size = (82, 31)
+    original_size = (339, 128)
 
     src = tempfile.NamedTemporaryFile(mode='r+w+b', suffix=".png",
                                       delete=False)
@@ -69,23 +71,23 @@ def _uploader(resize_size, final_size):
         for rsize, fsize in zip(resize_size, final_size):
             dest_name = str(path.path(settings.ADDON_ICONS_PATH) / '1234')
 
-            resize_icon(src.name, dest_name, resize_size)
-            dest_image = Image.open("%s-%s.png" % (dest_name, rsize))
+            tasks.resize_icon(src.name, dest_name, resize_size, locally=True)
+            dest_image = Image.open(open('%s-%s.png' % (dest_name, rsize)))
             eq_(dest_image.size, fsize)
 
             if os.path.exists(dest_image.filename):
                 os.remove(dest_image.filename)
             assert not os.path.exists(dest_image.filename)
     else:
-        dest = tempfile.NamedTemporaryFile(mode='r+w+b', suffix=".png")
-        resize_icon(src.name, dest.name, resize_size)
-        dest_image = Image.open(dest.name)
+        dest = tempfile.mktemp(suffix='.png')
+        tasks.resize_icon(src.name, dest, resize_size, locally=True)
+        dest_image = Image.open(dest)
         eq_(dest_image.size, final_size)
 
     assert not os.path.exists(src.name)
 
 
-class TestValidator(test_utils.TestCase):
+class TestValidator(amo.tests.TestCase):
 
     def setUp(self):
         self.upload = FileUpload.objects.create()
@@ -97,13 +99,13 @@ class TestValidator(test_utils.TestCase):
     @mock.patch('devhub.tasks.run_validator')
     def test_pass_validation(self, _mock):
         _mock.return_value = '{"errors": 0}'
-        validator(self.upload.pk)
+        tasks.validator(self.upload.pk)
         assert self.get_upload().valid
 
     @mock.patch('devhub.tasks.run_validator')
     def test_fail_validation(self, _mock):
         _mock.return_value = '{"errors": 2}'
-        validator(self.upload.pk)
+        tasks.validator(self.upload.pk)
         assert not self.get_upload().valid
 
     @mock.patch('devhub.tasks.run_validator')
@@ -111,32 +113,52 @@ class TestValidator(test_utils.TestCase):
         _mock.side_effect = Exception
         eq_(self.upload.task_error, None)
         with self.assertRaises(Exception):
-            validator(self.upload.pk)
+            tasks.validator(self.upload.pk)
         error = self.get_upload().task_error
         assert error.startswith('Traceback (most recent call last)'), error
 
 
-class TestFlagBinary(test_utils.TestCase):
+class TestFlagBinary(amo.tests.TestCase):
     fixtures = ['base/addon_3615']
 
     def setUp(self):
         self.addon = Addon.objects.get(pk=3615)
-        self.addon.update(binary=False)
 
     @mock.patch('devhub.tasks.run_validator')
     def test_flag_binary(self, _mock):
-        _mock.return_value = '{"metadata":{"contains_binary_extension": 1}}'
-        flag_binary([self.addon.pk])
+        _mock.return_value = ('{"metadata":{"contains_binary_extension": 1, '
+                              '"contains_binary_content": 0}}')
+        tasks.flag_binary([self.addon.pk])
+        eq_(Addon.objects.get(pk=self.addon.pk).binary, True)
+        _mock.return_value = ('{"metadata":{"contains_binary_extension": 0, '
+                              '"contains_binary_content": 1}}')
+        tasks.flag_binary([self.addon.pk])
         eq_(Addon.objects.get(pk=self.addon.pk).binary, True)
 
     @mock.patch('devhub.tasks.run_validator')
     def test_flag_not_binary(self, _mock):
-        _mock.return_value = '{"metadata":{"contains_binary_extension": 0}}'
-        flag_binary([self.addon.pk])
+        _mock.return_value = ('{"metadata":{"contains_binary_extension": 0, '
+                              '"contains_binary_content": 0}}')
+        tasks.flag_binary([self.addon.pk])
         eq_(Addon.objects.get(pk=self.addon.pk).binary, False)
 
     @mock.patch('devhub.tasks.run_validator')
     def test_flag_error(self, _mock):
         _mock.side_effect = RuntimeError()
-        flag_binary([self.addon.pk])
+        tasks.flag_binary([self.addon.pk])
         eq_(Addon.objects.get(pk=self.addon.pk).binary, False)
+
+
+@mock.patch('devhub.tasks.send_html_mail_jinja')
+def test_send_welcome_email(send_html_mail_jinja_mock):
+    tasks.send_welcome_email(3615, ['del@icio.us'], {'omg': 'yes'})
+    send_html_mail_jinja_mock.assert_called_with(
+        'Mozilla Add-ons: Thanks for submitting a Firefox Add-on!',
+        'devhub/email/submission.html',
+        'devhub/email/submission.txt',
+        {'omg': 'yes'},
+        recipient_list=['del@icio.us'],
+        from_email=settings.NOBODY_EMAIL,
+        use_blacklist=False,
+        perm_setting='individual_contact',
+        headers={'Reply-To': settings.EDITORS_EMAIL})

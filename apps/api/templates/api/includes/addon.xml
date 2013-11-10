@@ -1,11 +1,16 @@
-{% cache addon, extra=[api_version] %}
+{% cache addon, extra=[api_version, version, compat_mode] %}
 {% set new_api = (api_version >= 1.5) %}
+{% if addon.compat_version %}
+  {% set version = addon.compat_version %}
+{% else %}
+  {% set version = addon.current_version %}
+{% endif %}
 <addon id="{{ addon.id }}">
   <name>{{ addon.name }}</name>
   <type id="{{ addon.type }}">{{ amo.ADDON_TYPE[addon.type] }}</type>
   <guid>{{ addon.guid }}</guid>
   <slug>{{ addon.slug }}</slug>
-  <version>{{ addon.current_version.version }}</version>
+  <version>{{ version.version }}</version>
   <status id="{{ addon.status }}">{{ amo.STATUS_CHOICES[addon.status] }}</status>
   <authors>
     {% if not addon.is_persona() %}
@@ -22,13 +27,25 @@
     {% endif %}
   </authors>
   <summary>{{ addon.summary|strip_html(new_api) }}</summary>
-
   <description>{{ addon.description|strip_html(new_api) }}</description>
-
-  <icon>{{ addon.get_icon_url(32, use_default=False) }}</icon>
+  {%- if version and version.license -%}
+  <license>
+    <name>{{ version.license.name }}</name>
+    <url>
+      {%- if not version.license.url -%}
+      {{ version.license_url()|absolutify }}
+      {%- else -%}
+      {{ version.license.url|absolutify }}
+      {%- endif -%}
+    </url>
+  </license>
+  {%- endif -%}
+  {# The 32px icon must be the last icon specified. #}
+  <icon size="64">{{ addon.get_icon_url(64, use_default=False) }}</icon>
+  <icon size="32">{{ addon.get_icon_url(32, use_default=False) }}</icon>
   <compatible_applications>
-    {%- if addon.current_version -%}
-    {%- for app in addon.current_version.compatible_apps.values() %}
+    {%- if version -%}
+    {%- for app in version.compatible_apps.values() %}
     {%- if amo.APP_IDS.get(app.application_id) -%}
     <application>
       <name>{{ amo.APP_IDS[app.application_id].pretty }}</name>
@@ -42,8 +59,8 @@
     {%- endif -%}
   </compatible_applications>
   <all_compatible_os>
-    {%- if addon.current_version -%}
-    {% for os in addon.current_version.supported_platforms -%}
+    {%- if version -%}
+    {% for os in version.supported_platforms -%}
     <os>{{ os.api_name }}</os>
     {%- endfor -%}
     {%- endif -%}
@@ -70,25 +87,25 @@
   {%- endif -%}
   <rating>{{ addon.average_rating|round|int }}</rating>
   <learnmore>{{ addon.get_url_path()|absolutify|urlparams(src='api') }}</learnmore>
-  {%- if addon.current_version -%}
-  {%- for file in addon.current_version.all_files -%}
+  {%- if version -%}
+  {%- for file in version.all_files -%}
   <install hash="{{ file.hash }}"
     os="{{ amo.PLATFORMS[file.platform_id].api_name }}"
-    size="{{ file.size * 1024 }}">{{ file.get_url_path(APP, 'api') }}</install>
+    size="{{ file.size }}">{{ file.get_url_path('api', addon) }}</install>
   {% endfor -%}
   {%- endif -%}
   {%- if new_api %}
     {%- if addon.current_beta_version -%}
     {%- for file in addon.current_beta_version.all_files -%}
     <install hash="{{ file.hash }}" os="{{ file.platform.name }}"
-             size="{{ file.size * 1024 }}"
+             size="{{ file.size }}"
              status="{{ amo.STATUS_CHOICES[amo.STATUS_BETA] }}">
-      {{ file.get_url_path(APP, 'api') }}
+      {{ file.get_url_path('api', addon) }}
     </install>
     {% endfor -%}
     {%- endif -%}
 
-    {%- if addon.wants_contributions -%}
+    {%- if addon.takes_contributions -%}
     <contribution_data>
       <link>{{ addon.contribution_url|absolutify|urlparams(src='api') }}</link>
       {% if addon.suggested_amount %}
@@ -116,7 +133,27 @@
     </last_updated>
     <homepage>{{ addon.homepage }}</homepage>
     <support>{{ addon.support_url }}</support>
-    <featured>{{ (addon.is_featured(request.APP, request.LANG) or addon.is_category_featured(request.APP, request.LANG))|int }}</featured>
+    <featured>{{ addon.is_featured(request.APP, request.LANG)|int }}</featured>
+    {% if settings.API_SHOW_PERF_DATA %}
+    <performance>
+      {% for appversion, results in addon.app_perf_results() %}
+      <application name="{{ appversion.app }}" version="{{ appversion.version }}">
+        {% for res in results %}
+        <platform name="{{ res.result.osversion.os }}" version="{{ res.result.osversion.version }}">
+          <result type="{{ res.result.test }}" baseline="{{ res.baseline }}" average="{{ res.result.average }}"
+                  {% if res.result.test == 'ts' %}above_threshold="{{ res.startup_is_too_slow|json }}"{% endif %} />
+        </platform>
+        {%- endfor -%}
+      </application>
+      {%- endfor -%}
+    </performance>
+    {% endif -%}
+
+    {% if show_localepicker -%}
+    <strings><![CDATA[
+{{ addon.get_localepicker() }}
+    ]]></strings>
+    {% endif %}
   {%- endif -%}
 </addon>
 {% endcache %}

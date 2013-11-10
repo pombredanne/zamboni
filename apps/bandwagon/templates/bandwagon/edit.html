@@ -12,14 +12,15 @@
   </div>
   <div class="primary">
     <header>
-      {{ breadcrumbs([(remora_url('collections'), _('Collections')),
+      {{ breadcrumbs([(url('collections.list'), _('Collections')),
+                      (url('collections.user', collection.author_username),
+                       collection.author.name),
                       (collection.get_url_path(), collection.name),
                       (None, _('Edit'))]) }}
 
       <h2>{{ _('Edit {0}')|f(collection.name) }}</h2>
     </header>
 
-    {% include "messages.html" %}
     <div id="a" class="tab-wrapper">
       <ul class="tab-nav">
         {% if owner %}
@@ -60,8 +61,8 @@
       <div class="tab_panel tab-panel tab-selected" id="addons-edit">
         <form method="post"
               action="{{ url('collections.edit_addons', username, slug) }}">
-        {% include 'bandwagon/includes/addon_selector.html' %}
         {{ csrf() }}
+        {% include 'bandwagon/includes/addon_selector.html' %}
         <div class="listing-footer">
           <input type="submit" value="{{ _('Save Changes') }}">
           {% if owner %}

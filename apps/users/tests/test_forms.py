@@ -3,15 +3,16 @@ from datetime import datetime
 from django.contrib.auth.models import User
 from django.contrib.auth.tokens import default_token_generator
 from django.core import mail
-from django.core.validators import validate_slug
 from django.utils.http import int_to_base36
 
-import test_utils
-from manage import settings
+from django.conf import settings
 from mock import Mock, patch
 from nose.tools import eq_
+from pyquery import PyQuery as pq
+import waffle
 
 import amo
+import amo.tests
 from amo.helpers import urlparams
 from amo.urlresolvers import reverse
 from amo.tests.test_helpers import get_uploaded_file
@@ -19,7 +20,7 @@ from users.models import BlacklistedPassword, UserProfile
 from users.forms import UserEditForm
 
 
-class UserFormBase(test_utils.TestCase):
+class UserFormBase(amo.tests.TestCase):
     fixtures = ['users/test_backends']
 
     def setUp(self):
@@ -137,7 +138,8 @@ class TestUserDeleteForm(UserFormBase):
         self.client.post('/en-US/firefox/users/delete', data, follow=True)
         # TODO XXX: Bug 593055
         #self.assertContains(r, "Profile Deleted")
-        u = UserProfile.objects.get(id='4043307')
+        u = UserProfile.objects.get(id=4043307)
+        eq_(u.deleted, True)
         eq_(u.email, None)
 
     @patch('users.models.UserProfile.is_developer')
@@ -150,52 +152,117 @@ class TestUserDeleteForm(UserFormBase):
         self.assertContains(r, 'You cannot delete your account')
 
 
+class TestUserAdminForm(UserFormBase):
+
+    def test_long_hash(self):
+        self.client.login(username='fligtar@gmail.com', password='foo')
+        data = {'password': 'sha512$32e15df727a054aa56cf69accc142d1573372641a176aab9b0f1458e27dc6f3b$5bd3bd7811569776a07fbbb5e50156aa6ebdd0bec9267249b57da065340f0324190f1ad0d5f609dca19179a86c64807e22f789d118e6f7109c95b9c64ae8f619',
+                'username': 'alice',
+                'last_login': '2010-07-03 23:03:11',
+                'date_joined': '2010-07-03 23:03:11'}
+        r = self.client.post(reverse('admin:auth_user_change',
+                                     args=[self.user.id]),
+                             data)
+        eq_(pq(r.content)('#user_form div.password .errorlist').text(), None)
+
+    def test_toolong_hash(self):
+        self.client.login(username='fligtar@gmail.com', password='foo')
+        data = {'password': 'sha512$32e15df727a054aa56cf69accc142d1573372641a176aab9b0f1458e27dc6f3b$5bd3bd7811569776a07fbbb5e50156aa6ebdd0bec9267249b57da065340f0324190f1ad0d5f609dca19179a86c64807e22f789d118e6f7109c95b9c64ae8f6190000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',
+                'username': 'alice'}
+        r = self.client.post(reverse('admin:auth_user_change',
+                                     args=[self.user.id]),
+                             data)
+        eq_(pq(r.content)('#id_password strong').text(),
+            'Invalid password format or unknown hashing algorithm.')
+
+
 class TestUserEditForm(UserFormBase):
 
-    def test_no_names(self):
+    def setUp(self):
+        super(TestUserEditForm, self).setUp()
         self.client.login(username='jbalogh@mozilla.com', password='foo')
+        self.url = reverse('users.edit')
+
+    def test_no_names(self):
         data = {'username': '',
                 'email': 'jbalogh@mozilla.com', }
-        r = self.client.post('/en-US/firefox/users/edit', data)
-        msg = "This field is required."
-        self.assertFormError(r, 'form', 'username', msg)
+        r = self.client.post(self.url, data)
+        self.assertFormError(r, 'form', 'username', 'This field is required.')
 
     def test_no_real_name(self):
-        self.client.login(username='jbalogh@mozilla.com', password='foo')
         data = {'username': 'blah',
                 'email': 'jbalogh@mozilla.com', }
-        r = self.client.post('/en-US/firefox/users/edit', data, follow=True)
-        self.assertContains(r, "Profile Updated")
+        r = self.client.post(self.url, data, follow=True)
+        self.assertContains(r, 'Profile Updated')
 
     def test_set_wrong_password(self):
-        self.client.login(username='jbalogh@mozilla.com', password='foo')
         data = {'email': 'jbalogh@mozilla.com',
                 'oldpassword': 'wrong',
                 'password': 'new',
                 'password2': 'new', }
-        r = self.client.post('/en-US/firefox/users/edit', data)
+        r = self.client.post(self.url, data)
         self.assertFormError(r, 'form', 'oldpassword',
-                                                'Wrong password entered!')
+                             'Wrong password entered!')
 
     def test_set_unmatched_passwords(self):
-        self.client.login(username='jbalogh@mozilla.com', password='foo')
         data = {'email': 'jbalogh@mozilla.com',
                 'oldpassword': 'foo',
-                'password': 'new1',
-                'password2': 'new2', }
-        r = self.client.post('/en-US/firefox/users/edit', data)
+                'password': 'longer123',
+                'password2': 'longer1234', }
+        r = self.client.post(self.url, data)
         self.assertFormError(r, 'form', 'password2',
-                                            'The passwords did not match.')
+                             'The passwords did not match.')
 
     def test_set_new_passwords(self):
-        self.client.login(username='jbalogh@mozilla.com', password='foo')
+        data = {'username': 'jbalogh',
+                'email': 'jbalogh@mozilla.com',
+                'oldpassword': 'foo',
+                'password': 'longer123',
+                'password2': 'longer123', }
+        r = self.client.post(self.url, data, follow=True)
+        self.assertContains(r, 'Profile Updated')
+
+    def test_long_data(self):
         data = {'username': 'jbalogh',
                 'email': 'jbalogh@mozilla.com',
                 'oldpassword': 'foo',
                 'password': 'new',
                 'password2': 'new', }
-        r = self.client.post('/en-US/firefox/users/edit', data, follow=True)
-        self.assertContains(r, "Profile Updated")
+        for field, length in (('username', 50), ('display_name', 50),
+                              ('location', 100), ('occupation', 100)):
+            data[field] = 'x' * (length + 1)
+            r = self.client.post(self.url, data, follow=True)
+            err = u'Ensure this value has at most %s characters (it has %s).'
+            self.assertFormError(r, 'form', field, err % (length, length + 1))
+
+    @patch('amo.models.ModelBase.update')
+    def test_photo_modified(self, update_mock):
+        dummy = Mock()
+        dummy.user = self.user
+
+        data = {'username': self.user_profile.username,
+                'email': self.user_profile.email}
+        files = {'photo': get_uploaded_file('transparent.png')}
+        form = UserEditForm(data, files=files, instance=self.user_profile,
+                            request=dummy)
+        assert form.is_valid()
+        form.save()
+        assert update_mock.called
+
+
+class TestAdminUserEditForm(UserFormBase):
+    fixtures = ['base/users']
+
+    def setUp(self):
+        super(TestAdminUserEditForm, self).setUp()
+        self.client.login(username='admin@mozilla.com', password='password')
+        self.url = reverse('users.admin_edit', args=[self.user.id])
+
+    def test_delete_link(self):
+        r = self.client.get(self.url)
+        eq_(r.status_code, 200)
+        eq_(pq(r.content)('a.delete').attr('href'),
+            reverse('admin:users_userprofile_delete', args=[self.user.id]))
 
 
 class TestUserLoginForm(UserFormBase):
@@ -216,29 +283,33 @@ class TestUserLoginForm(UserFormBase):
                                              "fields are case-sensitive."))
 
     def test_credential_success(self):
+        user = UserProfile.objects.get(email='jbalogh@mozilla.com')
         url = self._get_login_url()
-        r = self.client.post(url, {'username': 'jbalogh@mozilla.com',
+        r = self.client.post(url, {'username': user.email,
                                    'password': 'foo'}, follow=True)
-        self.assertContains(r, "Welcome, Jeff Balogh")
-        self.assertTrue(self.client.session.get_expire_at_browser_close())
+        eq_(pq(r.content.decode('utf-8'))('.account .user').text(),
+            user.display_name)
+        eq_(pq(r.content)('.account .user').attr('title'), user.email)
 
-        r = self.client.post(url, {'username': 'jbalogh@mozilla.com',
+        r = self.client.post(url, {'username': user.email,
                                    'password': 'foo',
                                    'rememberme': 1}, follow=True)
-        self.assertContains(r, "Welcome, Jeff Balogh")
+        eq_(pq(r.content.decode('utf-8'))('.account .user').text(),
+            user.display_name)
+        eq_(pq(r.content)('.account .user').attr('title'), user.email)
         # Subtract 100 to give some breathing room
         age = settings.SESSION_COOKIE_AGE - 100
         assert self.client.session.get_expiry_age() > age
 
     def test_redirect_after_login(self):
-        url = urlparams(self._get_login_url(), to="en-US/firefox/about")
+        url = urlparams(self._get_login_url(), to="/en-US/firefox/about")
         r = self.client.post(url, {'username': 'jbalogh@mozilla.com',
                                    'password': 'foo'}, follow=True)
-        self.assertRedirects(r, '/en-US/firefox/about')
+        self.assertRedirects(r, '/en-US/about')
 
         # Test a valid domain.  Note that assertRedirects doesn't work on
         # external domains
-        url = urlparams(self._get_login_url(), to="addon/new",
+        url = urlparams(self._get_login_url(), to="/addon/new",
                         domain="builder")
         r = self.client.post(url, {'username': 'jbalogh@mozilla.com',
                                    'password': 'foo'}, follow=True)
@@ -247,14 +318,14 @@ class TestUserLoginForm(UserFormBase):
         self.assertEqual(code, 302)
 
     def test_redirect_after_login_evil(self):
-        "http://foo.com is a bad value for redirection."
-        url = urlparams(self._get_login_url(), to="http://foo.com")
+        url = urlparams(self._get_login_url(), to='http://foo.com')
         r = self.client.post(url, {'username': 'jbalogh@mozilla.com',
                                    'password': 'foo'}, follow=True)
         self.assertRedirects(r, '/en-US/firefox/')
 
-        url = urlparams(self._get_login_url(), to="/en-US/firefox",
-                domain="http://evil.com")
+    def test_redirect_after_login_domain(self):
+        url = urlparams(self._get_login_url(), to='/en-US/firefox',
+                        domain='http://evil.com')
         r = self.client.post(url, {'username': 'jbalogh@mozilla.com',
                                    'password': 'foo'}, follow=True)
         self.assertRedirects(r, '/en-US/firefox/')
@@ -268,6 +339,16 @@ class TestUserLoginForm(UserFormBase):
         self.assertNotContains(r, "Welcome, Jeff")
         self.assertContains(r, "A link to activate your user account")
         self.assertContains(r, "If you did not receive the confirmation")
+
+    @patch.object(settings, 'APP_PREVIEW', True)
+    def test_no_register(self):
+        res = self.client.get(self._get_login_url())
+        assert not res.content in 'Create an Add-ons Account'
+
+    @patch.object(settings, 'APP_PREVIEW', False)
+    def test_yes_register(self):
+        res = self.client.get(self._get_login_url())
+        self.assertContains(res, 'Create an Add-ons Account')
 
     def test_disabled_account(self):
         url = self._get_login_url()
@@ -343,7 +424,9 @@ class TestUserRegisterForm(UserFormBase):
                 'password2': 'xxxlonger',
                 'username': 'Todd/Rochelle', }
         r = self.client.post('/en-US/firefox/users/register', data)
-        self.assertFormError(r, 'form', 'username', validate_slug.message)
+        self.assertFormError(r, 'form', 'username',
+            'Enter a valid username consisting of letters, numbers, '
+            'underscores or hyphens.')
 
     def test_blacklisted_username(self):
         data = {'email': 'testo@example.com',
@@ -352,7 +435,7 @@ class TestUserRegisterForm(UserFormBase):
                 'username': 'IE6Fan', }
         r = self.client.post('/en-US/firefox/users/register', data)
         self.assertFormError(r, 'form', 'username',
-                             'This username is invalid.')
+                             'This username cannot be used.')
 
     def test_blacklisted_password(self):
         BlacklistedPassword.objects.create(password='password')
@@ -385,7 +468,8 @@ class TestUserRegisterForm(UserFormBase):
                              'provider to complete your registration.')
 
     def test_invalid_homepage(self):
-        data = {'homepage': 'example.com:alert(String.fromCharCode(88,83,83)'}
+        data = {'homepage': 'example.com:alert(String.fromCharCode(88,83,83)',
+                'email': ''}
         m = 'This URL has an invalid format. '
         m += 'Valid URLs look like http://example.com/my_page.'
         r = self.client.post('/en-US/firefox/users/register', data)
@@ -397,19 +481,31 @@ class TestUserRegisterForm(UserFormBase):
         self.assertContains(r, "You are already logged in")
         self.assertNotContains(r, '<button type="submit">Register</button>')
 
+    def test_browserid_registered(self):
+        u = UserProfile.objects.create(email='bid_test@mozilla.com',
+                                       source=amo.LOGIN_SOURCE_BROWSERID,
+                                       password='')
+        data = {'email': u.email}
+        r = self.client.post('/en-US/firefox/users/register', data)
+        self.assertContains(r, 'already have an account')
+
+    def good_data(self):
+        return {
+            'email': 'john.connor@sky.net',
+            'password': 'carebears',
+            'password2': 'carebears',
+            'username': 'BigJC',
+            'homepage': ''
+        }
+
     @patch('captcha.fields.ReCaptchaField.clean')
     def test_success(self, clean):
         clean.return_value = ''
 
-        data = {'email': 'john.connor@sky.net',
-                'password': 'carebears',
-                'password2': 'carebears',
-                'username': 'BigJC',
-                'homepage': ''}
-        self.client.post('/en-US/firefox/users/register', data,
-                         follow=True)
-        # TODO XXX POSTREMORA: uncomment when remora goes away
-        #self.assertContains(r, "Congratulations!")
+        r = self.client.post('/en-US/firefox/users/register', self.good_data(),
+                             follow=True)
+
+        self.assertContains(r, "Congratulations!")
 
         u = User.objects.get(email='john.connor@sky.net').get_profile()
 
@@ -418,6 +514,18 @@ class TestUserRegisterForm(UserFormBase):
         assert mail.outbox[0].subject.find('Please confirm your email') == 0
         assert mail.outbox[0].body.find('%s/confirm/%s' %
                                         (u.id, u.confirmationcode)) > 0
+
+    def test_long_data(self):
+        data = {'username': 'jbalogh',
+                'email': 'jbalogh@mozilla.com',
+                'oldpassword': 'foo',
+                'password': 'new',
+                'password2': 'new', }
+        for field, length in (('username', 50), ('display_name', 50)):
+            data[field] = 'x' * (length + 1)
+            r = self.client.post(reverse('users.register'), data, follow=True)
+            err = u'Ensure this value has at most %s characters (it has %s).'
+            self.assertFormError(r, 'form', field, err % (length, length + 1))
 
 
 class TestBlacklistedUsernameAdminAddForm(UserFormBase):
@@ -460,20 +568,3 @@ class TestBlacklistedEmailDomainAdminAddForm(UserFormBase):
         msg += '1 duplicates were ignored.'
         self.assertContains(r, msg)
         self.assertNotContains(r, 'fubar')
-
-
-class TestUserEditForm(UserFormBase):
-
-    @patch('amo.models.ModelBase.update')
-    def test_photo_modified(self, update_mock):
-        dummy = Mock()
-        dummy.user = self.user
-
-        data = {'username': self.user_profile.username,
-                'email': self.user_profile.email}
-        files = {'photo': get_uploaded_file('transparent.png')}
-        form = UserEditForm(data, files=files, instance=self.user_profile,
-                            request=dummy)
-        assert form.is_valid()
-        form.save()
-        assert update_mock.called

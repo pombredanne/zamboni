@@ -1,4 +1,4 @@
-{% macro heading(addon, collection) %}
+{% macro heading(addon, amo, collection) %}
   <h3>
     {% if collection %}
       {% set collection_path = "?src=collection&collection_id=" + collection.uuid %}
@@ -10,9 +10,7 @@
       <img class="icon" width="32" height="32" src="{{ addon.icon_url }}">
       {{ addon.name }}</a>
     <span>
-      {% trans users=users_list(addon.listed_authors, size=2) %}
-        by {{ users }}
-      {% endtrans %}
+      {{ addon_users_list(addon) }}
     </span>
   </h3>
 {% endmacro %}
@@ -40,6 +38,7 @@
     {% if show_date in ['created', 'new', 'newest'] %}
     {{ _('Added {0}')|f(addon.created|datetime) }}
     {% elif show_date == 'updated' %}
+    {# L10n: {0} is a date #}
     {{ _('Updated {0}')|f(addon.last_updated|datetime) }}
     {% endif %}
   </p>

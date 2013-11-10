@@ -2,7 +2,7 @@ import copy
 import re
 
 from django.core.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
-from django.db import connection, models
+from django.db import connection
 from django.db.models import Q
 from django.db.models.sql.query import AND, OR
 from django.utils.tree import Node
@@ -93,14 +93,18 @@ class RawSQLManager(object):
         self._execute('SELECT count(*) from (%s) as q' % self.as_sql())
         return self._cursor.fetchone()[0]
 
-    def get(self):
+    def get(self, **kw):
         clone = self._clone()
+        if kw:
+            clone = clone.filter(**kw)
         cnt = clone.count()
         if cnt > 1:
             raise clone.sql_model.MultipleObjectsReturned(
                 'get() returned more than one row -- it returned %s!' % cnt)
         elif cnt == 0:
-            raise clone.sql_model.DoesNotExist('No rows matching query')
+            raise clone.sql_model.DoesNotExist(
+                '%s matching query does not exist.'
+                    % self.sql_model.__class__.__name__)
         else:
             return clone[0:1][0]
 
@@ -123,7 +127,7 @@ class RawSQLManager(object):
                     '(%s)' % (clone._flatten_q(arg, clone._kw_clause_from_q)))
             else:
                 raise TypeError(
-                        'non keyword args should be Q objects, got %r' % arg)
+                    'non keyword args should be Q objects, got %r' % arg)
         for field, val in kw.items():
             clone.base_query['where'].append(clone._kw_filter_to_clause(field,
                                                                         val))
@@ -171,6 +175,17 @@ class RawSQLManager(object):
         clone.base_query['having'].append(clone._filter_to_clause(spec, val))
         return clone
 
+    def latest(self, column):
+        """Return the latest item, based on the given column."""
+
+        clone = self._clone()
+        clone.order_by('-%s' % column)
+        if clone.count() == 0:
+            raise clone.sql_model.DoesNotExist(
+                '%s matching query does not exist.'
+                    % self.sql_model.__class__.__name__)
+        return clone[0]
+
     def order_by(self, spec):
         """Order by column (ascending) or -column (descending)."""
         if not ORDER_PATTERN.match(spec):
@@ -182,8 +197,8 @@ class RawSQLManager(object):
             dir = 'ASC'
             field = spec
         clone = self._clone()
-        clone.base_query['order_by'].append(
-                            '%s %s' % (clone._resolve_alias(field), dir))
+        clone.base_query['order_by'].append('%s %s' %
+                                            (clone._resolve_alias(field), dir))
         return clone
 
     def as_sql(self):
@@ -198,7 +213,8 @@ class RawSQLManager(object):
         """Makes a WHERE clause out of a Q object (supports nested Q objects).
 
         Pass in join_specs(*specs) based on what kind of arguments you think
-        the Q object will have.  filter() Qs are different from filter_raw() Qs.
+        the Q object will have.  filter() Qs are different from
+        filter_raw() Qs.
         """
         specs = []
         if stack is None:
@@ -250,7 +266,7 @@ class RawSQLManager(object):
         specs = list(specs)
         if (len(specs) % 2) != 0:
             raise TypeError(
-                    "Expected pairs of 'spec =', 'val'. Got: %r" % specs)
+                "Expected pairs of 'spec =', 'val'. Got: %r" % specs)
         full_clause = []
         while len(specs):
             spec, val = specs.pop(0), specs.pop(0)
@@ -258,7 +274,7 @@ class RawSQLManager(object):
             if not clause:
                 raise ValueError(
                     'This is not a valid clause: %r; must match: %s' % (
-                                            spec, RAW_FILTER_PATTERN.pattern))
+                        spec, RAW_FILTER_PATTERN.pattern))
             field = clause.group('field')
             field = self._resolve_alias(field)
             if clause.group('op').lower() == 'in':
@@ -357,7 +373,8 @@ class RawSQLModel(object):
     building a query with many different types of where clauses.
     """
     __metaclass__ = RawSQLModelMeta
-    DoesNotExist = ObjectDoesNotExist
+    class DoesNotExist(ObjectDoesNotExist):
+        pass
     MultipleObjectsReturned = MultipleObjectsReturned
 
     def __init__(self, **kwargs):
@@ -397,4 +414,6 @@ class RawSQLModel(object):
         if value is None:
             # for NULL fields, ala left joins
             return []
-        return [cast(i) for i in value.split(sep)]
+        # Cope with a value like ...1261530,1261530, which occurs because of:
+        # 1 line(s) were cut by GROUP_CONCAT()
+        return [cast(i) for i in value.split(sep) if i]

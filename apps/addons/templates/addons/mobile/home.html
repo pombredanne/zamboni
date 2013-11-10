@@ -5,17 +5,18 @@
 {% block header %}
   <header id="home-header">
     {% include "mobile/header.html" %}
-    <div class="get-fx-message">
-      {{ _('You need Firefox to install add-ons. <a href="http://mozilla.com/mobile">Learn More&nbsp;&raquo;</a>') }}
-    </div>
+    {% if not (settings.APP_PREVIEW or WEBAPP) %}
+      <div class="get-fx-message">
+        {{ _('You need Firefox to install add-ons. <a href="http://mozilla.com/mobile">Learn More&nbsp;&raquo;</a>') }}
+      </div>
+    {% endif %}
     <hgroup>
       <h1 class="site-title">
-        {% set appicon = 'firefox' if request.APP == amo.MOBILE else request.APP.short %}
+        {% set appicon = 'firefox' if request.APP in (amo.MOBILE, amo.ANDROID) else request.APP.short %}
         <a href="{{ url('home') }}"
           title="{{ _('Return to the {0} Add-ons homepage')|f(request.APP.pretty) }}">
-          <img alt="{{ request.APP.pretty }}" src="{{ media('img/zamboni/app_icons/' + appicon + '.png') }}">
-          {{ _('Mobile Add-ons') }}
-        </a>
+          <img src="{{ media('img/zamboni/app_icons/' + appicon + '.png') }}">
+          {{ _('Add-ons') }}</a>
       </h1>
       <h2>{{ _('Easy ways to personalize.') }}</h2>
       <a href="#" id="learnmore">{{ _('Learn More') }}&raquo;</a>
@@ -35,20 +36,21 @@
   <nav class="tabs" data-manages="addon-lists">
     <ul>
       <li class="selected"><a href="#listing-featured">{{ _('Featured') }}</a></li>
-      <li><a href="#listing-popular">{{ _('Popular') }}</a></li>
+      {#<li><a href="#listing-popular">{{ _('Popular') }}</a></li>#}
       <li><a href="#listing-categories">{{ _('Categories') }}</a></li>
+      <li><a href="{{ url('browse.personas') }}">{{ _('Themes') }}</a></li>
     </ul>
   </nav>
   <div id="addon-lists" class="slider">
     <div id="listing-featured" class="tab-pane selected">
       <ul id="list-featured" class="listview">
-        {{ addon_listing_items_mobile(featured, src='browse') }}
-        <li><a href="{{ url('browse.featured') }}">
+        {{ addon_listing_items_mobile(featured, src='homepagebrowse') }}
+        <li><a href="{{ url('browse.extensions')|urlparams(sort='featured') }}">
           {{ _('View all Featured add-ons') }}</a></li>
       </ul>
     </div><div id="listing-popular" class="tab-pane">
       <ul id="list-popular" class="listview">
-        {{ addon_listing_items_mobile(popular, sort='popular', src='browse') }}
+        {{ addon_listing_items_mobile(popular, sort='popular', src='homepagebrowse') }}
         <li><a href="{{ url('browse.extensions')|urlparams(sort='popular') }}">
           {{ _('View all Popular add-ons') }}</a></li>
       </ul>
@@ -63,10 +65,10 @@
     </div>
   </div>
   <h2>{{ _('More Add-ons') }}</h2>
-  <ul class="listview">
-    <li><a href="{{ url('browse.extensions')|urlparams(sort='rating') }}">
+  <ul id="more-addons" class="listview">
+    <li class="rating"><a href="{{ url('browse.extensions')|urlparams(sort='rating') }}">
       {{ _('Highest Rated') }}</a></li>
-    <li><a href="{{ url('browse.extensions')|urlparams(sort='created') }}">
+    <li class="created"><a href="{{ url('browse.extensions')|urlparams(sort='created') }}">
       {{ _('Newest') }}</a></li>
     {# <li><a href="{{ url('collections.list') }}">
       {{ _('Collections') }}</a></li> #}

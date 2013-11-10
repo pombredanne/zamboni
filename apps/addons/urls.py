@@ -1,7 +1,9 @@
-from django.conf.urls.defaults import patterns, url, include
+from django.conf.urls import include, patterns, url
 from django.views.decorators.csrf import csrf_exempt
 from django.shortcuts import redirect
 
+from reviews.urls import review_patterns
+from stats.urls import stats_patterns
 from . import views
 
 ADDON_ID = r"""(?P<addon_id>[^/<>"']+)"""
@@ -10,6 +12,7 @@ ADDON_ID = r"""(?P<addon_id>[^/<>"']+)"""
 # These will all start with /addon/<addon_id>/
 detail_patterns = patterns('',
     url('^$', views.addon_detail, name='addons.detail'),
+    url('^more$', views.addon_detail, name='addons.detail_more'),
     url('^eula/(?P<file_id>\d+)?$', views.eula, name='addons.eula'),
     url('^license/(?P<version>[^/]+)?', views.license, name='addons.license'),
     url('^privacy/', views.privacy, name='addons.privacy'),
@@ -28,29 +31,22 @@ detail_patterns = patterns('',
     url('^contribute/(?P<status>cancel|complete)$', views.paypal_result,
         name='addons.paypal'),
 
-
     url('^about$', lambda r, addon_id: redirect('addons.installed',
                                                  addon_id, permanent=True),
                    name='addons.about'),
 
-    ('^reviews/', include('reviews.urls')),
-    ('^statistics/', include('stats.urls')),
+    ('^reviews/', include(review_patterns('addons'))),
+    ('^statistics/', include(stats_patterns)),
     ('^versions/', include('versions.urls')),
 )
 
 
 urlpatterns = patterns('',
-    # The homepage.
-    url('^$', views.home, name='home'),
-    # The impala homepage.
-    url('^i/$', views.impala_home, name='i_home'),
     # Promo modules for the homepage
     url('^i/promos$', views.homepage_promos, name='addons.homepage_promos'),
 
     # URLs for a single add-on.
     ('^addon/%s/' % ADDON_ID, include(detail_patterns)),
-    # Impala deets.
-    url('^i/addon/%s/$' % ADDON_ID, views.impala_addon_detail, name='addons.i_detail'),
 
     # Accept extra junk at the end for a cache-busting build id.
     url('^addons/buttons.js(?:/.+)?$', 'addons.buttons.js'),

@@ -1,5 +1,7 @@
 {% extends "editors/base.html" %}
 
+{% set types = ('addons', 'apps', 'themes') %}
+
 {% block breadcrumbs %}
 {{ editors_breadcrumbs(items=[(None, _('Performance'))]) }}
 {% endblock %}
@@ -59,5 +61,44 @@
     </div>
   </div>
 
-{% endblock %}
+  {% if not point_total %}
+    <p>{{ _('No review points awarded yet.') }}</p>
+  {% else %}
+    <h2>{{ _('All-time Point Breakdown by Type') }}</h2>
+    <table class="data-grid incentive-points">
+      <thead>
+        <tr>
+          <th></th>
+          <th>{{ _('Add-ons') }}</th>
+          <th>{{ _('Apps') }}</th>
+          <th>{{ _('Themes') }}</th>
+          <th>{{ _('Total') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>{{ _('Month') }}</th>
+          {% for type in types %}
+            <td>{{ breakdown['month'][type]|numberfmt }}</td>
+          {% endfor %}
+          <td>{{ breakdown['month'].values()|sum|numberfmt }}</td>
+        </tr>
+        <tr>
+          <th>{{ _('Year') }}</th>
+          {% for type in types %}
+            <td>{{ breakdown['year'][type]|numberfmt }}</td>
+          {% endfor %}
+          <td>{{ breakdown['year'].values()|sum|numberfmt }}</td>
+        </tr>
+        <tr>
+          <th>{{ _('All-Time') }}</th>
+          {% for type in types %}
+            <td>{{ breakdown['total'][type]|numberfmt }}</td>
+          {% endfor %}
+          <td>{{ breakdown['total'].values()|sum|numberfmt }}</td>
+        </tr>
+      </tbody>
+    </table>
+  {% endif %}
 
+{% endblock %}

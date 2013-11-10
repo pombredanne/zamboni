@@ -1,26 +1,22 @@
+{% set meet_url = url('addons.meet', addon.slug) %}
 {% if addon.charity %}
   {% set charity_url = addon.charity.outgoing_url %}
   {% set charity_name = addon.charity.name %}
 {% endif %}
-<div class="notice c" id="contribution">
+<div class="notice c author" id="contribution">
 
   {% with single_dev = addon.listed_authors|random %}
-    <img class="avatar" alt="{{ single_dev.name }}" height="64"
-         width="64" src="{{ single_dev.picture_url }}"/>
+    {% if single_dev %}
+      <img class="avatar" alt="{{ single_dev.name }}"
+           src="{{ single_dev.picture_url }}">
+    {% endif %}
   {% endwith %}
 
-  <div class="aux{% if show_install %}-bottom{% endif %}">
+  <div class="aux">
     <div class="button-wrapper">
-      <a class="button contribute prominent" id="contribute-button"
-        href="{{ url('addons.contribute', addon.slug)|urlparams(src=contribution_src) }}">
+      <a class="button contribute prominent" id="contribute-button" href="#">
         <b></b>{{ _('Contribute') }}
       </a>
-      {% if show_install %}
-        {# L10n: Click Contribute button OR Install button #}
-        <span class="continue">{{ _('or') }}</span>
-        {% set ver = version or None %}
-        {{ install_button(addon, version=ver, show_contrib=False, src=src) }}
-    {% endif %}
     </div>{# /button-wrapper #}
 
     <p class="suggestion">
@@ -30,27 +26,59 @@
         {% endtrans %}
       {% endif %}
     </p>{# /suggestion #}
+
+    {% if show_install %}
+      {# L10n: Click Contribute button OR Install button #}
+      <span class="continue">{{ _('or') }}</span>
+      {% set ver = version or None %}
+      {{ install_button(addon, impala=True, version=ver, show_contrib=False) }}
+    {% endif %}
   </div>{# /aux #}
 
-  <h3>{{ _('Enjoy this add-on?') }}</h3>
+  {% if addon.is_webapp() %}
+    <h3>{{ _('Enjoy this app?') }}</h3>
+  {% else %}
+    <h3>{{ _('Enjoy this add-on?') }}</h3>
+  {% endif %}
   <p class="{% if show_install %}show-install{% endif %}">
     {% if text %}
       {{ text }}
     {% elif not addon.charity %}
-      {% trans meet_url=url('addons.meet', addon.slug) %}
-        The <a href="{{ meet_url }}">developer of this add-on</a> asks that you help support its 
-        continued development by making a small contribution.
-      {% endtrans %}
+      {% if addon.is_webapp() %}
+        {% trans %}
+          The <a href="{{ meet_url }}">developer of this app</a> asks that you help support its
+          continued development by making a small contribution.
+        {% endtrans %}
+      {% else %}
+        {% trans %}
+          The <a href="{{ meet_url }}">developer of this add-on</a> asks that you help support its
+          continued development by making a small contribution.
+        {% endtrans %}
+      {% endif %}
     {% elif addon.charity_id == amo.FOUNDATION_ORG %}
-      {% trans meet_url=url('addons.meet', addon.slug) %}
-        The <a href="{{ meet_url }}">developer of this add-on</a> asks that you show your support
-        by making a donation to the <a href="{{ charity_url }}">{{ charity_name }}</a>.
-      {% endtrans %}
+      {% if addon.is_webapp() %}
+        {% trans %}
+          The <a href="{{ meet_url }}">developer of this app</a> asks that you show your support
+          by making a donation to the <a href="{{ charity_url }}">{{ charity_name }}</a>.
+        {% endtrans %}
+      {% else %}
+        {% trans %}
+          The <a href="{{ meet_url }}">developer of this add-on</a> asks that you show your support
+          by making a donation to the <a href="{{ charity_url }}">{{ charity_name }}</a>.
+        {% endtrans %}
+      {% endif %}
     {% else %}
-      {% trans meet_url=url('addons.meet', addon.slug) %}
-        The <a href="{{ meet_url }}">developer of this add-on</a> asks that you show your support
-        by making a small contribution to <a href="{{ charity_url }}">{{ charity_name }}</a>.
-      {% endtrans %}
+      {% if addon.is_webapp() %}
+        {% trans %}
+          The <a href="{{ meet_url }}">developer of this app</a> asks that you show your support
+          by making a small contribution to <a href="{{ charity_url }}">{{ charity_name }}</a>.
+        {% endtrans %}
+      {% else %}
+        {% trans %}
+          The <a href="{{ meet_url }}">developer of this add-on</a> asks that you show your support
+          by making a small contribution to <a href="{{ charity_url }}">{{ charity_name }}</a>.
+        {% endtrans %}
+      {% endif %}
     {% endif %}
   </p>
 

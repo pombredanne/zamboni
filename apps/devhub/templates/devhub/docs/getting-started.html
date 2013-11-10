@@ -40,14 +40,14 @@ If you've used Firefox add-ons before, you know that they're capable of some pre
         {% endtrans %}
         </p>
     </li>
-    <img src="/img/amo2009/developers/addon-builder.png" alt="" class="right-image" /> <!-- image -->
+    <img src="/media/img/docs/addon-builder.png" alt="" class="right-image" /> <!-- image -->
 
     <li>
         <h4 class="step">2</h4>
         <h3>{{ _('Build your add-on') }}</h3>
         <p>
-        {% trans %}
-        Once you're familiar with the extension development environment, it's time to start on your first add-on. Back in the day, this meant climbing up a hill in the snow to find a suitable template to copy for your add-on's install manifest. Fortunately, the Add-on Developer Hub (that's this!) introduces the snowmobile of extension packaging: the <a href="/en-US/developers/tools/builder">Add-on Builder</a>!
+        {% trans url=url('devhub.package_addon') %}
+        Once you're familiar with the extension development environment, it's time to start on your first add-on. Back in the day, this meant climbing up a hill in the snow to find a suitable template to copy for your add-on's install manifest. Fortunately, the Add-on Developer Hub (that's this!) introduces the snowmobile of extension packaging: the <a href="{{ url }}">Add-on Packager</a>!
         {% endtrans %}
         </p>
         <p>
@@ -56,8 +56,8 @@ If you've used Firefox add-ons before, you know that they're capable of some pre
         {% endtrans %}
         </p>
 
-        <p class="big-link"><a href="{{ remora_url('developers/tools/builder') }}">
-          {{ _('Take me to the Add-on Builder!') }}</a></p>
+        <p class="big-link"><a href="{{ url('devhub.package_addon') }}">
+          {{ _('Take me to the Add-on Packager!') }}</a></p>
 
     </li>
     <li>
@@ -89,7 +89,7 @@ If you've used Firefox add-ons before, you know that they're capable of some pre
         <h3>{{ _('Test your add-on') }}</h3>
         <p>
         {% trans %}
-        Even entymologists don't like bugs in their software, so it's important to test your add-on thoroughly before it's ready for general consumption. At minimum, you should make sure your add-on works on all the platforms and applications it claims to support.
+        Even entomologists don't like bugs in their software, so it's important to test your add-on thoroughly before it's ready for general consumption. At minimum, you should make sure your add-on works on all the platforms and applications it claims to support.
         {% endtrans %}
         </p>
 

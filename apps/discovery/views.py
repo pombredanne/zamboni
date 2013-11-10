@@ -20,13 +20,18 @@ import amo.utils
 import api.utils
 import api.views
 from amo.decorators import post_required
+from amo.models import manual_order
 from amo.urlresolvers import reverse
 from addons.decorators import addon_view_factory
 from addons.models import Addon, AddonRecommendation
+from addons.utils import get_featured_ids
 from browse.views import personas_listing
 from bandwagon.models import Collection, SyncedCollection
+from discovery.modules import PromoVideoCollection
 from reviews.models import Review
 from stats.models import GlobalStat
+from versions.compare import version_int
+from zadmin.decorators import admin_required
 
 from .models import DiscoveryModule
 from .forms import DiscoveryModuleForm
@@ -37,17 +42,30 @@ addon_view = addon_view_factory(Addon.objects.valid)
 log = commonware.log.getLogger('z.disco')
 
 
-def pane(request, version, platform):
+def get_compat_mode(version):
+    # Returns appropriate compat mode based on app version.
+    # Replace when we are ready to deal with bug 711698.
+    vint = version_int(version)
+    return 'ignore' if vint >= version_int('10.0') else 'strict'
+
+
+def pane(request, version, platform, compat_mode=None):
+
+    if not compat_mode:
+        compat_mode = get_compat_mode(version)
 
     def from_api(list_type):
-        return api_view(request, platform, version, list_type)
+        return api_view(request, platform, version, list_type,
+                        compat_mode=compat_mode)
+
+    promovideo = PromoVideoCollection().get_items()
 
     return jingo.render(request, 'discovery/pane.html',
-                        {'modules': get_modules(request, platform, version),
-                         'up_and_coming': from_api('hotness'),
+                        {'up_and_coming': from_api('hotness'),
                          'featured_addons': from_api('featured'),
                          'featured_personas': get_featured_personas(request),
-                         'version': version, 'platform': platform})
+                         'version': version, 'platform': platform,
+                         'promovideo': promovideo, 'compat_mode': compat_mode})
 
 
 def pane_account(request):
@@ -61,10 +79,28 @@ def pane_account(request):
                         {'addon_downloads': addon_downloads})
 
 
-def pane_more_addons(request, section, version, platform):
+def promos(request, context, version, platform, compat_mode='strict'):
+    platform = amo.PLATFORM_DICT.get(version.lower(), amo.PLATFORM_ALL)
+    modules = get_modules(request, platform.api_name, version)
+    return jingo.render(request, 'addons/impala/homepage_promos.html',
+                        {'modules': modules, 'module_context': context})
+
+
+def pane_promos(request, version, platform, compat_mode=None):
+    if not compat_mode:
+        compat_mode = get_compat_mode(version)
+
+    return promos(request, 'discovery', version, platform, compat_mode)
+
+
+def pane_more_addons(request, section, version, platform, compat_mode=None):
+
+    if not compat_mode:
+        compat_mode = get_compat_mode(version)
 
     def from_api(list_type):
-        return api_view(request, platform, version, list_type)
+        return api_view(request, platform, version, list_type,
+                        compat_mode=compat_mode)
 
     ctx = {}
     if section == 'featured':
@@ -78,40 +114,42 @@ def get_modules(request, platform, version):
     lang = request.LANG
     qs = DiscoveryModule.objects.filter(app=request.APP.id)
     # Remove any modules without a registered backend or an ordering.
-    modules = [m for m in qs if m.module in module_registry
-                                and m.ordering is not None]
+    modules = [m for m in qs
+               if m.module in module_registry and m.ordering is not None]
     # Remove modules that specify a locales string we're not part of.
-    modules = [m for m in modules if not m.locales
-                                     or lang in m.locales.split()]
+    modules = [m for m in modules
+               if not m.locales or lang in m.locales.split()]
     modules = sorted(modules, key=lambda x: x.ordering)
     return [module_registry[m.module](request, platform, version)
             for m in modules]
 
 
-def get_featured_personas(request):
-    categories, filter, base, category = personas_listing(request)
-    featured_addons = Addon.objects.featured(request.APP)
-    featured = base & featured_addons
-    return featured[:6]
+def get_featured_personas(request, category=None, num_personas=6):
+    categories, filter, base, category = personas_listing(request, category)
+    ids = get_featured_ids(request.APP, request.LANG, type=amo.ADDON_PERSONA)
+
+    return manual_order(base, ids, 'addons.id')[:num_personas]
 
 
-def api_view(request, platform, version, list_type,
-             api_version=1.5, format='json', mimetype='application/json'):
+def api_view(request, platform, version, list_type, api_version=1.5,
+             format='json', mimetype='application/json', compat_mode='strict'):
     """Wrapper for calling an API view."""
     view = api.views.ListView()
     view.request, view.version = request, api_version
     view.format, view.mimetype = format, mimetype
-    r = view.process_request(list_type, platform=platform, version=version)
+    r = view.process_request(list_type, platform=platform, version=version,
+                             compat_mode=compat_mode)
     return json.loads(r.content)
 
 
-@admin.site.admin_view
+@admin_required
 def module_admin(request):
     APP = request.APP
     # Custom sorting to drop ordering=NULL objects to the bottom.
-    qs = DiscoveryModule.uncached.raw("""
-        SELECT * from discovery_modules WHERE app_id = %s
-        ORDER BY ordering IS NULL, ordering""", [APP.id])
+    with amo.models.skip_cache():
+        qs = DiscoveryModule.objects.raw("""
+            SELECT * from discovery_modules WHERE app_id = %s
+            ORDER BY ordering IS NULL, ordering""", [APP.id])
     qs.ordered = True  # The formset looks for this.
     _sync_db_and_registry(qs, APP)
 
@@ -142,26 +180,31 @@ def _sync_db_and_registry(qs, app):
 
 @csrf_exempt
 @post_required
-def recommendations(request, version, platform, limit=9):
+def recommendations(request, version, platform, limit=9, compat_mode=None):
     """
     Figure out recommended add-ons for an anonymous user based on POSTed guids.
 
     POST body looks like {"guids": [...]} with an optional "token" key if
     they've been here before.
     """
+    if not compat_mode:
+        compat_mode = get_compat_mode(version)
+
     try:
         POST = json.loads(request.raw_post_data)
         guids = POST['guids']
-    except (ValueError, TypeError, KeyError):
+    except (ValueError, TypeError, KeyError), e:
         # Errors: invalid json, didn't get a dict, didn't find "guids".
+        log.debug('Recommendations return 405 because: %s' % e)
         return http.HttpResponseBadRequest()
 
     addon_ids = get_addon_ids(guids)
     index = Collection.make_index(addon_ids)
 
-    ids, recs = Collection.get_recs_from_ids(addon_ids, request.APP, version)
-    recs = _recommendations(request, version, platform, limit,
-                            index, ids, recs)
+    ids, recs = Collection.get_recs_from_ids(addon_ids, request.APP, version,
+                                             compat_mode)
+    recs = _recommendations(request, version, platform, limit, index, ids,
+                            recs, compat_mode)
 
     # We're only storing a percentage of the collections we see because the db
     # can't keep up with 100%.
@@ -197,26 +240,28 @@ def recommendations(request, version, platform, limit=9):
     return recs
 
 
-def _recommendations(request, version, platform, limit, token, ids, qs):
+def _recommendations(request, version, platform, limit, token, ids, qs,
+                     compat_mode='strict'):
     """Return a JSON response for the recs view."""
-    addons = api.views.addon_filter(qs, 'ALL', limit, request.APP,
-                                    platform, version, shuffle=False)
+    addons = api.views.addon_filter(qs, 'ALL', 0, request.APP, platform,
+                                    version, compat_mode, shuffle=False)
     addons = dict((a.id, a) for a in addons)
-    data = {'token2': token,
-            'addons': [api.utils.addon_to_dict(addons[i], disco=True,
-                                               src='discovery-personalrec')
-                       for i in ids if i in addons]}
+    addons = [api.utils.addon_to_dict(addons[i], disco=True,
+                                      src='discovery-personalrec')
+              for i in ids if i in addons][:limit]
+    data = {'token2': token, 'addons': addons}
     content = json.dumps(data, cls=amo.utils.JSONEncoder)
     return http.HttpResponse(content, content_type='application/json')
 
 
 def get_addon_ids(guids):
-    return Addon.objects.filter(guid__in=guids).values_list('id', flat=True)
+    return list(Addon.objects.filter(guid__in=guids)
+                             .values_list('id', flat=True))
 
 
 @addon_view
 def addon_detail(request, addon):
-    reviews = Review.objects.latest().filter(addon=addon)
+    reviews = Review.objects.valid().filter(addon=addon, is_latest=True)
     src = request.GET.get('src', 'discovery-details')
     return jingo.render(request, 'discovery/addons/detail.html',
                         {'addon': addon, 'reviews': reviews,
@@ -254,7 +299,8 @@ def recs_debug(request):
             fragment = urlparse.urlparse(url).fragment
             guids = json.loads(urlparse.unquote(fragment)).keys()
             qs = ','.join(map(str, get_addon_ids(guids)))
-            return redirect(reverse('discovery.recs.debug') + '?ids=' + qs)
+            to = reverse('discovery.recs.debug') + '?ids=' + qs
+            return http.HttpResponseRedirect(to)
 
     ctx = {'ids': request.GET.get('ids')}
     if 'ids' in request.GET:

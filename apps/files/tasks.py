@@ -1,26 +1,31 @@
-from datetime import datetime
 import hashlib
 import logging
+import os
 import urllib
 import urllib2
 import urlparse
 import uuid
+from datetime import datetime
 
 import django.core.mail
 from django.conf import settings
+from django.core.files.storage import default_storage as storage
+from django.db import transaction
 
 import jingo
 from celeryutils import task
 from tower import ugettext as _
 
+import amo
+from amo.decorators import write
 from amo.helpers import absolutify
 from amo.urlresolvers import reverse
-from amo.utils import Message, get_email_backend
+from amo.utils import get_email_backend, Message
 from addons.models import Addon
 from versions.compare import version_int as vint
-from versions.models import Version, ApplicationsVersions
+from versions.models import ApplicationsVersions, Version
 from .models import File
-from .utils import JetpackUpgrader
+from .utils import JetpackUpgrader, parse_addon
 
 task_log = logging.getLogger('z.task')
 jp_log = logging.getLogger('z.jp.repack')
@@ -28,12 +33,16 @@ jp_log = logging.getLogger('z.jp.repack')
 
 @task
 def extract_file(viewer, **kw):
+    # This message is for end users so they'll see a nice error.
     msg = Message('file-viewer:%s' % viewer)
     msg.delete()
-    task_log.info('[1@%s] Unzipping %s for file viewer.' % (
+    # This flag is so that we can signal when the extraction is completed.
+    flag = Message(viewer._extraction_cache_key())
+    task_log.debug('[1@%s] Unzipping %s for file viewer.' % (
                   extract_file.rate_limit, viewer))
 
     try:
+        flag.save('extracting')  # Set the flag to a truthy value.
         viewer.extract()
     except Exception, err:
         if settings.DEBUG:
@@ -43,16 +52,9 @@ def extract_file(viewer, **kw):
             msg.save(_('There was an error accessing file %s.') % viewer)
         task_log.error('[1@%s] Error unzipping: %s' %
                        (extract_file.rate_limit, err))
-
-
-@task
-def migrate_jetpack_versions(ids, **kw):
-    # TODO(jbalogh): kill in bug 656997
-    for file_ in File.objects.filter(id__in=ids):
-        file_.jetpack_version = File.get_jetpack_version(file_.file_path)
-        task_log.info('Setting jetpack version to %s for File %s.' %
-                      (file_.jetpack_version, file_.id))
-        file_.save()
+    finally:
+        # Always delete the flag so the file never gets into a bad state.
+        flag.delete()
 
 
 # The version/file creation methods expect a files.FileUpload object.
@@ -60,6 +62,7 @@ class FakeUpload(object):
 
     def __init__(self, path, hash, validation):
         self.path = path
+        self.name = os.path.basename(path)
         self.hash = hash
         self.validation = validation
 
@@ -82,6 +85,8 @@ class RedisLogHandler(logging.Handler):
 
 
 @task
+@write
+@transaction.commit_on_success
 def repackage_jetpack(builder_data, **kw):
     repack_data = dict(urlparse.parse_qsl(builder_data['request']))
     jp_log.info('[1@None] Repackaging jetpack for %s.'
@@ -96,8 +101,9 @@ def repackage_jetpack(builder_data, **kw):
     redis_logger = RedisLogHandler(jp_log, upgrader, file_data)
     jp_log.addHandler(redis_logger)
     if file_data.get('uuid') != repack_data['uuid']:
-        return jp_log.warning(msg('Aborting repack. AMO<=>Builder tracking '
-                                  'number does not match.'))
+        _msg = ('Aborting repack. AMO<=>Builder tracking number mismatch '
+                '(%s) (%s)' % (file_data.get('uuid'), repack_data['uuid']))
+        return jp_log.warning(msg(_msg))
 
     if builder_data['result'] != 'success':
         return jp_log.warning(msg('Build not successful. {result}: {msg}'))
@@ -120,7 +126,7 @@ def repackage_jetpack(builder_data, **kw):
     # Figure out the SHA256 hash of the file.
     try:
         hash_ = hashlib.sha256()
-        with open(filepath, 'rb') as fd:
+        with storage.open(filepath, 'rb') as fd:
             while True:
                 chunk = fd.read(8192)
                 if not chunk:
@@ -132,26 +138,59 @@ def repackage_jetpack(builder_data, **kw):
 
     upload = FakeUpload(path=filepath, hash='sha256:%s' % hash_.hexdigest(),
                         validation=None)
+    try:
+        version = parse_addon(upload, addon)['version']
+        if addon.versions.filter(version=version).exists():
+            jp_log.warning('Duplicate version [%s] for %r detected. Bailing.'
+                           % (version, addon))
+            return
+    except Exception:
+        pass
+
     # TODO: multi-file: have we already created the new version for a different
     # file?
     try:
         new_version = Version.from_upload(upload, addon, [old_file.platform],
                                           send_signal=False)
-        # Sync the compatible apps of the new version.
+    except Exception:
+        jp_log.error(msg('Error creating new version.'))
+        raise
+
+    try:
+        # Sync the compatible apps of the new version with data from the old
+        # version if the repack didn't specify compat info.
         for app in old_version.apps.values():
-            app.update(version_id=new_version.id, id=None)
-            ApplicationsVersions.objects.create(**app)
+            sync_app = amo.APP_IDS[app['application_id']]
+            new_compat = new_version.compatible_apps
+            if sync_app not in new_compat:
+                app.update(version_id=new_version.id, id=None)
+                ApplicationsVersions.objects.create(**app)
+            else:
+                new_compat[sync_app].min_id = app['min_id']
+                new_compat[sync_app].max_id = app['max_id']
+                new_compat[sync_app].save()
+    except Exception:
+        jp_log.error(msg('Error syncing compat info. [%s] => [%s]' %
+                         (old_version.id, new_version.id)), exc_info=True)
+        pass  # Skip this for now, we can fix up later.
+
+    try:
         # Sync the status of the new file.
         new_file = new_version.files.using('default')[0]
         new_file.status = old_file.status
         new_file.save()
+        if (addon.status in amo.MIRROR_STATUSES
+            and new_file.status in amo.MIRROR_STATUSES):
+            new_file.copy_to_mirror()
     except Exception:
-        jp_log.error(msg('Error creating new version/file.'), exc_info=True)
+        jp_log.error(msg('Error syncing old file status.'), exc_info=True)
         raise
 
     # Sync out the new version.
     addon.update_version()
     upgrader.finish(repack_data['file_id'])
+    jp_log.info('Repacked %r from %r for %r.' %
+                (new_version, old_version, addon))
     jp_log.removeHandler(redis_logger)
 
     try:
@@ -160,7 +199,6 @@ def repackage_jetpack(builder_data, **kw):
         jp_log.error(msg('Could not send success email.'), exc_info=True)
         raise
 
-    # TODO: don't send editor notifications about the new file.
     # Return the new file to make testing easier.
     return new_file
 
@@ -177,11 +215,12 @@ def send_upgrade_email(addon, new_version, sdk_version):
 
 
 @task
-def start_upgrade(file_ids, priority='low', **kw):
+def start_upgrade(file_ids, sdk_version=None, priority='low', **kw):
     upgrader = JetpackUpgrader()
     minver, maxver = upgrader.jetpack_versions()
     files = File.objects.filter(id__in=file_ids).select_related('version')
     now = datetime.now()
+    filedata = {}
     for file_ in files:
         if not (file_.jetpack_version and
                 vint(minver) <= vint(file_.jetpack_version) < vint(maxver)):
@@ -203,10 +242,15 @@ def start_upgrade(file_ids, priority='low', **kw):
                 'file_id': file_.id,
                 'priority': priority,
                 'secret': settings.BUILDER_SECRET_KEY,
-                'location': file_.get_url_path(None, 'builder'),
                 'uuid': data['uuid'],
-                'version': parse_version(file_.version.version),
                 'pingback': absolutify(reverse('amo.builder-pingback'))}
+        if file_.builder_version:
+            post['package_key'] = file_.builder_version
+        else:
+            # Older jetpacks might not have builderVersion in their harness.
+            post['location'] = file_.get_url_path('builder')
+        if sdk_version:
+            post['sdk_version'] = sdk_version
         try:
             jp_log.info(urllib.urlencode(post))
             response = urllib2.urlopen(settings.BUILDER_UPGRADE_URL,
@@ -216,9 +260,5 @@ def start_upgrade(file_ids, priority='low', **kw):
         except Exception:
             jp_log.error('Could not talk to builder for %s.' % file_.id,
                          exc_info=True)
-
-        upgrader.file(file_.id, data)
-
-
-def parse_version(v):
-    return v.split('.sdk.')[0] + '.sdk.{sdk_version}'
+        filedata[file_.id] = data
+    upgrader.files(filedata)

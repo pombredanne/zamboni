@@ -1,11 +1,10 @@
 from decimal import Decimal
 import json
 
+from django.core.cache import cache
 from django.conf import settings
 from django.db import models
 from django.utils.functional import memoize
-
-import redisutils
 
 import amo
 import amo.models
@@ -26,17 +25,20 @@ class Config(models.Model):
 
     @property
     def json(self):
-        return json.loads(self.value)
+        try:
+            return json.loads(self.value)
+        except (TypeError, ValueError):
+            return {}
 
 
-def get_config(conf):
+def unmemoized_get_config(conf):
     try:
         c = Config.objects.get(key=conf)
         return c.value
     except Config.DoesNotExist:
         return
 
-get_config = memoize(get_config, _config_cache, 1)
+get_config = memoize(unmemoized_get_config, _config_cache, 1)
 
 
 def set_config(conf, value):
@@ -236,52 +238,78 @@ class ValidationJobTally(object):
 
     def __init__(self, job_id):
         self.job_id = job_id
-        self.kv = redisutils.connections['master']
 
     def get_messages(self):
-        for msg_key in self.kv.smembers('validation.job_id:%s' % self.job_id):
-            yield ValidationMsgTally(self.job_id, msg_key)
+        for msg_key in cache.get('validation.job_id:%s' % self.job_id):
+            d = cache.get('validation.msg_key:%s' % (msg_key,))
+            d['key'] = msg_key
+            d['addons_affected'] = cache.get(
+                'validation.job_id:%s.msg_key:%s:addons_affected'
+                % (self.job_id, msg_key))
+            yield d
 
-    def save_message(self, msg):
-        msg_key = '.'.join(msg['id'])
-        self.kv.sadd('validation.job_id:%s' % self.job_id,
-                     msg_key)
-        self.kv.set('validation.msg_key:%s:message' % msg_key,
-                    msg['message'])
-        if type(msg['description']) == list:
-            des = '; '.join(msg['description'])
-        else:
-            des = msg['description']
-        self.kv.set('validation.msg_key:%s:long_message' % msg_key,
-                    des)
-        if msg.get('compatibility_type'):
-            effective_type = msg['compatibility_type']
-        else:
-            effective_type = msg['type']
-        self.kv.set('validation.msg_key:%s:type' % msg_key,
-                    effective_type)
-        self.kv.incr('validation.job_id:%s.msg_key:%s:addons_affected'
-                     % (self.job_id, msg_key))
+    def save_messages(self, msgs):
+        msg_ids = ['.'.join(msg['id']) for msg in msgs]
+        cache.set('validation.job_id:%s' % self.job_id, msg_ids)
+        for msg, key in zip(msgs, msg_ids):
+            if isinstance(msg['description'], list):
+                des = []
+                for _m in msg['description']:
+                    if isinstance(_m, list):
+                        for x in _m:
+                            des.append(x)
+                    else:
+                        des.append(_m)
+                des = '; '.join(des)
+            else:
+                des = msg['description']
+            cache.set('validation.msg_key:' + key,
+                      {'long_message': des,
+                       'message': msg['message'],
+                       'type': msg.get('compatibility_type',
+                                       msg.get('type'))
+                       })
+            aa = ('validation.job_id:%s.msg_key:%s:addons_affected'
+                  % (self.job_id, key))
+            try:
+                cache.incr(aa)
+            except ValueError:
+                cache.set(aa, 1)
 
 
-class ValidationMsgTally(object):
-    """Redis key/vals for a tally of validation messages.
-    """
+class SiteEvent(models.Model):
+    """Information records about downtime, releases, and other pertinent
+       events on the site."""
 
-    def __init__(self, job_id, msg_key):
-        self.job_id = job_id
-        self.msg_key = msg_key
-        self.kv = redisutils.connections['master']
+    SITE_EVENT_CHOICES = amo.SITE_EVENT_CHOICES.items()
 
-    def __getattr__(self, key):
-        if key in ('message', 'long_message', 'type'):
-            val = self.kv.get('validation.msg_key:%s:%s'
-                              % (self.msg_key, key))
-        elif key in ('addons_affected',):
-            val = self.kv.get('validation.job_id:%s.msg_key:%s:%s'
-                              % (self.job_id, self.msg_key, key))
-        elif key in ('key',):
-            val = self.msg_key
-        else:
-            raise ValueError('Unknown field: %s' % key)
-        return val or ''
+    start = models.DateField(db_index=True,
+                             help_text='The time at which the event began.')
+    end = models.DateField(db_index=True, null=True, blank=True,
+        help_text='If the event was a range, the time at which it ended.')
+    event_type = models.PositiveIntegerField(choices=SITE_EVENT_CHOICES,
+                                             db_index=True, default=0)
+    description = models.CharField(max_length=255, blank=True, null=True)
+    # An outbound link to an explanatory blog post or bug.
+    more_info_url = models.URLField(max_length=255, blank=True, null=True)
+
+    class Meta:
+        db_table = ('zadmin_siteevent' +
+                    settings.EVENT_TABLE_SUFFIX)
+
+
+class DownloadSource(models.Model):
+    # e.g., `mkt-search` or `mkt-detail-`.
+    name = models.CharField(max_length=255)
+
+    # e.g., `full` or `prefix`.
+    type = models.CharField(max_length=255)
+
+    description = models.TextField()
+    created = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'download_sources'
+
+    def __unicode__(self):
+        return u'%s (%s)' % (self.name, self.type)

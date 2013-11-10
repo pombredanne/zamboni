@@ -4,7 +4,7 @@
 {% cache addons, extra=[collection, username] %}
 {% for addon in addons %}
   <div class="item">
-    {{ heading(addon, collection=collection) }}
+    {{ heading(addon, amo, collection=collection) }}
     <div class="item-info">
       {{ install_button(addon, collection=collection) }}
       {{ item_info(addon, amo, show_date, show_downloads) }}
@@ -22,7 +22,6 @@
       {% else %}
         <div>{{ addon.summary|truncate(250)|nl2br }}</div>
       {% endif %}
-      {{ support_addon(addon) }}
     </blockquote>
     {% if settings.PERF_THRESHOLD and addon.ts_slowness >= settings.PERF_THRESHOLD %}
       {{ performance_note(amount=addon.ts_slowness, listing=True) }}

@@ -1,0 +1,165 @@
+@import 'lib';
+
+.iarc-sec-code {
+    margin-top: 15px;
+
+    label {
+        margin-right: 5px;
+    }
+}
+
+#ratings-summary {
+    h2 a {
+        bottom: 3px;
+        font-size: 11px;
+        left: 5px;
+        position: relative;
+    }
+    table {
+        text-align: center;
+
+        th, td {
+            border: 1px solid $border-gray;
+        }
+        thead th {
+            background: $bg-gray;
+        }
+        tbody td {
+            background: #fff;
+            /* padding-left/right set in padding, changing bottom/top. */
+            padding-bottom: 32px;
+            padding-top: 32px;
+            vertical-align: middle;
+        }
+    }
+    .content-rating .icon {
+        left: calc(unquote('50% - 32px'));
+        position: relative;
+    }
+}
+
+/* Copied and modified from Fireplace detail styles. */
+$box-green = #00b963;
+$box-blue = #00d5ff;
+$box-yellow = #ffd300;
+$box-orange = #ff7c00;
+$box-red = #ff2600;
+.content-rating {
+    color: $text;
+    margin-bottom: 12px;
+
+    .icon {
+        background: #000;
+        border-radius: 5px;
+        color: #fff;
+        float: left;
+        font: 600 32px/64px $open-stack;
+        height: 64px;
+        text-align: center;
+        vertical-align: middle;
+        width: 64px;
+    }
+    .icon-body-esrb {
+        height: 90px;
+        width: 58px;
+
+        &.icon-age-0 {
+            background-image: url('../../img/icons/ratings/ESRB_e.png');
+        }
+        &.icon-age-10 {
+            background-image: url('../../img/icons/ratings/ESRB_e10.png');
+        }
+        &.icon-age-13 {
+            background-image: url('../../img/icons/ratings/ESRB_t.png');
+        }
+        &.icon-age-17 {
+            background-image: url('../../img/icons/ratings/ESRB_m.png');
+        }
+        &.icon-age-18 {
+            background-image: url('../../img/icons/ratings/ESRB_ao.png');
+        }
+    }
+    .icon-body-generic, .icon-body-classind {
+        background: $black;
+        color: $white;
+        float: left;
+        font: 600 32px/64px $open-stack;
+
+        .icon-content {
+            display: inline;
+            left: 3px;
+            position: relative;
+            top: 2px;
+        }
+        &.icon-age-L,
+        &.icon-age-0,
+        &.icon-age-3 {
+            background: $box-green;
+        }
+        &.icon-age-7,
+        &.icon-age-10 {
+            background: $box-blue;
+        }
+        &.icon-age-12,
+        &.icon-age-13 {
+            background: $box-yellow;
+        }
+        &.icon-age-14 {
+            background: $box-orange;
+        }
+        &.icon-age-16 {
+            background: $box-red;
+        }
+        &.icon-age-18 {
+            background: #000;
+        }
+    }
+    .icon-body-pegi {
+        border-radius: 1px;
+        height: 73px;
+        width: 60px;
+
+        &.icon-age-3 {
+            background-image: url('../../img/icons/ratings/pegi_3.png');
+        }
+        &.icon-age-7 {
+            background-image: url('../../img/icons/ratings/pegi_7.png');
+        }
+        &.icon-age-12 {
+            background-image: url('../../img/icons/ratings/pegi_12.png');
+        }
+        &.icon-age-16 {
+            background-image: url('../../img/icons/ratings/pegi_16.png');
+        }
+        &.icon-age-18 {
+            background-image: url('../../img/icons/ratings/pegi_18.png');
+        }
+    }
+    .icon-body-usk {
+        border-radius: 8px;
+        height: 68px;
+        width: 68px;
+
+        &.icon-age-0 {
+            background-image: url('../../img/icons/ratings/USK_0.png');
+        }
+        &.icon-age-6 {
+            background-image: url('../../img/icons/ratings/USK_6.png');
+        }
+        &.icon-age-12 {
+            background-image: url('../../img/icons/ratings/USK_12.png');
+        }
+        &.icon-age-16 {
+            background-image: url('../../img/icons/ratings/USK_16.png');
+        }
+        &.icon-age-18 {
+            background-image: url('../../img/icons/ratings/USK_18.png');
+        }
+    }
+    .description {
+        font-weight: 400;
+        margin: 0;
+        vertical-align: middle;
+        width: 100%;
+    }
+}

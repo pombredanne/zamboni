@@ -7,8 +7,6 @@ import bleach
 import jinja2
 import jingo
 
-from .models import clean_nl
-
 jingo.register.filter(to_language)
 
 
@@ -58,18 +56,19 @@ def l10n_menu(context, default_locale='en-us'):
 
 
 @jingo.register.filter
-def all_locales(addon, field_name, nl2br=False):
-    field = getattr(addon, field_name)
-    if not (addon and field):
+def all_locales(addon, field_name, nl2br=False, prettify_empty=False):
+    field = getattr(addon, field_name, None)
+    if not addon or field is None:
         return
     trans = field.__class__.objects.filter(id=field.id,
                                            localized_string__isnull=False)
     ctx = dict(addon=addon, field=field, field_name=field_name,
-               translations=trans, nl2br=nl2br)
+               translations=trans, nl2br=nl2br, prettify_empty=prettify_empty)
     t = jingo.env.get_template('translations/all-locales.html')
     return jinja2.Markup(t.render(ctx))
 
 
 @jingo.register.filter
 def clean(string):
-    return jinja2.Markup(clean_nl(bleach.clean(string)).strip())
+    from amo.utils import clean_nl
+    return jinja2.Markup(clean_nl(bleach.clean(unicode(string))).strip())

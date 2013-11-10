@@ -1,14 +1,18 @@
 import re
 
+from django.utils.encoding import smart_str
 
-version_re = re.compile(r"""(?P<major>\d+)         # major (x in x.y)
+MAXVERSION = 2 ** 63 - 1
+
+version_re = re.compile(r"""(?P<major>\d+|\*)      # major (x in x.y)
                             \.?(?P<minor1>\d+|\*)? # minor1 (y in x.y)
                             \.?(?P<minor2>\d+|\*)? # minor2 (z in x.y.z)
                             \.?(?P<minor3>\d+|\*)? # minor3 (w in x.y.z.w)
                             (?P<alpha>[a|b]?)      # alpha/beta
                             (?P<alpha_ver>\d*)     # alpha/beta version
                             (?P<pre>pre)?          # pre release
-                            (?P<pre_ver>\d)?       # pre release version""",
+                            (?P<pre_ver>\d)?       # pre release version
+                        """,
                         re.VERBOSE)
 
 
@@ -56,7 +60,7 @@ def version_dict(version):
 
 
 def version_int(version):
-    d = version_dict(str(version))
+    d = version_dict(smart_str(version))
     for key in ['alpha_ver', 'major', 'minor1', 'minor2', 'minor3',
                 'pre_ver']:
         if not d[key]:
@@ -68,4 +72,4 @@ def version_int(version):
     v = "%d%02d%02d%02d%d%02d%d%02d" % (d['major'], d['minor1'],
             d['minor2'], d['minor3'], d['alpha'], d['alpha_ver'], d['pre'],
             d['pre_ver'])
-    return int(v)
+    return min(int(v), MAXVERSION)

@@ -145,7 +145,6 @@
         "pk": 1,
         "model": "files.platform",
         "fields": {
-            "icontype": "",
             "modified": "2008-04-07 08:16:55",
             "created": "2007-03-05 13:09:27"
         }
@@ -166,7 +165,6 @@
             "guid": "personas@christopher.beard",
             "trusted": false,
             "description": 333180,
-            "binary": false,
             "weekly_downloads": 227202,
             "support_url": 333188,
             "disabled_by_user": false,
@@ -183,7 +181,6 @@
             "_current_version": 117388,
             "total_contributions": "934395",
             "default_locale": "en-US",
-            "get_satisfaction_product": "mozilla_personas",
             "prerelease": false,
             "total_reviews": 724,
             "admin_review": false,
@@ -198,7 +195,6 @@
             "modified": "2010-11-12 15:24:28",
             "summary": 333179,
             "site_specific": false,
-            "get_satisfaction_company": "mozilla",
             "hotness": -0.015205202186527499
         }
     },
@@ -236,7 +232,7 @@
             "no_restart": false,
             "hash": "sha256:4d3fdcc5493ab6422cae8de52e132a7d074de409ffc2b7a60956bb6160c5c50c",
             "created": "2010-09-11 09:59:34",
-            "size": 321,
+            "size": 328704,
             "modified": "2011-01-11 08:41:34",
             "filename": "personas-1.6.1-fx+tb.xpi",
             "platform": 1,
@@ -266,7 +262,6 @@
         "pk": 5133025,
         "model": "users.userprofile",
         "fields": {
-            "sandboxshown": false,
             "display_collections_fav": false,
             "display_collections": false,
             "averagerating": "2.93",
@@ -281,13 +276,10 @@
             "username": "_user_5133025",
             "bio": 768006,
             "failed_login_attempts": 0,
-            "firstname": "",
             "deleted": false,
-            "lastname": "",
             "emailhidden": true,
             "last_login_attempt_ip": "",
             "password": "",
-            "nickname": "Mozilla Labs",
             "resetcode_expires": "2011-03-09 14:33:41",
             "resetcode": "",
             "created": "2010-01-20 17:15:56",

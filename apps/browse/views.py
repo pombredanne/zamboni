@@ -1,20 +1,23 @@
 import collections
 
 from django import http
-from django.db.models import Q
-from django.http import HttpResponsePermanentRedirect
-from django.shortcuts import get_object_or_404
+from django.conf import settings
+from django.http import (Http404, HttpResponsePermanentRedirect,
+                         HttpResponseRedirect)
+from django.shortcuts import get_object_or_404, redirect
 from django.views.decorators.cache import cache_page
 
 import jingo
-import product_details
+from product_details import product_details
 from mobility.decorators import mobile_template
 from tower import ugettext_lazy as _lazy
 
+import amo
 import amo.models
 from amo.models import manual_order
-from addons.models import Addon, Category, AddonCategory
 from amo.urlresolvers import reverse
+from addons.models import Addon, AddonCategory, Category, FrozenAddon
+from addons.utils import get_featured_ids, get_creatured_ids
 from addons.views import BaseFilter, ESBaseFilter
 from translations.query import order_by_translation
 
@@ -48,28 +51,42 @@ Locale = collections.namedtuple('Locale', 'locale display native dicts packs')
 
 
 class AddonFilter(BaseFilter):
-    opts = (('name', _lazy(u'Name')),
-            ('updated', _lazy(u'Updated')),
-            ('created', _lazy(u'Created')),
-            ('popular', _lazy(u'Downloads')),
-            ('users', _lazy(u'Users')),
-            ('rating', _lazy(u'Rating')))
+    opts = (('featured', _lazy(u'Featured')),
+            ('users', _lazy(u'Most Users')),
+            ('rating', _lazy(u'Top Rated')),
+            ('created', _lazy(u'Newest')))
+    extras = (('name', _lazy(u'Name')),
+              ('popular', _lazy(u'Weekly Downloads')),
+              ('updated', _lazy(u'Recently Updated')),
+              ('hotness', _lazy(u'Up & Coming')))
+
+
+class ThemeFilter(AddonFilter):
+    opts = (('users', _lazy(u'Most Users')),
+            ('rating', _lazy(u'Top Rated')),
+            ('created', _lazy(u'Newest')),
+            ('featured', _lazy(u'Featured')))
+    extras = (('name', _lazy(u'Name')),
+              ('popular', _lazy(u'Weekly Downloads')),
+              ('updated', _lazy(u'Recently Updated')),
+              ('hotness', _lazy(u'Up & Coming')))
 
 
 class ESAddonFilter(ESBaseFilter):
     opts = AddonFilter.opts
+    extras = AddonFilter.extras
 
 
-def addon_listing(request, addon_types, Filter=AddonFilter, default='popular'):
+def addon_listing(request, addon_types, filter_=AddonFilter,
+                  default='featured'):
     # Set up the queryset and filtering for themes & extension listing pages.
-    status = [amo.STATUS_PUBLIC, amo.STATUS_LITE,
-              amo.STATUS_LITE_AND_NOMINATED]
-
-    qs = (Addon.objects.listed(request.APP, *status)
-          .filter(type__in=addon_types))
-
-    filter = Filter(request, qs, 'sort', default)
-    return filter.qs, filter
+    if amo.ADDON_PERSONA in addon_types:
+        qs = Addon.objects.public().filter(type=amo.ADDON_PERSONA)
+    else:
+        qs = (Addon.objects.listed(request.APP, *amo.REVIEWED_STATUSES)
+              .filter(type__in=addon_types))
+    filter__ = filter_(request, qs, 'sort', default)
+    return filter__.qs, filter__
 
 
 def _get_locales(addons):
@@ -116,32 +133,36 @@ def language_tools(request, category=None):
               .filter(appsupport__app=request.APP.id, type__in=types,
                       target_locale__isnull=False).exclude(target_locale=''))
     locales = _get_locales(addons)
+    lang_addons = _get_locales(addons.filter(target_locale=request.LANG))
+    addon_ids = addons.values_list('pk', flat=True)
     return jingo.render(request, 'browse/language_tools.html',
-                        {'locales': locales, 'addons': addons,
+                        {'locales': list(locales),
+                         #pass keys separately so only IDs get cached
+                         'addons': addon_ids,
+                         'lang_addons': list(lang_addons),
                          'search_cat': '%s,0' % amo.ADDON_DICT})
 
 
 def themes(request, category=None):
-    q = Category.objects.filter(application=request.APP.id,
-                                type=amo.ADDON_THEME)
-    categories = order_by_translation(q, 'name')
+    TYPE = amo.ADDON_THEME
+    if category is not None:
+        q = Category.objects.filter(application=request.APP.id, type=TYPE)
+        category = get_object_or_404(q, slug=category)
 
-    addons, filter = addon_listing(request, [amo.ADDON_THEME])
+    addons, filter = addon_listing(request, [TYPE], default='users',
+                                   filter_=ThemeFilter)
+    sorting = filter.field
+    src = 'cb-btn-%s' % sorting
+    dl_src = 'cb-dl-%s' % sorting
 
     if category is not None:
-        try:
-            category = dict((c.slug, c) for c in categories)[category]
-        except KeyError:
-            raise http.Http404()
         addons = addons.filter(categories__id=category.id)
 
-    themes = amo.utils.paginate(request, addons, count=addons.count())
+    addons = amo.utils.paginate(request, addons, 16, count=addons.count())
     return jingo.render(request, 'browse/themes.html',
-                        {'categories': categories,
-                         'themes': themes, 'category': category,
-                         'sorting': filter.field,
-                         'sort_opts': filter.opts,
-                         'search_cat': '%s,0' % amo.ADDON_THEME})
+                {'section': 'themes', 'addon_type': TYPE, 'addons': addons,
+                 'category': category, 'filter': filter, 'sorting': sorting,
+                 'search_cat': '%s,0' % TYPE, 'src': src, 'dl_src': dl_src})
 
 
 @mobile_template('browse/{mobile/}extensions.html')
@@ -152,21 +173,25 @@ def extensions(request, category=None, template=None):
         q = Category.objects.filter(application=request.APP.id, type=TYPE)
         category = get_object_or_404(q, slug=category)
 
-    if ('sort' not in request.GET and not request.MOBILE
-        and category and category.count > 4):
+    sort = request.GET.get('sort')
+    if not sort and not request.MOBILE and category and category.count > 4:
         return category_landing(request, category)
 
     addons, filter = addon_listing(request, [TYPE])
+    sorting = filter.field
+    src = 'cb-btn-%s' % sorting
+    dl_src = 'cb-dl-%s' % sorting
 
     if category:
         addons = addons.filter(categories__id=category.id)
 
     addons = amo.utils.paginate(request, addons, count=addons.count())
     return jingo.render(request, template,
-                        {'category': category, 'addons': addons,
-                         'sorting': filter.field,
-                         'sort_opts': filter.opts,
-                         'search_cat': '%s,0' % TYPE})
+                        {'section': 'extensions', 'addon_type': TYPE,
+                         'category': category, 'addons': addons,
+                         'filter': filter, 'sorting': sorting,
+                         'sort_opts': filter.opts, 'src': src,
+                         'dl_src': dl_src, 'search_cat': '%s,0' % TYPE})
 
 
 @mobile_template('browse/{mobile/}extensions.html')
@@ -181,29 +206,32 @@ def es_extensions(request, category=None, template=None):
         and category and category.count > 4):
         return category_landing(request, category)
 
-
     qs = (Addon.search().filter(type=TYPE, app=request.APP.id,
                                 is_disabled=False,
                                 status__in=amo.REVIEWED_STATUSES))
     filter = ESAddonFilter(request, qs, key='sort', default='popular')
-    qs = filter.qs
+    qs, sorting = filter.qs, filter.field
+    src = 'cb-btn-%s' % sorting
+    dl_src = 'cb-dl-%s' % sorting
 
     if category:
         qs = qs.filter(category=category.id)
     addons = amo.utils.paginate(request, qs)
 
     return jingo.render(request, template,
-                        {'category': category, 'addons': addons,
-                         'sorting': filter.field, 'sort_opts': filter.opts,
-                         'search_cat': '%s,0' % TYPE})
+                        {'section': 'extensions', 'addon_type': TYPE,
+                         'category': category, 'addons': addons,
+                         'filter': filter, 'sorting': sorting,
+                         'sort_opts': filter.opts, 'src': src,
+                         'dl_src': dl_src, 'search_cat': '%s,0' % TYPE})
 
 
 class CategoryLandingFilter(BaseFilter):
 
     opts = (('featured', _lazy(u'Featured')),
-            ('created', _lazy(u'Recently Added')),
             ('users', _lazy(u'Most Popular')),
-            ('rating', _lazy(u'Top Rated')))
+            ('rating', _lazy(u'Top Rated')),
+            ('created', _lazy(u'Recently Added')))
 
     def __init__(self, request, base, category, key, default):
         self.category = category
@@ -219,13 +247,20 @@ class CategoryLandingFilter(BaseFilter):
         return manual_order(filter, self.ids, pk_name='addons.id')
 
 
-def category_landing(request, category):
-    base = (Addon.objects.listed(request.APP).exclude(type=amo.ADDON_PERSONA)
-            .filter(categories__id=category.id))
-    filter = CategoryLandingFilter(request, base, category,
-                                   key='browse', default='featured')
-    return jingo.render(request, 'browse/category_landing.html',
-                        {'category': category, 'filter': filter,
+def category_landing(request, category, addon_type=amo.ADDON_EXTENSION,
+                     Filter=CategoryLandingFilter):
+    if addon_type == amo.ADDON_WEBAPP:
+        base = (Addon.objects.public()
+                .filter(type=amo.ADDON_WEBAPP, categories__id=category.id))
+    else:
+        base = (Addon.objects.listed(request.APP)
+                .exclude(type=amo.ADDON_PERSONA)
+                .filter(categories__id=category.id))
+    filter = Filter(request, base, category, key='browse', default='featured')
+    return jingo.render(request, 'browse/impala/category_landing.html',
+                        {'section': amo.ADDON_SLUGS[addon_type],
+                         'addon_type': addon_type, 'category': category,
+                         'filter': filter, 'sorting': filter.field,
                          'search_cat': '%s,0' % category.type})
 
 
@@ -235,7 +270,7 @@ def es_category_landing(request, category):
                                 is_disabled=False,
                                 status__in=amo.REVIEWED_STATUSES))
     filter = ESAddonFilter(request, qs, key='sort', default='popular')
-    return jingo.render(request, 'browse/category_landing.html',
+    return jingo.render(request, 'browse/impala/category_landing.html',
                         {'category': category, 'filter': filter,
                          'search_cat': '%s,0' % category.type})
 
@@ -245,7 +280,7 @@ def creatured(request, category):
     q = Category.objects.filter(application=request.APP.id, type=TYPE)
     category = get_object_or_404(q, slug=category)
     ids = AddonCategory.creatured_random(category, request.LANG)
-    addons = manual_order(Addon.objects.public(), ids)
+    addons = manual_order(Addon.objects.public(), ids, pk_name='addons.id')
     return jingo.render(request, 'browse/creatured.html',
                         {'addons': addons, 'category': category,
                          'sorting': 'featured'})
@@ -274,27 +309,52 @@ class PersonasFilter(BaseFilter):
                     .with_index(personas='personas_movers_idx'))
 
 
-def personas_listing(request, category=None):
+def personas_listing(request, category_slug=None):
     # Common pieces using by browse and search.
     TYPE = amo.ADDON_PERSONA
-    q = Category.objects.filter(application=request.APP.id,
-                                type=TYPE)
+    q = Category.objects.filter(type=TYPE)
     categories = order_by_translation(q, 'name')
 
-    base = (Addon.objects.public().filter(type=TYPE)
-            .extra(select={'_app': request.APP.id}))
+    frozen = list(FrozenAddon.objects.values_list('addon', flat=True))
 
-    if category is not None:
-        category = get_object_or_404(q, slug=category)
-        base = base.filter(categories__id=category.id)
+    base = (Addon.objects.public().filter(type=TYPE)
+                 .exclude(id__in=frozen)
+                 .extra(select={'_app': request.APP.id}))
+
+    cat = None
+    if category_slug is not None:
+        try:
+            cat = Category.objects.filter(slug=category_slug, type=TYPE)[0]
+        except IndexError:
+            # Maybe it's a Complete Theme?
+            try:
+                cat = Category.objects.filter(slug=category_slug,
+                    type=amo.ADDON_THEME)[0]
+            except IndexError:
+                raise Http404
+            else:
+                # Hey, it was a Complete Theme.
+                url = reverse('browse.themes', args=[cat.slug])
+                if 'sort' in request.GET:
+                    url = amo.utils.urlparams(url, sort=request.GET['sort'])
+                return redirect(url, permanent=not settings.DEBUG)
+
+        base = base.filter(categories__id=cat.id)
 
     filter = PersonasFilter(request, base, key='sort', default='up-and-coming')
-    return categories, filter, base, category
+    return categories, filter, base, cat
 
 
 @mobile_template('browse/personas/{mobile/}')
 def personas(request, category=None, template=None):
-    categories, filter, base, category = personas_listing(request, category)
+    listing = personas_listing(request, category)
+
+    # I guess this was a Complete Theme after all.
+    if isinstance(listing,
+                  (HttpResponsePermanentRedirect, HttpResponseRedirect)):
+        return listing
+
+    categories, filter, base, category = listing
 
     # Pass the count from base instead of letting it come from
     # filter.qs.count() since that would join against personas.
@@ -316,9 +376,51 @@ def personas(request, category=None, template=None):
 
     ctx = {'categories': categories, 'category': category, 'addons': addons,
            'filter': filter, 'sorting': filter.field, 'sort_opts': filter.opts,
-           'featured': featured, 'search_cat': 'personas',
+           'featured': featured, 'search_cat': 'themes',
            'is_homepage': category is None and 'sort' not in request.GET}
     return jingo.render(request, template, ctx)
+
+
+def legacy_theme_redirects(request, category=None, category_name=None):
+    url = None
+
+    if category_name is not None:
+        # This format is for the Complete Themes RSS feed.
+        url = reverse('browse.themes.rss', args=[category_name])
+    else:
+        if not category or category == 'all':
+            url = reverse('browse.personas')
+        else:
+            try:
+                # Theme?
+                cat = Category.objects.filter(slug=category,
+                                              type=amo.ADDON_PERSONA)[0]
+            except IndexError:
+                pass
+            else:
+                # Hey, it was a Theme.
+                url = reverse('browse.personas', args=[cat.slug])
+
+    if url:
+        if 'sort' in request.GET:
+            url = amo.utils.urlparams(url, sort=request.GET['sort'])
+        return redirect(url, permanent=not settings.DEBUG)
+    else:
+        raise Http404
+
+
+def legacy_fulltheme_redirects(request, category=None):
+    """Full Themes have already been renamed to Complete Themes!"""
+    url = request.get_full_path().replace('/full-themes',
+                                          '/complete-themes')
+    return redirect(url, permanent=not settings.DEBUG)
+
+
+def legacy_creatured_redirect(request, category):
+    cat = get_object_or_404(Category.objects, slug=category)
+    type_ = amo.ADDON_EXTENSION
+    sort = 'featured'
+    return legacy_redirects(request, type_, cat.id, sort)
 
 
 @cache_page(60 * 60 * 24 * 365)
@@ -333,7 +435,8 @@ def legacy_redirects(request, type_, category=None, sort=None, format=None):
         else:
             url = reverse('browse.%s' % type_slug, args=[cat.slug])
     mapping = {'updated': 'updated', 'newest': 'created', 'name': 'name',
-               'weeklydownloads': 'popular', 'averagerating': 'rating'}
+               'weeklydownloads': 'popular', 'averagerating': 'rating',
+               'featured': 'featured'}
     if 'sort' in request.GET and request.GET['sort'] in mapping:
         url += '?sort=%s' % mapping[request.GET['sort']]
     elif sort in mapping:
@@ -349,37 +452,20 @@ class SearchToolsFilter(AddonFilter):
             ('popular', _lazy(u'Downloads')),
             ('rating', _lazy(u'Rating')))
 
-    def filter(self, field):
-        """Get the queryset for the given field."""
-        # Ensure that we can combine distinct filters
-        # (like the featured filter)
-        this_filter = self._filter(field)
-        if this_filter.query.distinct:
-            base_qs = self.base_queryset.distinct()
-        else:
-            base_qs = self.base_queryset
-        return this_filter & base_qs
-
     def filter_featured(self):
         # Featured search add-ons in all locales:
-        featured_search = Q(
-            type=amo.ADDON_SEARCH,
-            feature__application=self.request.APP.id)
+        APP, LANG = self.request.APP, self.request.LANG
+        ids = get_featured_ids(APP, LANG, amo.ADDON_SEARCH)
 
-        # Featured in the search-tools category:
-        featured_search_cat = Q(
-            type__in=(amo.ADDON_EXTENSION, amo.ADDON_SEARCH),
-            addoncategory__category__application=self.request.APP.id,
-            addoncategory__category__slug='search-tools',
-            addoncategory__feature=True)
+        try:
+            search_cat = Category.objects.get(slug='search-tools',
+                                              application=APP.id)
+            others = get_creatured_ids(search_cat, LANG)
+            ids.extend(o for o in others if o not in ids)
+        except Category.DoesNotExist:
+            pass
 
-        q = Addon.objects.valid().filter(
-                        featured_search | featured_search_cat)
-
-        # Need to make the query distinct because
-        # one addon can be in multiple categories (see
-        # addoncategory join above)
-        return q.distinct()
+        return manual_order(Addon.objects.valid(), ids, 'addons.id')
 
 
 class SearchExtensionsFilter(AddonFilter):
@@ -432,8 +518,9 @@ def search_tools(request, category=None):
                          'search_extensions_filter': sidebar_ext})
 
 
-@mobile_template('browse/{mobile/}featured.html')
-def featured(request, category=None, template=None):
-    ids = Addon.featured_random(request.APP, request.LANG)
-    addons = manual_order(Addon.objects.exclude(type=amo.ADDON_PERSONA), ids)
-    return jingo.render(request, template, {'addons': addons})
+def moreinfo_redirect(request):
+    try:
+        addon_id = int(request.GET.get('id', ''))
+        return redirect('discovery.addons.detail', addon_id, permanent=True)
+    except ValueError:
+        raise http.Http404

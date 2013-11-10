@@ -119,7 +119,8 @@ section > section {
 body:after,
 header:after,
 .addons:after,
-#install:after {
+#install:after,
+.notice:after {
     content: ".";
     display: block;
     clear: both;
@@ -318,13 +319,20 @@ header:after,
 }
 
 /* @Main @Feature *********/
-#main #main-feature {
-    display: none;
-    position: relative;
-    padding: 0;
+#main #promos {
     background: transparent;
     border: 0;
+    border-radius: 5px;
     box-shadow: none;
+    padding: 0;
+    width: auto;
+}
+
+#promos .prev {
+    left: 0 !important;
+}
+#promos .next {
+    right: 0 !important;
 }
 
 .feature {
@@ -340,20 +348,41 @@ header:after,
 #main #featured-addons {
     margin-top: 283px;
 }
-#main #main-feature.js + #featured-addons {
+#main #promos.js + #featured-addons {
     margin-top: 0;
 }
 
-#main #main-feature.js {
+section#featured-addons {
+    padding: 20px 10% 0;
+}
+
+#promos ul.addons {
+    margin-bottom: 0;
+}
+
+#main #promos.js {
     height: 273px;
     overflow: hidden;
 }
 
-#main-feature.js .feature {
+#promos.js .feature {
     height: 251px;
     position: relative;
     overflow: hidden;
     box-shadow: none;
+}
+
+.pages {
+    position: relative;
+    height: 271px;
+    top: 0;
+    left: 0;
+    transition-duration: .3s;
+    transition-property: top, bottom;
+    -moz-transition-duration: .3s;
+    -moz-transition-property: top, bottom;
+    -webkit-transition-duration: .3s;
+    -webkit-transition-property: top, bottom;
 }
 
 .slider {
@@ -371,6 +400,7 @@ header:after,
     -webkit-transition: none;
 }
 
+.pages > li,
 .slider > li {
     width: 100%;
     white-space: normal;
@@ -387,7 +417,7 @@ header:after,
     position: relative;
 }
 
-#main-feature.js #nav-features,
+#promos.js #nav-features,
 .recs #recs #nav-recs.js {
     display: block;
 }
@@ -408,6 +438,14 @@ header:after,
     -moz-transition-property: opacity, width;
     -moz-transition-duration: 0.5s;
     -moz-transition-timing-function: ease-out;
+}
+
+.nav-prev a.prev {
+    border-radius: 5px 0 0 5px;
+}
+
+.nav-next a.next {
+    border-radius: 0 5px 5px 0;
 }
 
 #nav-recs a {
@@ -469,309 +507,6 @@ header:after,
     visibility: hidden;
 }
 
-/* @group Rock Your Firefox (RYFF) */
-.ryff {
-    position: relative;
-    overflow: hidden;
-    padding: 20px 10% 10px 270px;
-    background: url(../../img/zamboni/discovery_pane/promos/ryff-bg.png) 0 0 no-repeat;
-    color: #333;
-}
-
-.ryff h3,
-.promo h2 {
-    font-size: 36px;
-    font-weight: bold;
-    line-height: 1.1;
-}
-
-.ryff h2 {
-    white-space: nowrap;
-}
-
-.ryff h3 {
-    margin-bottom: 10px;
-}
-
-.ryff h3 a {
-    color: #7e100a;
-    text-decoration: none;
-}
-
-.ryff img {
-    width: 40%;
-    float: right;
-    margin: 0 0 .5em 10px;
-}
-/* @end */
-
-/* @Collection *********/
-.collection h2,
-#featured-addons h2 {
-    max-width: 650px;
-    margin: 10px auto;
-}
-
-.collection.promo h2 {
-    margin: 0;
-    max-width: auto;
-}
-
-.collection.promo h2 a {
-    color: inherit;
-    text-decoration: none;
-}
-
-.promo hgroup,
-#monthly .wrap,
-#go-mobile .wrap,
-#recs .header h2,
-#recs .gallery {
-    margin: 0 auto;
-    max-width: 650px;
-    width: 100%;
-}
-
-.promo h2,
-.promo h3 {
-    margin-bottom: 0;
-}
-
-.promo h2 {
-    text-shadow: 0 1px 0 rgba(255,255,255,0.5);
-}
-
-.promo hgroup {
-    margin: 10px auto 20px;
-}
-
-.collection .more {
-    text-align: center;
-}
-
-#starter .more,
-#st-patricks .more,
-#fx4-collection .more {
-    display: none;
-}
-
-.shopping {
-    background-image: url("../../img/zamboni/discovery_pane/bg-hanger.png"),
-    url("../../img/zamboni/discovery_pane/bg-gift.png");
-    background-position: 107% 20px, 9% 92%;
-    background-repeat: no-repeat;
-}
-
-/* @group Starter Pack */
-#starter.feature {
-    background: none;
-    background-image:
-        url(../../img/zamboni/discovery_pane/promos/starter-bg-left.png),
-        url(../../img/zamboni/discovery_pane/promos/starter-bg.png),
-        url(../../img/zamboni/discovery_pane/promos/starter-bg-right.png);
-    background-position: 0 100%, 50% 0, 100% 0;
-    background-repeat: no-repeat, repeat-x, no-repeat;
-}
-
-#starter.feature hgroup:after {
-    background: url(../../img/zamboni/discovery_pane/promos/starter-bg-right.png) 100% 0 no-repeat;
-    display: block;
-    content: "";
-    position: absolute;
-    height: 100%;
-    top: 0;
-    right: 0;
-    width: 153px;
-}
-
-#starter h2 {
-    color: #075f7a;
-}
-/* @end */
-
-/* @group St. Patrick's Day Personas */
-#st-patricks.feature {
-    background: url(../../img/zamboni/discovery_pane/promos/st-patricks-bg.png) 50% 0 no-repeat;
-}
-#st-patricks h2 {
-    color: #296215;
-}
-/* @end */
-
-/* @group Monthly Pick */
-#monthly {
-    background: url(../../img/zamboni/discovery_pane/promos/monthly-bg.png) 50% 0 no-repeat;
-}
-#monthly .wrap > div,
-#go-mobile .wrap > div {
-    padding: 20px;
-}
-#monthly .wrap > div {
-    overflow: hidden;
-    position: relative;
-    max-height: 120px;
-}
-#monthly h2 {
-    color: #8b0101;
-}
-#monthly h3 {
-    margin-bottom: 10px;
-}
-#monthly .wrap > div > div > p {
-    padding-right: 20px;
-}
-#monthly p.install-button,
-#go-mobile p.install-button {
-    margin-bottom: 0;
-}
-#monthly .wrap > div > div {
-    float: left;
-    width: 50%;
-}
-#monthly img {
-    display: block;
-    float: right;
-    max-width: 50%;
-    max-height: 120px;
-}
-/* @end */
-
-/* @group Go Mobile */
-#go-mobile {
-    background: url(../../img/zamboni/discovery_pane/promos/go-mobile-bg.png) 50% 0 no-repeat;
-}
-#go-mobile h2 {
-    color: #485c65;
-    width: 300px;
-}
-#go-mobile .wrap {
-    width: 384px;
-    margin: 0;
-}
-/* @end */
-
-/* @group Firefox 4 Collection */
-#fx4-collection {
-    background: url(../../img/zamboni/discovery_pane/promos/fx4-collection-bg.png) 50% 0 no-repeat;
-}
-#fx4-collection h2 {
-    color: #2c5c89;
-}
-/* @end */
-
-#featured-addons {
-    padding: 10px 9%;
-}
-
-/* @Addon @boxes *********/
-.addons ul,
-ul.addons {
-    width: 100%;
-    max-width: 650px;
-    margin: 0 auto 1em;
-}
-
-.addons li {
-    float: left;
-    width: 30%;
-    position: relative;
-    margin-right: 5%;
-    margin-bottom: 5%;
-}
-
-.html-rtl .addons li {
-    float: right;
-}
-
-.addons li:nth-child(3n),
-.html-rtl .addons li:nth-child(3n + 1) {
-    margin-right: 0;
-}
-.html-rtl .addons li:nth-child(3n) {
-    margin-right: 5%;
-}
-
-.addons li > a,
-.rec-addons li > a,
-#monthly > div,
-#go-mobile > div {
-    background: -moz-linear-gradient(top, #fff 0, #ecf1f7 100%);
-    border: 1px solid #b7c3d7;
-    border-radius: 6px;
-    box-shadow: inset 0 -2px 0 rgba(58,78,103,0.08), 0 2px 0 rgba(190,210,230,0.5);
-}
-
-.addons li > a,
-.rec-addons li > a {
-    display: block;
-    display: -moz-box;
-    -moz-box-orient: vertical;
-    -moz-box-align: center;
-    position: relative;
-    height: 120px;
-    width: 100%;
-    width: -moz-calc(100% - 22px);
-    padding: 10px;
-    -moz-transition-property: border-color, box-shadow;
-    -moz-transition-duration: 0.5s;
-    -moz-transition-timing-function: ease-out;
-}
-
-.addons li > a:hover,
-.addons li > a:focus,
-.addons li > a:active,
-.rec-addons li > a:hover,
-.rec-addons li > a:focus,
-.rec-addons li > a:active {
-    border-color: rgba(165,175,185,1);
-    box-shadow: inset 0 -2px 0 rgba(58,78,103,0.1), 0 2px 0 rgba(190,210,230,0.85);
-    -moz-transition-property: border-color, box-shadow;
-    -moz-transition-duration: 0.1s;
-    -moz-transition-timing-function: ease-out;
-    text-decoration: none;
-}
-
-.addons h3,
-.rec-addons h3 {
-    font-size: 14px;
-    line-height: 1.1;
-    font-weight: bold;
-    font-family: inherit;
-    margin: .25em 0;
-    text-align: center;
-    overflow: hidden;
-}
-
-.addons li > a:hover h3,
-.addons li > a:focus h3,
-.addons li > a:active h3,
-.rec-addons li > a:hover h3,
-.rec-addons li > a:focus h3,
-.rec-addons li > a:active h3 {
-    text-decoration: underline;
-}
-
-.addons p.desc,
-.rec-addons p.desc {
-    -moz-box-flex: 1;
-    overflow: hidden;
-    font-size: 11px;
-    text-align: left;
-    color: #373d48;
-    margin: 0;
-}
-
-.html-rtl .addons p.desc,
-.html-rtl .rec-addons p.desc {
-    text-align: right;
-}
-
-.addons img,
-.rec-addons img {
-    display: block;
-    max-width: 50px;
-}
-
 /* @group Top Add-ons and Featured Personas */
 #sub .featured {
     position: relative;
@@ -791,8 +526,8 @@ ul.addons {
 
 #recs .header {
     margin: 0;
-    padding: 0.45em 9%;
-    width: 82%;
+    padding: 0.45em 10%;
+    width: 80%;
 }
 
 #sub ul {
@@ -804,15 +539,19 @@ ul.addons {
     margin: 0 -10px;
     clear: both;
 }
-#featured-personas li {
+#promo-video-addons li.show {
+    border-bottom: 0;
+    border-top: 1px solid #cdd4de;
+}
+.featured-themes li {
     border-bottom-color: #666;
 }
 #sub li:last-child {
-    border-bottom-width: 0;
+    border-bottom: 0;
 }
 
 #sub .featured li,
-#featured-personas li h6,
+.featured-themes li h6,
 #more-ways li {
     font-size: 13px;
 }
@@ -822,38 +561,39 @@ ul.addons {
 }
 
 .htruncate {
+    text-overflow: ellipsis;
     white-space: nowrap;
     overflow: hidden;
 }
 
-#up-and-coming a.addon-title .htruncate {
+.featured .featured-addons a.addon-title .htruncate {
     line-height: 32px;
     display: inline-block;
     width: -moz-calc(100% - 48px);
 }
 
-#up-and-coming a.addon-title,
-#featured-personas span.addon-title {
+.featured .featured-addons a.addon-title,
+.featured .featured-themes span.addon-title {
     display: block;
     background: rgba(255,255,255,0.35) url("../../img/zamboni/discovery_pane/arrow-right.png") 95% 50% no-repeat;
     color: #333;
     overflow: hidden;
 }
-#featured-personas span.addon-title {
+.featured .featured-themes span.addon-title {
     pointer-events: none;
 }
 
-#up-and-coming a.addon-title,
-#featured-personas span.addon-title b {
+.featured .featured-addons a.addon-title,
+.featured .featured-themes span.addon-title b {
     padding: 0.5em 30px 0.5em 10px;
 }
 
-#featured-personas span.addon-title b {
+.featured .featured-themes span.addon-title b {
     display: block;
     font-weight: normal;
 }
 
-#featured-personas span.addon-title {
+.featured .featured-themes span.addon-title {
     background-color: rgba(255,255,255,0.65);
     border-top: 1px solid rgba(255,255,255,0.35);
     text-decoration: none;
@@ -862,12 +602,12 @@ ul.addons {
     width: 100%;
 }
 
-#up-and-coming a.addon-title:hover,
-#up-and-coming a.addon-title:focus,
-#up-and-coming a.addon-title:active,
-#featured-personas a:hover span.addon-title,
-#featured-personas a:focus span.addon-title,
-#featured-personas a:active span.addon-title {
+.featured .featured-addons a.addon-title:hover,
+.featured .featured-addons a.addon-title:focus,
+.featured .featured-addons a.addon-title:active,
+.featured .featured-themes a:hover span.addon-title,
+.featured .featured-themes a:focus span.addon-title,
+.featured .featured-themes a:active span.addon-title {
     background-color: rgba(255,255,255,0.65);
     background-position: 96% 50%;
     -moz-transition-property: background-color, background-position;
@@ -876,23 +616,26 @@ ul.addons {
     color: #083681;
 }
 
-#featured-personas a:hover span.addon-title,
-#featured-personas a:focus span.addon-title,
-#featured-personas a:active span.addon-title {
+.featured .featured-themes a:hover span.addon-title,
+.featured .featured-themes a:focus span.addon-title,
+.featured .featured-themes a:active span.addon-title {
     background-color: rgba(255,255,255,0.8);
 }
 
 #sub .featured li:last-child a,
-#featured-personas ul li:last-child a span.addon-title {
+#sub .featured-themes:last-child a span.addon-title,
+#promo-video-addons .show.last a,
+#promo-video-addons .show.last a span.addon-title {
     border-radius: 0 0 8px 8px;
 }
 
-#up-and-coming img {
+.featured .featured-addons img {
     display: block;
     float: left;
     vertical-align: middle;
     margin: 0 8px 0 0;
 }
+
 
 #sub .all,
 #recs .header h2 a {
@@ -950,12 +693,6 @@ ul.addons {
     left: -4px;
 }
 
-.pane #main .persona-feature .persona,
-.pane #main .persona-feature h3,
-.pane #main .persona-feature .persona-preview {
-    position: absolute;
-}
-
 .pane #main .persona-feature .persona {
     width: 100%;
 }
@@ -964,15 +701,6 @@ ul.addons {
     top: 80px;
     margin: 10px;
     width: -moz-calc(100% - 20px);
-}
-
-.pane #main .persona-feature .persona .persona-preview {
-    border: 1px solid #b7c3d7;
-    box-shadow: inset 0 -2px 0 rgba(58,78,103,0.08), 0 2px 0 rgba(190,210,230,0.5);
-    top: -132px;
-    margin-left: -4px;
-    /* Think this is cheesy? You're right. Our minifier ruins additions within -moz-calc*/
-    width: -moz-calc(100% - -6px);
 }
 
 .pane #main .persona-large .persona-preview [data-browsertheme] {
@@ -1005,7 +733,7 @@ ul.addons {
     padding: 7px 10px;
     position: absolute;
 }
-.detail .persona-hover.persona-large .caption {
+.detail .persona-hover.persona-large .caption, .review-decal, .persona-install, .artist-tools {
     display: none;
 }
 /* @end */
@@ -1041,8 +769,12 @@ ul.addons {
     background: transparent url("../../img/zamboni/discovery_pane/bg-moreaddons.jpg") 95% 50% no-repeat;
 }
 
-#more-personas {
+#more-complete-themes {
     background: transparent url("../../img/zamboni/discovery_pane/bg-morepersonas.jpg") 70% 50% no-repeat;
+}
+
+#more-complete-themes,
+#more-complete-themes a {
     border-radius: 0 0 8px 8px;
 }
 
@@ -1071,12 +803,16 @@ ul.addons {
         width: 100%;
     }
 
-    #main #main-feature {
+    #main #promos {
         height: 290px;
     }
 
     .feature {
         height: 270px;
+    }
+
+    #main #featured-addons {
+        margin-top: 293px;
     }
 
     #intro {
@@ -1086,7 +822,7 @@ ul.addons {
     }
 
     #sub #up-and-coming,
-    #sub #featured-personas,
+    #sub #featured-themes,
     #sub #more-ways {
         float: left;
         margin-right: 1%;
@@ -1096,6 +832,10 @@ ul.addons {
     #sub #more-ways {
         margin-right: 0;
         width: -moz-calc(100% / 3 - 22px - 1%);
+    }
+
+    #promo-video-addons {
+        display: none !important; /* Due to $.show() */
     }
 }
 
@@ -1159,7 +899,6 @@ body.detail {
 }
 
 .detail p#back {
-    background: #fff;
     float: right;
     margin-left: 1em;
 }
@@ -1247,35 +986,99 @@ p#back:hover:before {
     display: none;
 }
 
-#install #no-restart-msg {
+li#no-restart {
+    padding: 0;
+}
+
+#no-restart-msg {
     background: #fff;
     border: 1px solid #B6D9E5;
     border-radius: 3px;
     color: #294473;
     display: block;
-    font-size: 0.9em;
+    font-size: 11px;
     font-weight: bold;
-    padding: 4px 12px 3px;
+    padding: 3px 12px 4px;
+}
+
+.notice {
+    background: #e3edfa;
+    border-radius: 5px;
+    width: 50%;
+    margin-bottom: 1.286em;
+    padding: 14px;
+}
+.notice p {
+    margin: 0;
 }
 
 .performance-note {
-    background: #fff3cc;
-    border-radius: 5px;
-    display: inline-block;
-    margin-bottom: 1.286em;
-    padding: 1em;
+    background: url(../../img/impala/turtle.png) no-repeat 28px 16px #fff8dc;
+    padding: 14px 14px 14px 104px;
 }
-.performance-note h3 {
+.html-rtl .performance-note {
+    background-position: 96% 16px;
+    padding: 14px 104px 14px 14px;
+}
+.notice h3,
+.upsell .premium a {
     font: normal bold 14px/1.2em "helvetica neue", helvetica, arial, sans-serif;
 }
-.performance-note span:first-child {
-    background: url(../../img/zamboni/notifications.png) no-repeat 0 -226px;
-    float: left;
-    height: 32px;
-    width: 32px;
+
+.upsell {
+    position: relative;
 }
-.performance-note div {
-    margin-left: 45px;
+
+.upsell > h3,
+.upsell .premium {
+    line-height: 32px;
+    padding: 0 0 .5em;
+}
+
+.upsell > h3 {
+    float: left;
+    margin-right: 1em;
+}
+.html-rtl .upsell > h3 {
+    float: right;
+    margin: 0 0 0 1em;
+}
+
+.upsell .premium {
+    float: right;
+}
+.html-rtl .upsell .premium {
+    float: left;
+}
+
+.upsell .premium a {
+    text-decoration: none;
+}
+
+.upsell img {
+    float: left;
+    margin-right: 5px;
+    height: 32px;
+}
+
+.upsell .prose {
+    clear: both;
+}
+
+.upsell ul {
+    list-style: disc;
+}
+.upsell ol {
+    list-style: decimal;
+}
+
+.upsell ul,
+.upsell ol {
+    margin: 0 0 0 2em;
+}
+.html-rtl .upsell ul,
+.html-rtl .upsell ol {
+    margin: 0 2em 0 0;
 }
 
 /* @group Installation popup notices */
@@ -1291,9 +1094,9 @@ p#back:hover:before {
 .thunderbird .install-note .msg { background-image: url(../../img/app-icons/small/thunderbird.png); }
 .sunbird .install-note .msg { background-image: url(../../img/app-icons/small/sunbird.png); }
 .seamonkey .install-note .msg { background-image: url(../../img/app-icons/small/seamonkey.png); }
+.android .install-note .msg { background-image: url(../../img/app-icons/small/android.png); }
 
-.install-note .msg.m-unreviewed,
-.install-note .msg.m-selfhosted {
+.install-note .msg.m-unreviewed {
     background-image: url(../../img/zamboni/icons/alert-32x32.png);
 }
 
@@ -1688,7 +1491,7 @@ a#lightbox-secNav-btnClose {
 
 #recs .gallery-addons {
     margin: 0 auto;
-    width: 82%;
+    width: 80%;
 }
 
 #images + .addon-info {
@@ -1716,11 +1519,14 @@ a#lightbox-secNav-btnClose {
 }
 
 #recs .panel {
+    float: none;
     margin: 20px 5% 20px 0;
-    width: 30%;
 }
 #recs .panel:nth-child(3n) {
     margin-right: 0;
+}
+.html-rtl #recs .gallery {
+    direction: ltr;
 }
 
 #screenshot img,
@@ -1813,7 +1619,79 @@ body.eula #main {
 }
 
 /* App Specific ****/
-.seamonkey #main-feature {
+.seamonkey #promos {
     /* Hide this for SeaMonkey as it has no content */
     display: none !important;
 }
+.seamonkey #promos.show-video {
+    /* Yucky */
+    display: block !important;
+}
+
+/* Add-on Video */
+#intro #learn-more.video,
+#watch-video a {
+    background: #fff url(../../img/zamboni/discovery_pane/video.png) 6px 50% no-repeat;
+    box-shadow: 0 -2px rgba(0,0,0,0.1) inset;
+    padding-left: 47px;
+}
+#watch-video {
+    display: none;
+    margin: 0 0 8px;
+    text-align: center;
+}
+#watch-video a {
+    display: block;
+    padding: 8px 10px 8px 50px;
+}
+#main #promos.js.show-video {
+    height: auto;
+    /* -moz-transition: height 1s ease; */
+}
+
+#main #promos.show-video .slider,
+#main #promos.show-video #nav-features {
+    display: none;
+}
+
+.promo-video {
+    border-radius: 8px;
+    /* border: 1px solid rgb(168, 184, 209); */ /* Clean this up before using */
+}
+.promo-video video {
+    width: 100%;
+    display: block;
+}
+
+#video-details {
+    background: url(../../img/illustrations/hug.png) 50% 12px no-repeat;
+    color: #666;
+    line-height: 1.6em;
+    padding: 115px 1em 1em;
+}
+
+#promo-video-addons {
+    display: none;
+}
+
+#promo-video-addons li {
+    display: none;
+}
+
+#promo-video-addons li.show {
+    display: block;
+}
+
+#featured-addons li.flutter {
+    -moz-animation-duration: 1s;
+    -moz-animation-iteration-count: infinite;
+    -moz-animation-name: flutter;
+    -moz-animation-timing-function: linear;
+}
+
+@-moz-keyframes flutter {
+    0% { -moz-transform: matrix(1, 0, 0.3, 1, -10px, 0); }
+    50% { -moz-transform: matrix(1, 0, 0.4, 1, -20px, 0); }
+    100% { -moz-transform: matrix(1, 0, 0.3, 1, -10px, 0); }
+}
+

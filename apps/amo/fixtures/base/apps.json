@@ -18,6 +18,15 @@
         }
     },
     {
+        "pk": 61,
+        "model": "applications.application",
+        "fields": {
+            "guid": "{aa3c5121-dab2-40e2-81ca-7ea25febc110}",
+            "modified": "2008-10-28 18:25:09",
+            "created": "2008-10-28 18:25:09"
+        }
+    },
+    {
         "pk": 59,
         "model": "applications.application",
         "fields": {
@@ -31,6 +40,7 @@
         "model": "applications.application",
         "fields": {
             "guid": "{3550f703-e582-4d05-9a08-453d09bdfdc6}",
+            "modified": "2006-08-21 23:53:19",
             "created": "2006-08-21 23:53:19"
         }
     },
@@ -39,6 +49,7 @@
         "model": "applications.application",
         "fields": {
             "guid": "{86c18b42-e466-45a9-ae7a-9b95ba6f5640}",
+            "modified": "2006-08-21 23:53:19",
             "created": "2006-08-21 23:53:19"
         }
     },
@@ -46,7 +57,6 @@
         "pk": 1,
         "model": "files.platform",
         "fields": {
-            "icontype": "",
             "modified": "2008-04-07 08:16:55",
             "created": "2007-03-05 13:09:27"
         }
@@ -55,7 +65,6 @@
         "pk": 2,
         "model": "files.platform",
         "fields": {
-            "icontype": "",
             "modified": "2008-04-07 08:16:55",
             "created": "2007-03-05 13:09:27"
         }

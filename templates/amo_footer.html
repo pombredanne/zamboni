@@ -6,10 +6,6 @@
   {% endif %}
 {% endblock %}
 
-{% block extra_footer_links %}
-&nbsp;|&nbsp;<a class="mobile-link" href="">{{ _('View Mobile Site') }}</a>
-{% endblock %}
-
 {% block lang_form %}
   <form class="languages go" id="lang_form" method="get" action="">
     <label for="language">{{ _('Other languages') }}</label>
@@ -20,6 +16,13 @@
         </option>
       {%- endfor %}
     </select>
-    <button type="submit">{{ _('Go') }}</button>
+    {% for key, value in request.GET.items() %}
+      <input type="hidden" name="{{ key }}" value="{{ value }}">
+    {% endfor %}
+    <noscript><button type="submit">{{ _('Go') }}</button></noscript>
   </form>
+{% endblock %}
+
+{% block copyright %}
+  {% include 'copyright.html' %}
 {% endblock %}

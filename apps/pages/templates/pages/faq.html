@@ -54,13 +54,13 @@
                 applications. {% endtrans %}</li>
             <li>{% trans app_name=request.APP.pretty,
                    browse_url=url('browse.themes') %}
-                <strong><a href="{{ browse_url }}">Themes</a></strong> change
+                <strong><a href="{{ browse_url }}">Complete Themes</a></strong> change
                 the entire appearance of {{ app_name }}, usually including
                 icons, colors, dialogs, and other visual styles.
                 {% endtrans %}</li>
             <li>{% trans app_name=request.APP.pretty,
                    browse_url=url('browse.personas') %}
-                <strong><a href="{{ browse_url }}">Personas</a></strong> are
+                <strong><a href="{{ browse_url }}">Themes</a></strong> are
                 lightweight themes that use background images to customize
                 your {{ app_name }} toolbars.{% endtrans %}</li>
             <li>{% trans app_name=request.APP.pretty,
@@ -75,7 +75,7 @@
                 Packs</a></strong> add support for additional languages to
                 {{ app_name }}.{% endtrans %}</li>
             <li>{% trans app_name=request.APP.pretty,
-                   browse_url=remora_url('browse/type:7') %}
+                   browse_url='http://www.mozilla.org/en-US/plugincheck/' %}
             <strong><a href="{{ browse_url }}">Plugins</a></strong> help
             {{ app_name }} display or understand different types of media, such
             as Adobe Flash or Apple Quicktime.{% endtrans %}</li>
@@ -91,7 +91,7 @@
         button provided. Add-ons can be managed, disabled, or uninstalled from
         the Add-ons Manager in {{ app_name }}. For more detailed instructions,
         read <a href="{{ extension_url }}">this article on extensions</a> or
-        <a href="{{ theme_url }}">this one for themes and Personas</a>. If you
+        <a href="{{ theme_url }}">this one for Themes and Complete Themes</a>. If you
         have difficulty installing add-ons, see
         <a href="{{ troubleshooting_url }}">Troubleshooting Extensions and
         Themes</a>.{% endtrans %}</dd>
@@ -100,7 +100,7 @@
         <dt>{{ _('How do I install add-ons without restarting Firefox?') }}</dt>
         <dd>{% trans sdk_url="https://builder.addons.mozilla.org/",
                bootstrap_url="https://developer.mozilla.org/Extensions/Bootstrapped_extensions" %}
-            In Firefox 4, add-ons marked with "No restart required" can be installed
+            In Firefox, add-ons marked with "No restart required" can be installed
             without restarting. These add-ons have been created using the
             <a href="{{ sdk_url }}">Add-on SDK</a> or <a href="{{ bootstrap_url }}">bootstrapping</a>.
             Other add-ons will still require a restart before you can use them.
@@ -111,8 +111,8 @@
     <dd>{% trans plugincheck_url="http://www.mozilla.com/plugincheck/",
            plugin_url="http://support.mozilla.com/kb/Using+plugins+with+Firefox"  %}
         Add-ons, unlike plugins, are automatically checked for updates once
-        every day. In Firefox 4, updates will automatically be installed by
-        default. Prior versions of Firefox and other applications will alert
+        every day. In Firefox, updates are automatically installed by
+        default. Versions of Firefox prior to 4 (and other applications) will alert
         you that updates to your add-ons are available.
         <a href="{{ plugin_url }}">Plugins</a> are not currently automatically
         checked for updates, so be sure to regularly visit the
@@ -243,7 +243,7 @@
     investigate the review and take appropriate action.') }}</dd>
 
     <dt>{{ _('How do I report a bug or contact the Mozilla Add-ons team?') }}</dt>
-    <dd>{% trans contact_url=remora_url('developers/docs/policies/contact') %}
+    <dd>{% trans contact_url=url('devhub.docs', 'policies', 'contact') %}
         Please visit our <a href="{{ contact_url }}">Contact page</a>.{% endtrans %}</dd>
 
     <dt id="license">{{ _('What is a Source Code License?') }}</dt>
@@ -273,16 +273,6 @@
     <dt>{{ _('What is the My Favorites collection?') }}</dt>
     <dd>{{ _('Favorite add-ons are add-ons that you have bookmarked to easily get back to later. You can add an add-on to your favorites collection by clicking "Add to favorites" on its details page.') }}</dd>
 
-    <dt>{{ _('What is the Add-on Collector?') }}</dt>
-    <dd>{% trans collector_url=remora_url('pages/collector'),
-           collector_faq=remora_url('pages/collector_faq') %}
-        The <a href="{{ collector_url }}">Add-on Collector</a> is an add-on
-        that helps you stay connected to your watched collections and manage
-        the add-ons in your own collections. It can also automatically publish
-        to a collection. <a href="{{ collector_url }}">Learn more</a> or visit
-        the <a href="{{ collector_faq }}">Collector FAQ</a>.
-        {% endtrans %}</dd>
-
 </dl>
 
 {% if APP == amo.FIREFOX or APP == amo.MOBILE or APP == amo.SEAMONKEY %}
@@ -290,7 +280,7 @@
 
     <dl class="faq">
         <dt>{{ _('What are personalized recommendations?') }}</dt>
-        <dd>{% trans %}Firefox 4 recommends add-ons for you based on the add-ons you
+        <dd>{% trans %}Firefox recommends add-ons for you based on the add-ons you
         already have installed. If you have at least 3 add-ons installed, just visit
         the Get Add-ons area of the Add-ons Manager to see the "Recommended for You"
         box.{% endtrans %}</dd>
@@ -320,17 +310,6 @@
         Mobile</a> and add or modify functionality just like desktop add-ons.
         You can find add-ons that work with Firefox for Mobile in our
         <a href="{{ gallery_url }}">gallery</a>.{% endtrans %}</dd>
-
-    {# See 623412#4
-    <dt>{{ _('Can I install add-ons on my mobile device from my desktop?') }}</dt>
-    <dd>{% trans collector_url=url('addons.detail', 11950),
-           gallery_url=locale_url('mobile') %}
-        Yes! Just head over to the <a href="{{ gallery_url }}">mobile gallery</a>
-        on your desktop and use the Add to Mobile buttons. Then install the
-        <a href="{{ collector_url }}">Add-on Collector</a> on your mobile device and
-        it will sync the add-ons you've selected to your mobile device.
-        {% endtrans %}</dd>
-    #}
 
 </dl>
 

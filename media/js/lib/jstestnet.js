@@ -27,15 +27,18 @@
         window.top.postMessage(msg, '*');
     }
 
-    window.onerror = function(errorMsg, url, lineNumber) {
+    window.onerror = function(error, url, lineNumber) {
         var msg = {
             action: 'log',
             result: false, // failure
-            message: 'Exception: ' + errorMsg + ' at ' + url + ':' + lineNumber,
-            // TODO(Kumar) add stacktrace on platforms that support it
-            // (like Firefox)
-            stacktrace: null
+            message: 'Exception: ' + error.toString() + ' at ' + url + ':' + lineNumber,
+            stacktrace: (typeof printStackTrace !== 'undefined') ? printStackTrace({e: error}): null
         };
+        if (typeof console !== 'undefined') {
+            // Get notified of exceptions during local development.
+            console.error('Exception:');
+            console.log(error);
+        }
         postMsg(msg);
     };
 
@@ -82,6 +85,12 @@
             if (details) {
                 if (typeof(details.source) !== 'undefined') {
                     msg.stacktrace = details.source;
+                }
+                if (typeof(details.expected) !== 'undefined') {
+                    msg.message += '; Expected: "' + details.expected + '"';
+                }
+                if (typeof(details.actual) !== 'undefined') {
+                    msg.message += '; Actual: "' + details.actual + '"';
                 }
             }
             postMsg(msg);

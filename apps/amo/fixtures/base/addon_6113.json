@@ -28,7 +28,6 @@
             "guid": "{22870005-adef-4c9d-ae36-d0e1f2f27e5a}",
             "trusted": false,
             "locale_disambiguation": null,
-            "binary": false,
             "the_future": null,
             "weekly_downloads": 5726,
             "paypal_id": "",
@@ -37,7 +36,6 @@
             "average_daily_users": 67002,
             "bayesian_rating": 4.2418399999999998,
             "share_count": 3,
-            "get_satisfaction_company": "",
             "support_email": null,
             "public_stats": true,
             "status": 4,
@@ -50,7 +48,6 @@
             "admin_review": false,
             "external_software": false,
             "highest_status": 4,
-            "get_satisfaction_product": "",
             "name": 84541,
             "description": 84541,
             "created": "2007-11-30 23:22:01",
@@ -89,7 +86,7 @@
             "filename": "______________new_tong_wen_tang_-0.4.0.6-fx+tb+sm.xpi",
             "platform": 1,
             "version": 94363,
-            "size": 192,
+            "size": 196608,
             "datestatuschanged": "2010-02-03 18:42:00"
         }
     },
@@ -97,7 +94,6 @@
         "pk": 8382,
         "model": "users.userprofile",
         "fields": {
-            "sandboxshown": true,
             "display_collections_fav": false,
             "display_collections": true,
             "averagerating": "4.33",
@@ -109,13 +105,10 @@
             "email": "dd+79ba60f98@davedash.com",
             "location": "",
             "bio": null,
-            "firstname": "softcup",
             "deleted": false,
-            "lastname": "",
             "emailhidden": false,
             "user": null,
             "password": "",
-            "nickname": "softcup",
             "username": "softcup",
             "display_name": "softcup \u0627\u0644\u062a\u0637\u0628",
             "resetcode_expires": null,
@@ -132,9 +125,9 @@
         "fields": {
             "application": 1,
             "version": "3.6.*",
-            "created": null,
+            "created": "2007-03-05 13:09:26",
             "version_int": 3069900200100,
-            "modified": null
+            "modified": "2007-03-05 13:09:26"
         }
     },
     {
@@ -145,7 +138,7 @@
             "version": "1.5",
             "created": "2007-03-05 13:09:26",
             "version_int": 1050000200100,
-            "modified": null
+            "modified": "2007-03-05 13:09:26"
         }
     },
     {

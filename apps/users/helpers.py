@@ -1,13 +1,17 @@
 import random
 
-import jinja2
+from django.conf import settings
+from django.utils.encoding import smart_unicode
 
+import jinja2
 from jingo import register, env
 from tower import ugettext as _
 
+import amo
+
 
 @register.function
-def emaillink(email, title=None):
+def emaillink(email, title=None, klass=None):
     if not email:
         return ""
 
@@ -25,8 +29,8 @@ def emaillink(email, title=None):
     else:
         title = '<span class="emaillink">%s</span>' % fallback
 
-    node = u'<a href="#">%s</a><span class="emaillink js-hidden">%s</span>' % (
-        title, fallback)
+    node = (u'<a%s href="#">%s</a><span class="emaillink js-hidden">%s</span>'
+            % ((' class="%s"' % klass) if klass else '', title, fallback))
     return jinja2.Markup(node)
 
 
@@ -50,18 +54,33 @@ def users_list(users, size=None):
     return jinja2.Markup(', '.join(map(_user_link, users) + tail))
 
 
+@register.inclusion_tag('users/helpers/addon_users_list.html')
+@jinja2.contextfunction
+def addon_users_list(context, addon):
+    ctx = dict(context.items())
+    ctx.update(addon=addon, amo=amo)
+    return ctx
+
+
 def _user_link(user):
     if isinstance(user, basestring):
         return user
+    # Marketplace doesn't have user profile pages.
+    if settings.MARKETPLACE:
+        return jinja2.escape(smart_unicode(user.name))
     return u'<a href="%s">%s</a>' % (
-        user.get_url_path(), unicode(jinja2.escape(user.name)))
+        user.get_url_path(), jinja2.escape(smart_unicode(user.name)))
 
 
 @register.filter
-def user_vcard(user, table_class='person-info',
-               about_addons=True):
-    c = {'profile': user, 'table_class': table_class,
-         'about_addons': about_addons}
+@jinja2.contextfilter
+def user_vcard(context, user, table_class='person-info', is_profile=False):
+    c = dict(context.items())
+    c.update({
+        'profile': user,
+        'table_class': table_class,
+        'is_profile': is_profile
+    })
     t = env.get_template('users/vcard.html').render(**c)
     return jinja2.Markup(t)
 
@@ -73,3 +92,24 @@ def user_report_abuse(context, hide, profile):
     new.update({'hide': hide, 'profile': profile,
                 'abuse_form': context['abuse_form']})
     return new
+
+
+@register.filter
+def contribution_type(type):
+    return amo.CONTRIB_TYPES[type]
+
+
+@register.function
+def user_data(amo_user):
+    anonymous, currency, pre_auth, email = True, 'USD', False, ''
+    if hasattr(amo_user, 'is_anonymous'):
+        anonymous = amo_user.is_anonymous()
+    if not anonymous:
+        email = amo_user.email
+        preapproval = amo_user.get_preapproval()
+        if preapproval:
+            pre_auth = bool(preapproval.paypal_key)
+            currency = preapproval.currency if preapproval.currency else 'USD'
+
+    return {'anonymous': anonymous, 'currency': currency, 'pre_auth': pre_auth,
+            'email': email}

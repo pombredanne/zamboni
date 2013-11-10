@@ -35,7 +35,6 @@
             "guid": "{e968fc70-8f95-4ab9-9e79-304de2a71ee1}",
             "trusted": 1,
             "locale_disambiguation": null,
-            "binary": 0,
             "weekly_downloads": 36381,
             "paypal_id": "paypal@chrispederick.com",
             "average_rating": "4.06",
@@ -43,7 +42,6 @@
             "average_daily_users": 378630,
             "bayesian_rating": 4.0575599999999996,
             "share_count": 1,
-            "get_satisfaction_company": null,
             "support_email": null,
             "public_stats": 1,
             "status": 4,
@@ -55,7 +53,6 @@
             "admin_review": 0,
             "external_software": 0,
             "highest_status": 4,
-            "get_satisfaction_product": null,
             "name": 1360,
             "created": "2004-06-12 03:32:36",
             "type": 1,
@@ -83,7 +80,6 @@
         "pk": 1,
         "model": "files.platform",
         "fields": {
-            "icontype": "",
             "modified": "2008-04-07 08:16:55",
             "created": "2007-03-05 13:09:27"
         }
@@ -100,7 +96,7 @@
             "filename": "user_agent_switcher-0.7.2-fx+sm.xpi",
             "platform": 1,
             "version": 71752,
-            "size": 38,
+            "size": 38912,
             "datestatuschanged": "2009-06-30 19:48:42"
         }
     }

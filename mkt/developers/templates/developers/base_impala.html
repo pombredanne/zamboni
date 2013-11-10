@@ -1,0 +1,24 @@
+{% if webapp or WEBAPPS %}
+  {% set webapp, WEBAPPS = True, True %}
+{% endif %}
+
+{% extends 'developers/skeleton_impala.html' %}
+
+{% if addon %}
+  {% set editable = "no-edit"
+     if not check_addon_ownership(request, addon, dev=True) and
+        not action_allowed('Apps', 'Configure') %}
+{% endif %}
+{% block bodyclass %}developer-hub{{ ' apps' if webapp }} gutter {{ editable }}{% endblock %}
+
+{% block bodyattrs %}
+{% if addon %}data-default-locale="{{ addon.default_locale|lower }}"{% endif %}
+{% endblock %}
+
+{% block title %}{{ hub_page_title() }}{% endblock %}
+
+{% block extrahead %}
+  <noscript>
+    <link rel="stylesheet" href="{{ media('css/legacy/nojs.css') }}">
+  </noscript>
+{% endblock %}

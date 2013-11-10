@@ -1,5 +1,3 @@
-import random
-
 from django.contrib.syndication.views import Feed
 from django.shortcuts import get_object_or_404
 
@@ -20,7 +18,10 @@ class AddonFeedMixin(object):
         return absolutify(reverse('addons.detail', args=[addon.slug]))
 
     def item_title(self, addon):
-        return u'%s %s' % (addon.name, addon.current_version)
+        version = ''
+        if addon.current_version:
+            version = u' %s' % addon.current_version
+        return u'%s%s' % (addon.name, version)
 
     def item_description(self, addon):
         """Description for particular add-on (<item><description>)"""
@@ -35,7 +36,8 @@ class AddonFeedMixin(object):
 
     def item_pubdate(self, addon):
         """Pubdate for a particuar add-on (<item><pubDate>)"""
-        return addon.last_updated
+        sort = self.request.GET.get('sort')
+        return addon.created if sort == 'created' else addon.last_updated
 
     def item_guid(self, addon):
         """Guid for a particuar version (<item><guid>)"""
@@ -45,10 +47,6 @@ class AddonFeedMixin(object):
 
 
 class CategoriesRss(AddonFeedMixin, Feed):
-
-    category = None
-    request = None
-    TYPE = amo.ADDON_EXTENSION
 
     def get_object(self, request, category_name=None):
         """
@@ -84,12 +82,45 @@ class CategoriesRss(AddonFeedMixin, Feed):
         addons, _ = addon_listing(self.request, [self.TYPE], default='updated')
         if category:
             addons = addons.filter(categories__id=category.id)
-        return addons[:30]
+        return addons[:20]
+
+
+class ExtensionCategoriesRss(CategoriesRss):
+    category = None
+    request = None
+    TYPE = amo.ADDON_EXTENSION
+    title = _('Extensions')
+
+    def description(self, category):
+        """Description for the feed as a whole."""
+        if category:
+            # L10n: %s is a category name.
+            return _(u'%s Add-ons') % category.name
+        else:
+            return _('Extensions')
+
+
+class ThemeCategoriesRss(CategoriesRss):
+    category = None
+    request = None
+    TYPE = amo.ADDON_THEME
+    title = _('Themes')
+
+    def description(self, category):
+        """Description for the feed as a whole."""
+        if category:
+            # L10n: %s is a category name.
+            return _(u'%s Themes') % category.name
+        else:
+            return self.title
 
 
 class FeaturedRss(AddonFeedMixin, Feed):
 
+    request = None
+
     def get_object(self, request):
+        self.request = request
         self.app = request.APP
         self.appname = unicode(request.APP.pretty)
 
@@ -109,9 +140,7 @@ class FeaturedRss(AddonFeedMixin, Feed):
 
     def items(self):
         """Return the Addons to be output as RSS <item>'s"""
-        addons = list(Addon.objects.featured(self.app))
-        random.shuffle(addons)
-        return addons
+        return Addon.objects.featured(self.app)[:20]
 
 
 class SearchToolsRss(AddonFeedMixin, Feed):

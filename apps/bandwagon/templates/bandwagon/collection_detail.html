@@ -19,7 +19,7 @@
     {{ breadcrumbs(crumbs) }}
   {% endwith %}
   <hgroup>
-    <h2 class="collection">
+    <h2 class="collection" data-collectionid="{{ collection.id }}">
       <img src="{{ c.icon_url }}" class="icon">
       <span>{{ c.name }}</span>
       {% if not c.listed %}
@@ -35,7 +35,6 @@
     {% endif %}
   </hgroup>
 <div class="primary">
-  {% include "messages.html" %}
 <div class="featured">
   <div class="featured-inner object-lead">
     <div class="meta">
@@ -49,11 +48,13 @@
           </li>
         {% endif %}
         <li>{{ _('Updated {0}')|f(c.modified|datetime) }}</li>
-        {% if perms.view_stats %}
-        <li>
+        {% if user_perms.view_stats %}
+        {# TODO(cvan): Uncomment when bug 719512 gets fixed.
+        <li class="view-stats">
           <a href="{{ remora_url('/statistics/collection/' + c.uuid) }}">
             {{ _('View Statistics') }}</a>
         </li>
+        #}
         {% endif %}
       </ul>
     </div>
@@ -64,7 +65,7 @@
       {% elif c.description %}
         <p>{{ c.description }}</p>
       {% elif c.type == amo.COLLECTION_MOBILE %}
-        <p>{{ _('Add-ons synced to my Mobile Firefox using the Add-on Collector') }}</p>
+        <p>{{ _('Add-ons synced to my Mobile Firefox') }}</p>
       {% endif %}
       {% if c.type == amo.COLLECTION_FAVORITES and c.owned_by(amo_user) %}
         <ul id="collection-favorites-opts">
@@ -105,9 +106,9 @@
     <div class='collections-personas'>
       <h3>
         {% trans num=addons.paginator.count %}
-          {{ num }} Persona in this Collection
+          {{ num }} Theme in this Collection
         {% pluralize %}
-          {{ num }} Personas in this Collection
+          {{ num }} Themes in this Collection
         {% endtrans %}
       </h3>
       {{ persona_grid(addons.object_list) }}

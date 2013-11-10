@@ -10,6 +10,7 @@ $(function () {
             $lightbox = $("#lightbox"),
             $content = $("#lightbox .content"),
             $caption = $("#lightbox .caption span"),
+            $previews = $('.previews'),
             current, $strip,
             lbImage = template('<img id="preview{0}" src="{1}">');
         if (!$lightbox.length) return;
@@ -17,8 +18,19 @@ $(function () {
             $lightbox.show();
             showImage(this);
             $(window).bind('keydown.lightboxDismiss', function(e) {
-                if (e.which == 27) {
-                    hideLightbox();
+                switch(e.which) {
+                    case z.keys.ESCAPE:
+                        e.preventDefault();
+                        hideLightbox();
+                        break;
+                    case z.keys.LEFT:
+                        e.preventDefault();
+                        showPrev();
+                        break;
+                    case z.keys.RIGHT:
+                        e.preventDefault();
+                        showNext();
+                        break;
                 }
             });
             //I want to ensure the lightbox is painted before fading it in.
@@ -39,13 +51,13 @@ $(function () {
                 $oldimg = $lightbox.find("img");
             current = $a.parent().index();
             $strip = $a.closest("ul").find("li");
+            $previews.find('.panel').removeClass('active')
+                     .eq(current).addClass('active');
             var $img = $("#preview"+current);
             if ($img.length) {
                 $oldimg.css("opacity", 0);
                 $img.css({
-                    "opacity": 1,
-                    'margin-top': (525-$img.height())/2+'px',
-                    'margin-left': (700-$img.width())/2+'px'
+                    "opacity": 1
                 });
             } else {
                 $img = $(lbImage([current, $a.attr("href")]));
@@ -53,9 +65,7 @@ $(function () {
                 $img.load(function(e) {
                     $oldimg.css("opacity", 0);
                     $img.css({
-                        "opacity": 1,
-                        'margin-top': (525-$img.height())/2+'px',
-                        'margin-left': (700-$img.width())/2+'px'
+                        "opacity": 1
                     });
                     for (var i=0; i<$strip.length; i++) {
                         if (i != current) {
@@ -74,18 +84,24 @@ $(function () {
                 $lightbox.find(".control.next").addClass("disabled");
             }
         }
-        $("#lightbox .next").click(_pd(function() {
+        function showNext() {
             if (current < $strip.length-1) {
                 showImage($strip.eq(current+1).find("a"));
-                $(this).blur();
+                if (!this.window) {
+                    $(this).blur();
+                }
             }
-        }));
-        $("#lightbox .prev").click(_pd(function() {
+        }
+        function showPrev() {
             if (current > 0) {
                 showImage($strip.eq(current-1).find("a"));
-                $(this).blur();
+                if (!this.window) {
+                    $(this).blur();
+                }
             }
-        }));
+        }
+        $("#lightbox .next").click(_pd(showNext));
+        $("#lightbox .prev").click(_pd(showPrev));
         $(".previews ul a").click(_pd(showLightbox));
         $('#lightbox').click(_pd(function(e) {
             if ($(e.target).is('.close, #lightbox')) {
@@ -115,10 +131,10 @@ $(function () {
 
     // Show add-on ID when icon is clicked
     if ($("#addon[data-id], #persona[data-id]").exists()) {
-      $("#addon .icon").click(function() {
-        window.location.hash = "id=" + $("#addon, #persona").attr("data-id");
-      })
+        $("#addon .icon").click(function() {
+            window.location.hash = "id=" + $("#addon, #persona").attr("data-id");
+        });
     }
 
-    $("#abuse-modal").modal('#report-abuse', { delegate: '#page' });
+    $('#abuse-modal').modal('#report-abuse', {delegate: '#page'});
 });

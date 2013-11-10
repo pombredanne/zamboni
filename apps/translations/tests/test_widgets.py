@@ -1,11 +1,11 @@
-from  pyquery import PyQuery as pq
-import test_utils
+from pyquery import PyQuery as pq
 from nose.tools import eq_
 
+import amo.tests
 from translations import models, widgets
 
 
-class TestWidget(test_utils.TestCase):
+class TestWidget(amo.tests.TestCase):
 
     def test_avoid_purified_translation(self):
         # Even if we pass in a LinkifiedTranslation the widget switches to a
@@ -16,3 +16,12 @@ class TestWidget(test_utils.TestCase):
         link.clean()
         widget = w.render('name', link)
         eq_(pq(widget).html(), '<b>yum yum</b>')
+
+    def test_default_locale(self):
+        w = widgets.TransTextarea()
+        result = w.render('name', '')
+        eq_(pq(result)('textarea:not([lang=init])').attr('lang'), 'en-us')
+
+        w.default_locale = 'pl'
+        result = w.render('name', '')
+        eq_(pq(result)('textarea:not([lang=init])').attr('lang'), 'pl')

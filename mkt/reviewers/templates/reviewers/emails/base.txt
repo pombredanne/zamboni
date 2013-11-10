@@ -1,0 +1,6 @@
+{% block content %}{% endblock %}
+
+
+--
+Firefox Marketplace
+{{ SITE_URL }}

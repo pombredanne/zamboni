@@ -1,28 +1,29 @@
 # -*- coding: utf-8 -*-
 import json
-import os
 import urlparse
 
-from django.conf import settings
+from django.core.cache import cache
 import django.test
 from django.utils.datastructures import MultiValueDict
 from django.utils import encoding
 
 from mock import patch, Mock
 from nose.tools import eq_
-import path
 from pyquery import PyQuery as pq
-import test_utils
 
 import amo
+import amo.tests
+from access.models import Group, GroupUser
 from addons.models import Addon
 from addons.tests.test_views import TestMobile
 from amo.urlresolvers import reverse
 from amo.utils import urlparams
 from amo.tests.test_helpers import get_uploaded_file
 from bandwagon import forms
-from bandwagon.models import (Collection, CollectionVote, CollectionUser,
-                              CollectionWatcher)
+from bandwagon.models import (Collection, CollectionAddon, CollectionUser,
+                              CollectionVote, CollectionWatcher)
+from bandwagon.views import CollectionFilter
+from browse.tests import TestFeeds
 from devhub.models import ActivityLog
 from users.models import UserProfile
 
@@ -73,18 +74,18 @@ class HappyUnicodeClient(django.test.Client):
     it's interpreted completely different.  I don't even know.
     """
 
-    def get(self, path, *args, **kw):
-        path = encoding.smart_str(path)
-        return super(HappyUnicodeClient, self).get(path, *args, **kw)
+    def get(self, path_, *args, **kw):
+        path_ = encoding.smart_str(path_)
+        return super(HappyUnicodeClient, self).get(path_, *args, **kw)
 
-    def post(self, path, *args, **kw):
-        path = encoding.smart_str(path)
-        return super(HappyUnicodeClient, self).post(path, *args, **kw)
+    def post(self, path_, *args, **kw):
+        path_ = encoding.smart_str(path_)
+        return super(HappyUnicodeClient, self).post(path_, *args, **kw)
 
     # Add head, put, options, delete if you need them.
 
 
-class TestViews(test_utils.TestCase):
+class TestViews(amo.tests.TestCase):
     fixtures = ['users/test_backends', 'bandwagon/test_models',
                 'base/addon_3615']
 
@@ -135,14 +136,19 @@ class TestViews(test_utils.TestCase):
     def test_collection_directory_redirects_with_login(self):
         self.client.login(username='jbalogh@mozilla.com', password='foo')
 
-        tests = [
-            ('/collections/mine', 301,
-             reverse('collections.user', args=['jbalogh'])),
-            ('/collections/favorites/', 301,
-             reverse('collections.following')),
-        ]
-        for test in tests:
-            self.check_response(*test)
+        self.check_response('/collections/favorites/', 301,
+                            reverse('collections.following'))
+
+    def test_unlisted_collection_login_redirect(self):
+        user = UserProfile.objects.get(email='jbalogh@mozilla.com')
+
+        urls = (
+            '/en-US/firefox/collections/mine/',
+            '/en-US/firefox/collections/mine/favorites/',
+            user.favorites_collection().get_url_path(),
+        )
+        for url in urls:
+            self.assertLoginRedirects(self.client.get(url), url)
 
     def test_unreviewed_addon(self):
         u = UserProfile.objects.get(email='jbalogh@mozilla.com')
@@ -156,8 +162,36 @@ class TestViews(test_utils.TestCase):
         response = self.client.get(c.get_url_path())
         eq_(list(response.context['addons'].object_list), [addon])
 
+    def test_mine(self):
+        u = UserProfile.objects.get(email='jbalogh@mozilla.com')
+        addon = addon = Addon.objects.all()[0]
+        c = u.favorites_collection()
+        amo.set_user(u)
+        c.add_addon(addon)
 
-class TestPrivacy(test_utils.TestCase):
+        assert self.client.login(username='jbalogh@mozilla.com',
+                                 password='foo')
+
+        # My Collections.
+        response = self.client.get('/en-US/firefox/collections/mine/')
+        eq_(response.context['author'],
+            UserProfile.objects.get(email='jbalogh@mozilla.com'))
+
+        # My Favorites.
+        response = self.client.get(reverse('collections.detail',
+                                           args=['mine', 'favorites']))
+        eq_(response.status_code, 200)
+        eq_(list(response.context['addons'].object_list), [addon])
+
+    def test_not_mine(self):
+        self.client.logout()
+        r = self.client.get(reverse('collections.user', args=['jbalogh']))
+        eq_(r.context['page'], 'user')
+        assert '#p-mine' not in pq(r.content)('style').text(), (
+            "'Collections I've Made' sidebar link shouldn't be highlighted.")
+
+
+class TestPrivacy(amo.tests.TestCase):
     fixtures = ['users/test_backends']
 
     def setUp(self):
@@ -171,7 +205,11 @@ class TestPrivacy(test_utils.TestCase):
 
     def test_owner(self):
         self.client.login(username='jbalogh@mozilla.com', password='foo')
-        eq_(self.client.get(self.url).status_code, 200)
+        r = self.client.get(self.url)
+        eq_(r.status_code, 200)
+        # TODO(cvan): Uncomment when bug 719512 gets fixed.
+        #eq_(pq(r.content)('.meta .view-stats').length, 1,
+        #    'Add-on authors should be able to view stats')
 
     def test_private(self):
         self.client.logout()
@@ -180,22 +218,29 @@ class TestPrivacy(test_utils.TestCase):
 
     def test_public(self):
         # Make it public, others can see it.
-        eq_(self.client.get(self.url).status_code, 403)
+        self.assertLoginRedirects(self.client.get(self.url), self.url)
         self.c.listed = True
         self.c.save()
-        eq_(self.client.get(self.url).status_code, 200)
+        r = self.client.get(self.url)
+        eq_(r.status_code, 200)
+        eq_(pq(r.content)('.meta .view-stats').length, 0,
+            'Only add-on authors can view stats')
 
     def test_publisher(self):
         self.c.listed = False
         self.c.save()
-        eq_(self.client.get(self.url).status_code, 403)
+        self.assertLoginRedirects(self.client.get(self.url), self.url)
         u = UserProfile.objects.get(email='fligtar@gmail.com')
         CollectionUser.objects.create(collection=self.c, user=u)
         self.client.login(username='fligtar@gmail.com', password='foo')
-        eq_(self.client.get(self.url).status_code, 200)
+        r = self.client.get(self.url)
+        eq_(r.status_code, 200)
+        # TODO(cvan): Uncomment when bug 719512 gets fixed.
+        #eq_(pq(r.content)('.meta .view-stats').length, 1,
+        #    'Add-on authors (not just owners) should be able to view stats')
 
 
-class TestVotes(test_utils.TestCase):
+class TestVotes(amo.tests.TestCase):
     fixtures = ['users/test_backends']
 
     def setUp(self):
@@ -218,7 +263,7 @@ class TestVotes(test_utils.TestCase):
         self.assertRedirects(r, self.c_url)
 
     def check(self, upvotes=0, downvotes=0):
-        c = Collection.uncached.get(slug='slug', author=9945)
+        c = Collection.objects.no_cache().get(slug='slug', author=9945)
         eq_(c.upvotes, upvotes)
         eq_(c.downvotes, downvotes)
         eq_(CollectionVote.objects.filter(user=4043307, vote=1).count(),
@@ -253,19 +298,15 @@ class TestVotes(test_utils.TestCase):
         self.assertRedirects(r, self.c_url)
 
     def test_ajax_response(self):
-        r = self.client.post(self.up, follow=True,
-                             HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        r = self.client.post_ajax(self.up, follow=True)
         assert not r.redirect_chain
         eq_(r.status_code, 200)
 
 
-class TestCRUD(test_utils.TestCase):
+class TestCRUD(amo.tests.TestCase):
     """Test the collection form."""
-    fixtures = ('base/apps',
-                'base/users',
-                'base/addon_3615',
-                'base/collections',
-               )
+    fixtures = ('base/apps', 'base/users', 'base/addon_3615',
+                'base/collections')
 
     def setUp(self):
         self.client = HappyUnicodeClient()
@@ -274,13 +315,13 @@ class TestCRUD(test_utils.TestCase):
         # Oh god it's unicode.
         self.slug = u'\u05d0\u05d5\u05e1\u05e3'
         self.data = {
-                'addon': 3615,
-                'addon_comment': 'fff',
-                'name': u'קווים תחתונים ומקפים בלבד',
-                'slug': self.slug,
-                'description': '',
-                'listed': 'True',
-                }
+            'addon': 3615,
+            'addon_comment': 'fff',
+            'name': u'קווים תחתונים ומקפים בלבד',
+            'slug': self.slug,
+            'description': '',
+            'listed': 'True'
+        }
 
     def login_admin(self):
         assert self.client.login(username='admin@mozilla.com',
@@ -290,10 +331,21 @@ class TestCRUD(test_utils.TestCase):
         assert self.client.login(username='regular@mozilla.com',
                                   password='password')
 
-    def create_collection(self):
+    def create_collection(self, **kw):
+        self.data.update(kw)
         r = self.client.post(self.add_url, self.data, follow=True)
         eq_(r.status_code, 200)
         return r
+
+    def test_restricted(self, **kw):
+        g, created = Group.objects.get_or_create(rules='Restricted:UGC')
+        self.client.login(username='clouserw@gmail.com',
+                          password='password')
+        user = UserProfile.objects.get(id='10482')
+        GroupUser.objects.create(group=g, user=user)
+        self.data.update(kw)
+        r = self.client.post(self.add_url, self.data, follow=True)
+        eq_(r.status_code, 403)
 
     def test_listing_xss(self):
         c = Collection.objects.get(id=80)
@@ -324,12 +376,10 @@ class TestCRUD(test_utils.TestCase):
         If we input addons but fail at filling out the form, don't show
         invisible addons.
         """
-        data = {
-                'addon': 3615,
+        data = {'addon': 3615,
                 'addon_comment': 'fff',
                 'description': '',
-                'listed': 'True',
-                }
+                'listed': 'True'}
 
         r = self.client.post(self.add_url, data, follow=True)
         eq_(pq(r.content)('.errorlist li')[0].text, 'This field is required.')
@@ -352,6 +402,15 @@ class TestCRUD(test_utils.TestCase):
         r = self.client.get(self.add_url)
         eq_(r.status_code, 200)
 
+    def test_breadcrumbs(self):
+        r = self.client.get(self.add_url)
+        expected = [
+            ('Add-ons for Firefox', reverse('home')),
+            ('Collections', reverse('collections.list')),
+            ('Create', None)
+        ]
+        amo.tests.check_links(expected, pq(r.content)('#breadcrumbs li'))
+
     def test_submit(self):
         """Test submission of addons."""
         # TODO(davedash): Test file uploads, test multiple addons.
@@ -360,7 +419,7 @@ class TestCRUD(test_utils.TestCase):
             '/en-US/firefox/collections/admin/%s/' % self.slug)
         c = Collection.objects.get(slug=self.slug)
         eq_(unicode(c.name), self.data['name'])
-        eq_(c.description, None)
+        eq_(c.description, '')
         eq_(c.addons.all()[0].id, 3615)
 
     def test_duplicate_slug(self):
@@ -400,6 +459,29 @@ class TestCRUD(test_utils.TestCase):
         r = self.client.get(url, follow=True)
         eq_(r.status_code, 200)
 
+    def test_edit_contributors_form(self):
+        self.create_collection()
+        url = reverse('collections.edit', args=['admin', self.slug])
+        r = self.client.get(url, follow=True)
+        eq_(Collection.objects.get(slug=self.slug).author_id,
+            long(pq(r.content)('#contributor-ac').attr('data-owner')))
+
+    def test_edit_breadcrumbs(self):
+        c = Collection.objects.all()[0]
+        r = self.client.get(reverse('collections.edit',
+                                    args=[c.author.username, c.slug]))
+        links = pq(r.content.decode('utf-8'))('#breadcrumbs li')
+        expected = [
+            ('Add-ons for Firefox', reverse('home')),
+            ('Collections', reverse('collections.list')),
+            (c.author.name, reverse('collections.user',
+                                    args=[c.author.username])),
+            (c.name, reverse('collections.detail',
+                             args=[c.author.username, c.slug])),
+            ('Edit', None),
+        ]
+        amo.tests.check_links(expected, links)
+
     def test_edit_post(self):
         """Test edit of collection."""
         self.create_collection()
@@ -410,6 +492,29 @@ class TestCRUD(test_utils.TestCase):
         eq_(r.status_code, 200)
         c = Collection.objects.get(slug='halp')
         eq_(unicode(c.name), 'HALP')
+
+    def test_edit_description(self):
+        self.create_collection()
+
+        url = reverse('collections.edit', args=['admin', self.slug])
+        self.data['description'] = 'abc'
+        edit_url = Collection.objects.get(slug=self.slug).edit_url()
+        r = self.client.post(url, self.data)
+        self.assertRedirects(r, edit_url, 302)
+        eq_(unicode(Collection.objects.get(slug=self.slug).description),
+            'abc')
+
+    def test_edit_no_description(self):
+        self.create_collection(description='abc')
+        eq_(Collection.objects.get(slug=self.slug).description, 'abc')
+
+        url = reverse('collections.edit', args=['admin', self.slug])
+        self.data['description'] = ''
+        edit_url = Collection.objects.get(slug=self.slug).edit_url()
+        r = self.client.post(url, self.data)
+        self.assertRedirects(r, edit_url, 302)
+        eq_(unicode(Collection.objects.get(slug=self.slug).description),
+            '')
 
     def test_edit_spaces(self):
         """Let's put lots of spaces and see if they show up."""
@@ -440,6 +545,46 @@ class TestCRUD(test_utils.TestCase):
         r = self.client.get(url)
         eq_(r.status_code, 403)
 
+        url = reverse('collections.edit_privacy', args=url_args)
+        r = self.client.get(url)
+        eq_(r.status_code, 403)
+
+        url = reverse('collections.delete', args=url_args)
+        r = self.client.get(url)
+        eq_(r.status_code, 403)
+
+    def test_acl_collections_edit(self):
+        # Test users in group with 'Collections:Edit' are allowed.
+        user = UserProfile.objects.get(email='regular@mozilla.com')
+        group = Group.objects.create(name='Staff', rules='Collections:Edit')
+        GroupUser.objects.create(user=user, group=group)
+        r = self.client.post(self.add_url, self.data, follow=True)
+        self.login_regular()
+        url_args = ['admin', self.slug]
+
+        url = reverse('collections.edit', args=url_args)
+        r = self.client.get(url)
+        eq_(r.status_code, 200)
+
+        url = reverse('collections.edit_addons', args=url_args)
+        r = self.client.get(url)
+        eq_(r.status_code, 405)
+        # Passed acl check, but this view needs a POST.
+
+        url = reverse('collections.edit_contributors', args=url_args)
+        r = self.client.get(url)
+        eq_(r.status_code, 405)
+        # Passed acl check, but this view needs a POST.
+
+        url = reverse('collections.edit_privacy', args=url_args)
+        r = self.client.get(url)
+        eq_(r.status_code, 405)
+        # Passed acl check, but this view needs a POST.
+
+        url = reverse('collections.delete', args=url_args)
+        r = self.client.get(url)
+        eq_(r.status_code, 200)
+
     def test_edit_favorites(self):
         r = self.client.get(reverse('collections.list'))
         fav = r.context['request'].amo_user.favorites_collection()
@@ -457,9 +602,21 @@ class TestCRUD(test_utils.TestCase):
         eq_(doc('.tab-nav li a[href$=users-edit]').length, 1)
         eq_(doc('#users-edit').length, 1)
 
+    def test_edit_contrib_success_message(self):
+        self.create_collection()
+        url = reverse('collections.edit_contributors',
+                      args=['admin', self.slug])
+        r = self.client.post(url, {'contributor': 999,
+                                   'application_id': 1,
+                                   'type': 1},
+                             follow=True)
+        doc = pq(r.content)('.success')
+        eq_(doc('h2').text(), 'Collection updated!')
+        eq_(doc('p').text(), 'View your collection to see the changes.')
+
     def test_edit_no_contrib_tab(self):
         self.create_collection()
-        c = Collection.uncached.get(slug=self.slug)
+        c = Collection.objects.no_cache().get(slug=self.slug)
         url = c.edit_url()
 
         c.update(type=amo.COLLECTION_FAVORITES)
@@ -484,9 +641,12 @@ class TestCRUD(test_utils.TestCase):
         self.create_collection()
         url = reverse('collections.edit_addons',
                       args=['admin', self.slug])
-        self.client.post(url, {'addon': 3615}, follow=True)
+        r = self.client.post(url, {'addon': 3615}, follow=True)
         addon = Collection.objects.filter(slug=self.slug)[0].addons.all()[0]
         eq_(addon.id, 3615)
+        doc = pq(r.content)('.success')
+        eq_(doc('h2').text(), 'Collection updated!')
+        eq_(doc('p').text(), 'View your collection to see the changes.')
 
     def test_delete(self):
         self.create_collection()
@@ -498,6 +658,22 @@ class TestCRUD(test_utils.TestCase):
         eq_(len(Collection.objects.filter(slug=self.slug)), 1)
         self.client.post(url, dict(sure='1'))
         eq_(len(Collection.objects.filter(slug=self.slug)), 0)
+
+    def test_delete_breadcrumbs(self):
+        c = Collection.objects.all()[0]
+        r = self.client.get(reverse('collections.delete',
+                                    args=[c.author.username, c.slug]))
+        links = pq(r.content.decode('utf-8'))('#breadcrumbs li')
+        expected = [
+            ('Add-ons for Firefox', reverse('home')),
+            ('Collections', reverse('collections.list')),
+            (c.author.name, reverse('collections.user',
+                                    args=[c.author.username])),
+            (c.name, reverse('collections.detail',
+                             args=[c.author.username, c.slug])),
+            ('Delete', None),
+        ]
+        amo.tests.check_links(expected, links)
 
     @patch('access.acl.action_allowed')
     def test_admin(self, f):
@@ -528,8 +704,6 @@ class TestCRUD(test_utils.TestCase):
         doc = pq(r.content)
         eq_(len(doc('a.delete')), 2)
 
-        # TODO: bug 590305
-        return
         self.login_regular()
         r = self.client.get(url)
         eq_(r.status_code, 200)
@@ -578,7 +752,7 @@ class TestCRUD(test_utils.TestCase):
         eq_(unicode(newc.name), 'new name')
 
 
-class TestChangeAddon(test_utils.TestCase):
+class TestChangeAddon(amo.tests.TestCase):
     fixtures = ['users/test_backends']
 
     def setUp(self):
@@ -595,7 +769,7 @@ class TestChangeAddon(test_utils.TestCase):
     def check_redirect(self, request):
         url = '%s?addon_id=%s' % (reverse('collections.ajax_list'),
                                   self.addon.id)
-        self.assertRedirects(request, url)
+        self.assert3xx(request, url)
 
     def test_login_required(self):
         self.client.logout()
@@ -613,8 +787,7 @@ class TestChangeAddon(test_utils.TestCase):
 
     def test_publisher(self):
         CollectionUser.objects.create(user_id=4043307, collection=self.flig)
-        r = self.client.post(self.flig_add, {'addon_id': self.addon.id},
-                             HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        r = self.client.post_ajax(self.flig_add, {'addon_id': self.addon.id})
         self.check_redirect(r)
 
     def test_no_addon(self):
@@ -622,8 +795,7 @@ class TestChangeAddon(test_utils.TestCase):
         eq_(r.status_code, 400)
 
     def test_add_success(self):
-        r = self.client.post(self.add, {'addon_id': self.addon.id},
-                             HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        r = self.client.post_ajax(self.add, {'addon_id': self.addon.id})
         self.check_redirect(r)
         c = Collection.objects.get(author__username='jbalogh', slug='mobile')
         self.assert_(self.addon in c.addons.all())
@@ -633,17 +805,14 @@ class TestChangeAddon(test_utils.TestCase):
         """
         When we add to a private collection, make sure we don't log anything.
         """
-        self.client.post(self.add, {'addon_id': self.addon.id},
-                         HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        self.client.post_ajax(self.add, {'addon_id': self.addon.id})
         # There should be no log objects for this add-on
         eq_(len(ActivityLog.objects.for_addons(self.addon)), 0)
 
     def test_add_existing(self):
-        r = self.client.post(self.add, {'addon_id': self.addon.id},
-                             HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        r = self.client.post_ajax(self.add, {'addon_id': self.addon.id})
         self.check_redirect(r)
-        r = self.client.post(self.add, {'addon_id': self.addon.id},
-                             HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        r = self.client.post_ajax(self.add, {'addon_id': self.addon.id})
         self.check_redirect(r)
         c = Collection.objects.get(author__username='jbalogh', slug='mobile')
         self.assert_(self.addon in c.addons.all())
@@ -654,28 +823,23 @@ class TestChangeAddon(test_utils.TestCase):
         When we remove from a private collection, make sure we don't log
         anything.
         """
-        self.client.post(self.add, {'addon_id': self.addon.id},
-                         HTTP_X_REQUESTED_WITH='XMLHttpRequest')
-        self.client.post(self.remove, {'addon_id': self.addon.id},
-                         HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        self.client.post_ajax(self.add, {'addon_id': self.addon.id})
+        self.client.post_ajax(self.remove, {'addon_id': self.addon.id})
         # There should be no log objects for this add-on
         eq_(len(ActivityLog.objects.for_addons(self.addon)), 0)
 
     def test_remove_success(self):
-        r = self.client.post(self.add, {'addon_id': self.addon.id},
-                             HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        r = self.client.post_ajax(self.add, {'addon_id': self.addon.id})
         self.check_redirect(r)
 
-        r = self.client.post(self.remove, {'addon_id': self.addon.id},
-                             HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        r = self.client.post_ajax(self.remove, {'addon_id': self.addon.id})
         self.check_redirect(r)
 
         c = Collection.objects.get(author__username='jbalogh', slug='mobile')
         eq_(c.addons.count(), 0)
 
     def test_remove_nonexistent(self):
-        r = self.client.post(self.remove, {'addon_id': self.addon.id},
-                             HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        r = self.client.post_ajax(self.remove, {'addon_id': self.addon.id})
         self.check_redirect(r)
         c = Collection.objects.get(author__username='jbalogh', slug='mobile')
         eq_(c.addons.count(), 0)
@@ -687,10 +851,9 @@ class TestChangeAddon(test_utils.TestCase):
                                         args=['jbalogh', 'mobile']))
 
 
-class AjaxTest(test_utils.TestCase):
+class AjaxTest(amo.tests.TestCase):
     fixtures = ('base/apps', 'base/users', 'base/addon_3615',
-                'base/addon_5299_gcal',
-                'base/collections')
+                'base/addon_5299_gcal', 'base/collections')
 
     def setUp(self):
         assert self.client.login(username='clouserw@gmail.com',
@@ -705,9 +868,8 @@ class AjaxTest(test_utils.TestCase):
         eq_(doc('li').attr('data-id'), '80')
 
     def test_add_collection(self):
-        r = self.client.post(reverse('collections.ajax_add'),
-                             {'addon_id': 3615, 'id': 80}, follow=True,
-                             HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        r = self.client.post_ajax(reverse('collections.ajax_add'),
+                                  {'addon_id': 3615, 'id': 80}, follow=True)
         doc = pq(r.content)
         eq_(doc('li.selected').attr('data-id'), '80')
 
@@ -724,12 +886,8 @@ class AjaxTest(test_utils.TestCase):
     def test_new_collection(self):
         num_collections = Collection.objects.all().count()
         r = self.client.post(reverse('collections.ajax_new'),
-                {'addon_id': 5299,
-                 'name': 'foo',
-                 'slug': 'auniqueone',
-                 'description': 'yermom',
-                 'listed': True},
-                follow=True)
+                {'addon_id': 5299, 'name': 'foo', 'slug': 'auniqueone',
+                 'description': 'yermom', 'listed': True}, follow=True)
         doc = pq(r.content)
         eq_(len(doc('li.selected')), 1, "The new collection is not selected.")
         eq_(Collection.objects.all().count(), num_collections + 1)
@@ -760,7 +918,7 @@ class AjaxTest(test_utils.TestCase):
         eq_(self.client.get(url).status_code, 400)
 
 
-class TestWatching(test_utils.TestCase):
+class TestWatching(amo.tests.TestCase):
     fixtures = ['base/users', 'base/collection_57181']
 
     def setUp(self):
@@ -793,13 +951,12 @@ class TestWatching(test_utils.TestCase):
         eq_(r.context['amo_user'].watching, [57181])
 
     def test_ajax_response(self):
-        r = self.client.post(self.url, follow=True,
-                             HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        r = self.client.post_ajax(self.url, follow=True)
         eq_(r.status_code, 200)
         eq_(json.loads(r.content), {'watching': True})
 
 
-class TestSharing(test_utils.TestCase):
+class TestSharing(amo.tests.TestCase):
     fixtures = ['base/collection_57181']
 
     def test_twitter_share(self):
@@ -821,7 +978,100 @@ class TestSharing(test_utils.TestCase):
         eq_(r.status_code, 404)
 
 
-class TestFeeds(test_utils.TestCase):
+class TestCollectionFeed(TestFeeds):
+    fixtures = TestFeeds.fixtures
+
+    def setUp(self):
+        super(TestCollectionFeed, self).setUp()
+        self.url = reverse('collections.list')
+        self.rss_url = reverse('collections.rss')
+        self.filter = CollectionFilter
+
+
+class TestCollectionListing(amo.tests.TestCase):
+    fixtures = ['base/apps', 'base/users', 'base/addon_3615', 'base/category',
+                'base/featured', 'addons/featured', 'addons/listed',
+                'base/collections', 'bandwagon/featured_collections']
+
+    def setUp(self):
+        cache.clear()
+        self.url = reverse('collections.list')
+
+    def test_default_sort(self):
+        r = self.client.get(self.url)
+        eq_(r.context['sorting'], 'featured')
+
+    def test_featured_sort(self):
+        r = self.client.get(urlparams(self.url, sort='featured'))
+        sel = pq(r.content)('#sorter ul > li.selected')
+        eq_(sel.find('a').attr('class'), 'opt')
+        eq_(sel.text(), 'Featured')
+
+    def test_users_redirect(self):
+        """Test that 'users' sort redirects to 'followers' sort."""
+        r = self.client.get(urlparams(self.url, sort='users'))
+        self.assertRedirects(r, urlparams(self.url, sort='followers'), 301)
+
+    def test_mostsubscribers_sort(self):
+        r = self.client.get(urlparams(self.url, sort='followers'))
+        sel = pq(r.content)('#sorter ul > li.selected')
+        eq_(sel.find('a').attr('class'), 'opt')
+        eq_(sel.text(), 'Most Followers')
+        c = r.context['collections'].object_list
+        eq_(list(c), sorted(c, key=lambda x: x.subscribers, reverse=True))
+
+    def test_newest_sort(self):
+        r = self.client.get(urlparams(self.url, sort='created'))
+        sel = pq(r.content)('#sorter ul > li.selected')
+        eq_(sel.find('a').attr('class'), 'opt')
+        eq_(sel.text(), 'Newest')
+        c = r.context['collections'].object_list
+        eq_(list(c), sorted(c, key=lambda x: x.created, reverse=True))
+
+    def test_name_sort(self):
+        r = self.client.get(urlparams(self.url, sort='name'))
+        sel = pq(r.content)('#sorter ul > li.selected')
+        eq_(sel.find('a').attr('class'), 'extra-opt')
+        eq_(sel.text(), 'Name')
+        c = r.context['collections'].object_list
+        eq_(list(c), sorted(c, key=lambda x: x.name))
+
+    def test_updated_sort(self):
+        r = self.client.get(urlparams(self.url, sort='updated'))
+        sel = pq(r.content)('#sorter ul > li.selected')
+        eq_(sel.find('a').attr('class'), 'extra-opt')
+        eq_(sel.text(), 'Recently Updated')
+        c = r.context['collections'].object_list
+        eq_(list(c), sorted(c, key=lambda x: x.modified, reverse=True))
+
+    def test_popular_sort(self):
+        r = self.client.get(urlparams(self.url, sort='popular'))
+        sel = pq(r.content)('#sorter ul > li.selected')
+        eq_(sel.find('a').attr('class'), 'extra-opt')
+        eq_(sel.text(), 'Recently Popular')
+        c = r.context['collections'].object_list
+        eq_(list(c),
+            sorted(c, key=lambda x: x.weekly_subscribers, reverse=True))
+
+    def test_added_date(self):
+        doc = pq(self.client.get(urlparams(self.url, sort='created')).content)
+        eq_(doc('.items .item .updated').text().startswith('Added'), True)
+
+    def test_updated_date(self):
+        d = pq(self.client.get(urlparams(self.url, sort='updated')).content)
+        eq_(d('.items .item .updated').text().startswith('Updated'), True)
+
+    def test_mostsubscribers_adu_unit(self):
+        d = pq(self.client.get(urlparams(self.url, sort='followers')).content)
+        eq_('follower' in d('.items .item .followers').text(), True)
+        eq_('weekly follower' in d('.items .item .followers').text(), False)
+
+    def test_popular_adu_unit(self):
+        d = pq(self.client.get(urlparams(self.url, sort='popular')).content)
+        eq_('weekly follower' in d('.items .item .followers').text(), True)
+
+
+class TestCollectionDetailFeed(amo.tests.TestCase):
     fixtures = ['base/collection_57181']
 
     def setUp(self):
@@ -842,6 +1092,22 @@ class TestFeeds(test_utils.TestCase):
         self.collection.update(listed=False)
         eq_(self.client.get(self.feed_url).status_code, 404)
 
+    def test_feed_json(self):
+        theme = amo.tests.addon_factory(type=amo.ADDON_PERSONA)
+        CollectionAddon.objects.create(addon=theme, collection=self.collection)
+        res = self.client.get(self.collection.get_url_path() + 'format:json')
+        data = json.loads(res.content)
+
+        eq_(len(data['addons']), 1)
+        eq_(data['addons'][0]['id'], theme.id)
+
+        eq_(data['addons'][0]['type'], 'background-theme')
+        eq_(data['addons'][0]['theme']['id'],
+            unicode(theme.persona.persona_id))
+
+        assert data['addons'][0]['theme']['header']
+        assert data['addons'][0]['theme']['footer']
+
 
 class TestMobileCollections(TestMobile):
 
@@ -849,28 +1115,10 @@ class TestMobileCollections(TestMobile):
     def test_collections(self):
         r = self.client.get(reverse('collections.list'))
         eq_(r.status_code, 200)
-        self.assertTemplateUsed(r, 'bandwagon/collection_listing.html')
+        self.assertTemplateUsed(r, 'bandwagon/impala/collection_listing.html')
 
 
-class TestMine(test_utils.TestCase):
-    fixtures = ['base/users']
-
-    def setUp(self):
-        assert self.client.login(username='admin@mozilla.com',
-                                 password='password')
-
-    def test_mine(self):
-        r = self.client.get(reverse('collections.mine'), follow=True)
-        self.assertRedirects(r, reverse('collections.user', args=['admin']))
-
-    def test_favorites(self):
-        r = self.client.get(reverse('collections.mine', args=['favorites']),
-                            follow=True)
-        expected = reverse('collections.detail', args=['admin', 'favorites'])
-        self.assertRedirects(r, expected)
-
-
-class TestCollectionForm(test_utils.TestCase):
+class TestCollectionForm(amo.tests.TestCase):
     fixtures = ['base/collection_57181']
 
     @patch('amo.models.ModelBase.update')
@@ -882,13 +1130,9 @@ class TestCollectionForm(test_utils.TestCase):
                          'slug': collection.slug,
                          'name': collection.name},
                         instance=collection,
-                        files= {'icon': get_uploaded_file('transparent.png')},
-                        initial= {'author':collection.author,
-                                 'application_id':collection.application.pk})
-        dest = (path.path(settings.COLLECTIONS_ICON_PATH) / 'uploads' /
-                          'collection_icons' / '57')
-        if not os.path.exists(dest):
-            os.makedirs(dest)
+                        files={'icon': get_uploaded_file('transparent.png')},
+                        initial={'author': collection.author,
+                                 'application_id': collection.application.pk})
         assert form.is_valid()
         form.save()
         assert update_mock.called

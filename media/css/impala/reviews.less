@@ -1,5 +1,120 @@
 @import 'lib';
 
+#reviews {
+    p#add-first-review, p#no-add-first-review {
+        font: 16px @serif-stack;
+        margin: 0;
+    }
+    form {
+        background-color: @faded-blue;
+        padding: 1em 0;
+
+        fieldset, footer {
+            padding: 0 1em;
+        }
+        fieldset {
+            margin: 0;
+        }
+        footer {
+            input, button {
+                margin-right: .25em;
+            }
+            button {
+                float: none;
+            }
+            a {
+                padding-left: .25em;
+            }
+        }
+    }
+    h2 + .article,
+    h2 + .items {
+        border-top: 1px dotted @border-blue;
+    }
+    h2 + .article {
+        padding: 1em;
+    }
+    h2 + .items {
+        padding-top: 1em;
+    }
+}
+
+.html-rtl #reviews form footer {
+    input, button {
+        margin: 0 .25em 0 0;
+    }
+    a {
+        padding: 0 .25em;
+    }
+}
+
+#reviews .review {
+    border-bottom: 1px dotted @border-blue;
+    overflow: hidden;
+
+    &.flagged {
+        opacity: .6;
+        -moz-transition: .2s opacity ease;
+    }
+    &.no-reviews {
+        border-bottom: 0;
+
+        h3 {
+            font-style: normal;
+        }
+    }
+    padding: 1em 0;
+    h3, h4 {
+        color: #333;
+        font-size: 16px;
+        line-height: 16px;
+        font-style: italic;
+
+        .stars {
+            padding: 1px 0;
+        }
+        b:not(:empty) {
+            margin-right: .5em;
+        }
+    }
+    h3.addon-name {
+        font-style: normal;
+        font-weight: bold;
+        margin: 0 0 .5em;
+    }
+    h4 {
+        font-size: 14px;
+    }
+    .byline {
+        font-style: italic;
+        margin: 2px 0;
+        color: #999;
+        font-size: 12px;
+
+        a {
+            color: #666;
+        }
+    }
+    .description {
+        margin: 1em 0 0;
+        color: #333;
+    }
+    &.reply {
+        padding-left: 56px;
+    }
+    &:first-child {
+        padding-top: 0;
+    }
+}
+
+.html-rtl #reviews .review {
+    h3, h4 {
+        b:not(:empty) {
+            margin: 0 0 0 .5em;
+        }
+    }
+}
+
 .stars {
     display: inline-block;
     vertical-align: middle;
@@ -8,6 +123,7 @@
     background: url(../../img/impala/stars.png) no-repeat left top;
     text-indent: -9999px;
     margin-right: 4px;
+
     &.stars-4 { background-position: -13px 0; }
     &.stars-3 { background-position: -26px 0; }
     &.stars-2 { background-position: -39px 0; }
@@ -18,6 +134,7 @@
         background: url(../../img/impala/stars-16.png) no-repeat left top;
         width: 89px;
         height: 16px;
+
         &.stars-4 { background-position: -18px 0; }
         &.stars-3 { background-position: -36px 0; }
         &.stars-2 { background-position: -54px 0; }
@@ -26,16 +143,43 @@
 }
 
 .html-rtl .stars {
-    margin-right: 0;
-    margin-left: 4px;
+    margin: 0 0 0 4px;
 }
 
-
 /* grouped ratings style */
+
+.no-rating strong {
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.average-rating {
+    position: relative;
+    padding-left: 74px;
+
+    strong {
+        font-weight: bold;
+    }
+    .stars {
+        position: absolute;
+        left: 0;
+        top: 2px;
+    }
+}
+.html-rtl .average-rating {
+    padding-left: 0;
+    padding-right: 74px;
+
+    .stars {
+        left: auto;
+        right: 0;
+    }
+}
 
 .grouped_ratings {
     font-family: @sans-stack;
     color: #666;
+
     li {
         margin: 0;
         padding: 0;
@@ -48,6 +192,7 @@
         width: 0px;
         overflow: visible;
         width: 96px;
+
         span.bar {
             display:block;
             height: 100%;
@@ -64,18 +209,48 @@
         top: -2px;
         line-height: 12px;
         font-size: 10px;
+        word-wrap: normal;
     }
     .stars {
         float: left;
-        margin: 4px 8px 0 0 ;
+        margin: 4px 8px 0 0;
+    }
+}
+
+.review-reason {
+    a {
+        display: block;
+    }
+}
+.other-note {
+    display: none;
+    clear: left;
+    padding: 8px 0 0;
+
+    input[type='text'] {
+        width: 138px;
+        margin-right: 8px;
+        padding: 7px;
+    }
+    input[type='submit'] {
+        margin-top: -2px;
+    }
+}
+.other {
+    .other-note {
+        display: block;
     }
 }
 
 .html-rtl .grouped_ratings {
+    .stars {
+        float: right;
+        margin: 4px 0 0 8px;
+    }
     .rating_bar {
         border-left: 0;
         border-right: 1px solid black;
-        float: right;
+
         span.bar {
             float: right;
             margin: .4em 0 0 .5em;
@@ -92,6 +267,7 @@
 }
 #review-box {
     position: relative;
+
     form {
         width: 50%;
         height: 212px;
@@ -104,6 +280,7 @@
     }
     div {
         padding-left: 50%;
+
         p {
             padding-left: 1em;
         }
@@ -115,10 +292,10 @@
 }
 
 .ratingwidget {
-    display: block;
+    display: inline-block;
     float: none;
     width: 65px;
-    margin-bottom: 1em;
+
     input {
         display: none;
     }
@@ -128,11 +305,5 @@
         float: left;
         width: 13px;
         cursor: pointer;
-    }
-}
-.html-rtl {
-    .ratingwidget label {
-        text-indent: 5000px;
-        float: right;
     }
 }

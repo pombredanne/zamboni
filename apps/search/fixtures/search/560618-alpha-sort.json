@@ -39,7 +39,7 @@
             "localized_string": "asmi search engine powered by Google",
             "created": "2009-04-08 14:17:45",
             "locale": "en-US",
-            "modified": null,
+            "modified": "2010-01-02 12:34:56",
             "id": 360143
         }
     },
@@ -58,7 +58,6 @@
         "pk": 1,
         "model": "files.platform",
         "fields": {
-            "icontype": "",
             "modified": "2008-04-07 08:16:55",
             "created": "2007-03-05 13:09:27"
         }
@@ -80,7 +79,6 @@
             "guid": null,
             "trusted": 0,
             "locale_disambiguation": null,
-            "binary": 0,
             "the_future": null,
             "weekly_downloads": 42,
             "paypal_id": "",
@@ -89,7 +87,6 @@
             "average_daily_users": 0,
             "bayesian_rating": 4.0878300000000003,
             "share_count": 0,
-            "get_satisfaction_company": null,
             "public_stats": 0,
             "status": 4,
             "privacy_policy": null,
@@ -100,7 +97,6 @@
             "admin_review": 0,
             "external_software": 0,
             "highest_status": 4,
-            "get_satisfaction_product": null,
             "name": 360143,
             "created": "2009-04-08 14:13:21",
             "type": 4,

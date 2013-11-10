@@ -16,7 +16,6 @@
             "the_future": null,
             "trusted": 0,
             "locale_disambiguation": "",
-            "binary": 0,
             "guid": "{2b925cbe-58ce-4af4-a62b-4bdd210045ca}",
             "weekly_downloads": 14,
             "support_url": null,
@@ -26,7 +25,6 @@
             "average_daily_users": 1527,
             "bayesian_rating": 4.08012,
             "share_count": 0,
-            "get_satisfaction_company": "",
             "homepage": null,
             "support_email": null,
             "public_stats": 0,
@@ -39,7 +37,6 @@
             "admin_review": 0,
             "external_software": 0,
             "highest_status": 4,
-            "get_satisfaction_product": "",
             "name": null,
             "created": "2007-01-02 16:57:55",
             "type": 1,
@@ -69,7 +66,6 @@
         "model": "addons.category",
         "fields": {
             "count": 8,
-            "description": null,
             "weight": 0,
             "created": "2007-03-05 13:09:27",
             "modified": "2010-01-20 02:03:03",
@@ -90,6 +86,16 @@
         }
     },
     {
+        "pk": 7430,
+        "model": "addons.addoncategory",
+        "fields": {
+            "category": 22,
+            "feature_locales": null,
+            "feature": 1,
+            "addon": 3481
+        }
+    },
+    {
         "pk": 1002,
         "model": "addons.addon",
         "fields": {
@@ -104,7 +110,6 @@
             "the_future": null,
             "trusted": 0,
             "locale_disambiguation": "",
-            "binary": 0,
             "guid": "{f20592f7-9db4-4ce1-b4b0-8c509a949949}",
             "weekly_downloads": 0,
             "support_url": null,
@@ -114,7 +119,6 @@
             "average_daily_users": 1482,
             "bayesian_rating": 4.12392,
             "share_count": 0,
-            "get_satisfaction_company": "",
             "homepage": null,
             "support_email": null,
             "public_stats": 0,
@@ -127,7 +131,6 @@
             "admin_review": 0,
             "external_software": 0,
             "highest_status": 1,
-            "get_satisfaction_product": "",
             "name": null,
             "created": "2004-06-11 18:23:31",
             "type": 2,
@@ -157,7 +160,6 @@
             "the_future": null,
             "trusted": 1,
             "locale_disambiguation": "",
-            "binary": 0,
             "guid": "{d10d0bf8-f5b5-c8b4-a8b2-2b9879e08c5d}",
             "weekly_downloads": 916,
             "support_url": null,
@@ -177,7 +179,6 @@
             "admin_review": 0,
             "external_software": 0,
             "highest_status": 4,
-            "get_satisfaction_product": "",
             "name": null,
             "created": "2006-01-17 07:28:30",
             "type": 1,
@@ -254,7 +255,7 @@
             "platform": 1,
             "version": 1001,
             "datestatuschanged": "2007-04-04 12:30:11",
-            "size": 169
+            "size": 173056
         }
     },
     {
@@ -270,7 +271,7 @@
             "platform": 1,
             "version": 1003,
             "modified": "2007-04-04 12:30:11",
-            "size": 169
+            "size": 173056
         }
     }
 ]

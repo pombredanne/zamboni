@@ -10,35 +10,63 @@ z.MAX_UPANDCOMING = 5;
 
 // Parse GUIDS of installed extensions from JSON fragment.
 z.guids = getGuids();
+z.has_addons = z.guids.length >= z.MIN_EXTENSIONS;
 
 z.discoStorage = z.Storage("discopane");
 
 
 $(document).ready(function(){
-    if ($(".pane").length) {
-        initSidebar();
+    if (!$('.pane').length) {
+        return;
+    }
 
-        // Store the pane URL so we can link back from the add-on detail pages.
-        z.discoStorage.set("url", location);
+    initSidebar();
+    // Store the pane URL so we can link back from the add-on detail pages.
+    z.discoStorage.set('url', location);
+    hideInstalled();
+    initRecs();
 
-        hideInstalled();
+    initPromos(null, 'discovery');
+    $(this).bind('promos_shown', function(e, $promos) {
+        if($('#learn-more').hasClass('video')) { // Is the video available?
+            var starter = $('#starter').closest('.panel'),
+            s_panel = $('<li>', {'class': 'panel'}),
+            s_div = $('<div>', {'class': 'feature promo', 'id': 'addon-video-promo'}),
+            s_title = $('<h2>', {'text': 'First time with Add-ons?'}),
+            s_sub = $('<h3>', {'text': 'Check out our interactive video to learn about some of the awesome things you can do with add-ons!'}),
+            s_button = $('<a>', {'html': '<strong>Watch</strong> the Video', 'href': '#'}),
+            s_button_span = $('<span>', {'class': 'vid-button view-button'}),
+            s_guy = $('<div>', {'class': 'vid-guy'});
 
-        // Show "Starter Pack" panel only if user has fewer than three extensions.
-        if (z.guids.length >= z.MIN_EXTENSIONS) {
-            $("#starter").closest(".panel").remove();
+            starter.replaceWith(s_panel);
+            s_panel.append(s_div);
+            s_div.append(s_title);
+            s_div.append(s_sub);
+            s_button_span.append(s_button);
+            s_div.append(s_button_span);
+            s_div.append(s_guy);
+        } else if (z.has_addons) {
+            // Show "Starter Pack" panel only if user has fewer than 3 extensions.
+            $('#starter').closest('.panel').remove();
         }
-
-        initRecs();
-
         // Set up the promo carousel.
-        $("#main-feature").fadeIn("slow").addClass("js").zCarousel({
-            btnNext: "#main-feature .nav-next a",
-            btnPrev: "#main-feature .nav-prev a",
+        $promos.fadeIn('slow').addClass('js').zCarousel({
+            btnNext: '#promos .nav-next a',
+            btnPrev: '#promos .nav-prev a',
             circular: true
         });
 
+        // Intialize the pager for any paging promos
+        $('.pager', $promos).promoPager();
+
         initTrunc();
-    }
+        // Initialize install button.
+        $('.install', $promos).installButton();
+        var $disabled = $('.disabled, .concealed', $promos);
+        if ($disabled.length) {
+            $disabled.closest('.wrap').addClass('hide-install');
+        }
+    });
 });
 
 
@@ -60,9 +88,13 @@ function initTrunc() {
     // Trim the add-on title and description text to fit.
     $('.htruncate').truncate({dir: 'h'});
     $('.vtruncate').truncate({dir: 'v'});
+    $('#monthly .blurb > p').lineclamp(4);
+    $('.ryff .desc').lineclamp(6);
+    $('#promos h2:not(.multiline)').linefit();
     $(window).resize(debounce(function() {
         $('.htruncate').truncate({dir: 'h'});
         $('.vtruncate').truncate({dir: 'v'});
+        $('#promos h2:not(.multiline)').linefit();
     }, 200));
 }
 
@@ -81,7 +113,7 @@ function initSidebar() {
 function hideInstalled() {
     // Do not show installed extensions in the promo modules or sidebar.
     $.each(z.guids, function(i, val) {
-        var $el = $('li[data-guid=' + val + ']');
+        var $el = $(format('li[data-guid="{0}"]', [val]));
         if ($el.length && $el.siblings().length) {
             $el.remove();
         }
@@ -93,21 +125,23 @@ function hideInstalled() {
         if (numListed < minSpots) {
             var emptySpots = minSpots - numListed;
             $.get(url, function(data) {
-                $.each($(data).find('li'), function() {
-                    var $el = $(this),
-                        guid = $el.attr('data-guid');
-                    // Ensure that the add-on isn't already in the list and
-                    // that it's not already installed by the user.
-                    if (!ul.find('li[data-guid=' + guid + ']').length &&
-                        $.inArray(guid, z.guids) === -1) {
-                        ul.append($el);
-                        // We're done if all spots have been filled.
-                        if (emptySpots-- == 1) {
-                            return false;
+                if ($.trim(data)) {
+                    $.each($(data).find('li'), function() {
+                        var $el = $(this),
+                            guid = $el.attr('data-guid');
+                        // Ensure that the add-on isn't already in the list and
+                        // that it's not already installed by the user.
+                        if (!ul.find(format('li[data-guid="{0}"]', [guid])).length &&
+                            $.inArray(guid, z.guids) === -1) {
+                            ul.append($el);
+                            // We're done if all spots have been filled.
+                            if (emptySpots-- == 1) {
+                                return false;
+                            }
                         }
-                    }
-                });
-                initTrunc();
+                    });
+                    initTrunc();
+                }
             });
         }
     }
@@ -138,12 +172,12 @@ function initRecs() {
             var addon_item = template('<li class="panel addon-feature">' +
                 '<a href="{url}" target="_self">' +
                 '<img src="{icon}" width="32" height="32">' +
-                '<h3 class="vtruncate">{name}</h3>' +
+                '<h3 class="htruncate">{name}</h3>' +
                 '<p class="desc vtruncate">{summary}</p>' +
                 '</a></li>');
             var persona_item = template('<li class="panel persona-feature">' +
                 '<a href="{url}" target="_self">' +
-                '<h3 class="vtruncate">{name}</h3>' +
+                '<h3 class="htruncate">{name}</h3>' +
                 '<div class="persona persona-large">' +
                 '<div class="persona-inner">' +
                 '<div class="persona-preview">' +
@@ -172,7 +206,8 @@ function initRecs() {
             $("#recs .gallery").fadeIn("slow").addClass("js").zCarousel({
                 btnNext: "#recs .nav-next a",
                 btnPrev: "#recs .nav-prev a",
-                itemsPerPage: 3
+                itemsPerPage: 3,
+                prop: "left"  // LTR looks better even for RTL.
             });
             $("#recs #nav-recs").fadeIn("slow").addClass("js");
             initTrunc();

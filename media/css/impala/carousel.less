@@ -5,6 +5,7 @@
     display: block;
     position: relative;
     top: -4px;
+
     .prev, .next {
         height: 20px;
         width: 16px;
@@ -28,6 +29,7 @@
         padding: 2px 4px 6px;
         margin-bottom: 4px;
         overflow: hidden;
+
         b {
             display: block;
             text-indent: -1000em;
@@ -41,6 +43,7 @@
         }
         &:hover {
             text-decoration: none;
+
             b {
                 background: #888;
             }
@@ -54,6 +57,15 @@
     .island .pager {
         float: left;
     }
+}
+
+.pages {
+    position: relative;
+    height: 271px;
+    top: 0;
+    left: 0;
+    .transition-duration(.3s);
+    .transition-property(top bottom);
 }
 
 .slider {
@@ -76,6 +88,7 @@
     -webkit-transition: none;
 }
 
+.pages > li,
 .slider > li {
     width: 100%;
     white-space: normal;

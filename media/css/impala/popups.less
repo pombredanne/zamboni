@@ -1,18 +1,7 @@
-/** Button =Popups *********/
+@import 'lib';
+
 .install {
     position: relative;
-}
-
-.popup-shim {
-    position: relative;
-}
-div.popup-shim {
-    display: inline-block;
-}
-
-.popup p:last-child,
-.popup ul:last-child {
-    margin-bottom: 0;
 }
 
 .install-note .msg,
@@ -27,16 +16,20 @@ div.popup-shim {
 .thunderbird .install-note .msg, .thunderbird.app { background-image: url(../../img/app-icons/small/thunderbird.png); }
 .sunbird .install-note .msg, .sunbird.app { background-image: url(../../img/app-icons/small/sunbird.png); }
 .seamonkey .install-note .msg, .seamonkey.app { background-image: url(../../img/app-icons/small/seamonkey.png); }
+.android .install-note .msg, .android.app { background-image: url(../../img/app-icons/small/android.png); }
 .mz.app { background-image: url(../../img/app-icons/small/mozilla.png); }
 
 .install-note .msg.m-unreviewed,
-.install-note .msg.m-selfhosted,
 .popup.warning .msg {
     background-image: url(../../img/zamboni/icons/alert-32x32.png);
 }
 
 .install-note .msg.m-platforms {
     background-image: url(../../img/zamboni/icons/no-32x32.png);
+}
+
+.install-note .msg.m-not-compatible li {
+    list-style-type: disc;
 }
 
 .install-note .beta {
@@ -56,20 +49,21 @@ div.popup-shim {
 .modal {
     position: absolute;
     left: -15px;
+    line-height: 15px;
     margin-top: 5px;
     background: #fff;
     padding: 10px;
     border: 3px solid #2e5186;
-    -moz-border-radius: 8px;
-    -webkit-border-radius: 8px;
-    border-radius: 8px;
-    -moz-box-shadow: 0 1px 3px rgba(0,0,0,0.35);
-    -webkit-box-shadow: 0 1px 3px rgba(0,0,0,0.35);
-    box-shadow: 0 1px 3px rgba(0,0,0,0.35);
-    z-index: 2001; /* because of devhub title */
+    .border-radius(8px);
+    .box-shadow(0 1px 3px rgba(0,0,0,0.35));
+    z-index: 2001;
+}
+.modal {
+    width: 300px;
 }
 .modal, .popup {
     padding: 1em;
+
     form {
         margin: 0;
     }
@@ -77,11 +71,15 @@ div.popup-shim {
         margin-top: 0;
         color: #2e5186;
     }
+    h4 {
+        margin-bottom: 4px;
+    }
 }
 
 .popup {
     h3 {
-        font-size: 18px;
+        color: @dark-gray;
+        font: italic 18px @serif-stack;
         margin-bottom: 1em;
     }
     fieldset {
@@ -89,17 +87,51 @@ div.popup-shim {
         margin-bottom: 1.5em;
         padding-bottom: 1em;
     }
+    li {
+        line-height: 1.5em;
+    }
+    ul:last-child {
+        margin-bottom: 0;
+    }
 }
 .modal-delete h3 {
     color: #6c1a1a;
 }
-.install-note {
-    width: 300px;
+
+.install .install-note > *,
+.popup.warning > * {
+    margin-top: 1em;
+    padding-left: 50px;
 }
+
+.install .install-note {
+    width: 300px;
+
+    .msg:first-child {
+        margin: 0;
+    }
+    ol, ul, p:first-child {
+        margin: 0;
+    }
+    ol {
+        list-style: decimal;
+    }
+    ul {
+        list-style: none;
+    }
+    li {
+        margin: 1em 0;
+    }
+}
+
+.primary .install-note > p:first-child {
+    margin-top: 0;
+}
+
 /* append the left class if the bubble is to the far right */
 .install-note.left,
 .popup.left {
-    left: -160px;
+    left: -170px;
 }
 
 .unreviewed .install-note,
@@ -116,8 +148,6 @@ div.popup-shim {
 .modal-overlay {
     background-color: #fff;
     height: 100%;
-    -khtml-opacity: 0.75;
-    -moz-opacity: 0.75;
     opacity: 0.75;
     position: fixed;
     top: 0;
@@ -178,15 +208,39 @@ div.popup-shim {
     left: auto;
 }
 
-.install .install-note > *,
-.popup.warning > * {
-    margin-bottom: 1em;
-    padding-left: 50px;
-}
-
 .install .install-note strong,
 .popup strong {
     margin: 0;
     color: inherit;
     font-size: inherit;
+}
+
+.d2c-reasons-popup {
+    display: none;
+
+    ul {
+        margin: 1em 0 0 20px;
+        list-style: disc;
+    }
+    li {
+        margin-left: 1em;
+        margin-bottom: 1em;
+    }
+}
+.d2c-reasons-help {
+    background-color: @light-gray;
+    .border-radius(10px);
+    color: #fff;
+    display: inline-block;
+    line-height: 7px;
+    padding: 4px;
+    margin: 0 8px;
+    position: relative;
+    &:hover {
+        background-color: @note-gray;
+        text-decoration: none;
+    }
+    p, li {
+        line-height: 1.3;
+    }
 }

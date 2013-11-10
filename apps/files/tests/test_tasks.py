@@ -8,21 +8,23 @@ import uuid
 from django.conf import settings
 from django.core import mail
 from django.db import models
+from django.core.files.storage import default_storage as storage
 
 import mock
-import test_utils
 from nose.tools import eq_
 
 import amo
+import amo.tests
 from amo.helpers import absolutify
 from amo.urlresolvers import reverse
 from addons.models import Addon
+from applications.models import AppVersion
 from files import tasks
-from files.models import File
+from files.helpers import rmtree
 from files.utils import JetpackUpgrader
 
 
-class TestUpgradeJetpacks(test_utils.TestCase):
+class TestUpgradeJetpacks(amo.tests.TestCase):
     fixtures = ['base/addon_3615']
 
     def setUp(self):
@@ -33,11 +35,16 @@ class TestUpgradeJetpacks(test_utils.TestCase):
         self.addCleanup(urllib2_patch.stop)
         JetpackUpgrader().jetpack_versions('0.9', '1.0')
 
-    def test_send_request(self):
+    def file(self, **file_values):
+        file_values.setdefault('jetpack_version', '0.9')
         addon = Addon.objects.get(id=3615)
-        File.objects.all().update(jetpack_version='0.9')
         file_ = addon.current_version.all_files[0]
-        tasks.start_upgrade([file_.id])
+        file_.update(**file_values)
+        return file_
+
+    def test_record_action(self):
+        file_ = self.file(builder_version='1234500')
+        tasks.start_upgrade([file_.id], sdk_version='1.2')
         assert self.urllib2.urlopen.called
         url, args = self.urllib2.urlopen.call_args[0]
         args = dict(urlparse.parse_qsl(args))
@@ -46,15 +53,24 @@ class TestUpgradeJetpacks(test_utils.TestCase):
             'file_id': str(file_.id),
             'priority': 'low',
             'secret': settings.BUILDER_SECRET_KEY,
-            'location': file_.get_url_path('', 'builder'),
+            'package_key': file_.builder_version,
             'uuid': args['uuid'],  # uuid is random so steal from args.
-            'version': '2.1.072.sdk.{sdk_version}',
             'pingback': absolutify(reverse('amo.builder-pingback')),
+            'sdk_version': '1.2',
         })
         eq_(url, settings.BUILDER_UPGRADE_URL)
 
+    def test_jetpack_with_older_harness_opt(self):
+        file_ = self.file(builder_version=None)  # old harness options
+        tasks.start_upgrade([file_.id], sdk_version='1.2')
+        url, args = self.urllib2.urlopen.call_args[0]
+        args = dict(urlparse.parse_qsl(args))
+        eq_(args['location'], file_.get_url_path('builder'))
+        assert 'package_key' not in args, (
+                                    'Unexpected keys: %s' % args.keys())
 
-class TestRepackageJetpack(test_utils.TestCase):
+
+class TestRepackageJetpack(amo.tests.TestCase):
     fixtures = ['base/addon_3615']
 
     def setUp(self):
@@ -73,15 +89,22 @@ class TestRepackageJetpack(test_utils.TestCase):
         # Set up a temp file so urllib.urlretrieve works.
         self.xpi_path = os.path.join(settings.ROOT,
                                      'apps/files/fixtures/files/jetpack.xpi')
-        tmp_file = tempfile.NamedTemporaryFile(delete=False)
-        tmp_file.write(open(self.xpi_path, 'rb').read())
-        tmp_file.flush()
-        self.urllib.urlretrieve.return_value = (tmp_file.name, None)
+        self.tmp_file_path = self.create_temp_file()
+        self.urllib.urlretrieve.return_value = (self.tmp_file_path, None)
 
         self.upgrader = JetpackUpgrader()
         settings.SEND_REAL_EMAIL = True
 
         self.uuid = uuid.uuid4().hex
+
+    def tearDown(self):
+        storage.delete(self.tmp_file_path)
+
+    def create_temp_file(self):
+        path = tempfile.mktemp(dir=settings.TMP_PATH)
+        with storage.open(path, 'w') as tmp_file:
+            tmp_file.write(open(self.xpi_path, 'rb').read())
+        return path
 
     def builder_data(self, **kw):
         """Generate builder_data response dictionary with sensible defaults."""
@@ -183,27 +206,41 @@ class TestRepackageJetpack(test_utils.TestCase):
         eq_(len(mail.outbox), 1)
 
     def test_supported_apps(self):
-        version = tasks.repackage_jetpack(self.builder_data()).version
-        old_apps = self.file.version.compatible_apps
-        eq_(version.compatible_apps.keys(), old_apps.keys())
-        for app, appver in version.compatible_apps.items():
-            eq_(old_apps[app].max, appver.max)
-            eq_(old_apps[app].min, appver.min)
+        # Create AppVersions to match what's in the xpi.
+        AppVersion.objects.create(application_id=amo.FIREFOX.id, version='3.6')
+        AppVersion.objects.create(
+            application_id=amo.FIREFOX.id, version='4.0b6')
 
+        # Make sure the new appver matches the old appver.
+        new = tasks.repackage_jetpack(self.builder_data()).version
+        for old_app in self.file.version.apps.all():
+            new_app = new.apps.filter(application=old_app.application)
+            eq_(new_app.values_list('min', 'max')[0],
+                (old_app.min_id, old_app.max_id))
 
-def test_parse_version():
-    def check(v, expected):
-        eq_(tasks.parse_version(v), expected)
+    def test_block_duplicate_version(self):
+        eq_(self.addon.versions.count(), 1)
+        assert tasks.repackage_jetpack(self.builder_data())
+        eq_(self.addon.versions.count(), 2)
 
-    # Start with some normalish version numbers.
-    d = (('1.1', '1.1.sdk.{sdk_version}'),
-         ('0.2.3', '0.2.3.sdk.{sdk_version}'),
-         ('0.2.3-woo', '0.2.3-woo.sdk.{sdk_version}'),
-         ('023ab', '023ab.sdk.{sdk_version}'),
-         ('0.2.3', '0.2.3.sdk.{sdk_version}'),
-    )
-    for version, expected in d:
-        yield check, version, expected
-        # Append .sdk.1.0 to the normal numbers to simulate versions that have
-        # already been upgraded in the past. We still get the same template.
-        yield check, version + '.sdk.1.0', expected
+        # Make a new temp file for urlretrieve.
+        tmp_file = self.create_temp_file()
+        self.urllib.urlretrieve.return_value = (tmp_file, None)
+
+        assert not tasks.repackage_jetpack(self.builder_data())
+        eq_(self.addon.versions.count(), 2)
+
+    def test_file_on_mirror(self):
+        # Make sure the mirror dir is clear.
+        if storage.exists(os.path.dirname(self.file.mirror_file_path)):
+            rmtree(os.path.dirname(self.file.mirror_file_path))
+        new_file = tasks.repackage_jetpack(self.builder_data())
+        assert storage.exists(new_file.mirror_file_path)
+
+    def test_unreviewed_file_not_on_mirror(self):
+        # Make sure the mirror dir is clear.
+        mirrordir = settings.MIRROR_STAGE_PATH + '/3615'
+        rmtree(mirrordir)
+        self.file.update(status=amo.STATUS_UNREVIEWED)
+        new_file = tasks.repackage_jetpack(self.builder_data())
+        assert not storage.exists(new_file.mirror_file_path)

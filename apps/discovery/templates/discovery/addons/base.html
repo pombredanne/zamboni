@@ -4,6 +4,13 @@
 
 {% block title %}{{ page_title(addon.name) }}{% endblock %}
 
+{% if addon.type == amo.ADDON_PERSONA %}
+  {% set authors = users_list(addon.persona.listed_authors) or
+                   addon.persona.display_username %}
+{% else %}
+  {% set authors = users_list(addon.listed_authors) %}
+{% endif %}
+
 {% block content %}
   <section id="main">
     <header>
@@ -12,12 +19,12 @@
         <img class="icon" src="{{ addon.icon_url }}">
         {{ addon.name }}
         {% set version = addon.current_version %}
-        {% if version and not addon.is_selfhosted() %}
+        {% if version %}
           <span class="version">{{ version.version }}</span>
         {% endif %}
       </h1>
       <h2 class="author">
-        {{ _('by') }} {{ users_list(addon.listed_authors) }}
+        {{ _('by') }} {{ authors }}
       </h2>
     </header>
     {% block main %}{% endblock %}

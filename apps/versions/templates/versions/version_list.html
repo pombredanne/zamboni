@@ -1,47 +1,44 @@
-{% extends "base.html" %}
+{% extends "impala/base_shared.html" %}
 
 {% block rss_feed %}
 <link  rel="alternate" type="application/rss+xml"
-       title="RSS" href="{{ url('addons.versions', addon.slug) }}format:rss">
+       title="RSS" href="{{ request.get_full_path() }}format:rss">
 {% endblock %}
 
 {# L10n: {0} is an add-on name. #}
 {% block title %}{{ page_title('{0} :: Versions')|f(addon.name) }}{% endblock %}
 
-{% block bodyclass %}versions inverse{% endblock %}
+{% block bodyclass %}versions gutter{% endblock %}
 
 {% block content %}
-<div class="primary">
+<section class="primary">
   <header>
-    {{ breadcrumbs([(addon.type_url(), amo.ADDON_TYPES[addon.type]),
-                    (url('addons.detail', addon.slug), addon.name),
-                    (None, _('Versions'))]) }}
+    {{ impala_breadcrumbs([(addon.type_url(), amo.ADDON_TYPES[addon.type]),
+                           (addon.get_url_path(), addon.name),
+                           (None, _('Versions'))]) }}
     {# L10n: {0} is an add-on name. #}
     <hgroup>
-      <h2>{{ _('{0} Version History')|f(addon.name) }}</h2>
+      <h1>{{ _('{0} Version History')|f(addon.name) }}</h1>
       {% with cnt=versions.paginator.count %}
         {# L10n: {0} is a number. #}
-        <h3>{{ ngettext('{0} version', '{0} versions', cnt)|f(cnt) }}</h3>
+        <h3>{{ ngettext('<b>{0}</b> version', '<b>{0}</b> versions', cnt)|f(cnt)|safe }}</h3>
       {% endwith %}
     </hgroup>
   </header>
-  <div class="warning highlight">
-    <h2>{{ _('Be careful with old versions!') }}</h2>
-    <p>{% trans url=url('addons.detail', addon.slug) %}
-      These versions are displayed for reference and testing purposes.
-      You should always use the <a href="{{ url }}">latest version</a> of an add-on.
-    {% endtrans %}</p>
-  </div>
-  <div class="featured listing">
-    <div class="featured-inner">
+  <div class="island hero c listing">
+    <div class="warning highlight">
+      <h2>{{ _('Be careful with old versions!') }}</h2>
+      <p>{% trans url=addon.get_url_path() %}
+        These versions are displayed for reference and testing purposes.
+        You should always use the <a href="{{ url }}">latest version</a> of an add-on.
+      {% endtrans %}</p>
+    </div>
+    <div class="items">
       {% for version in versions.object_list %}
-        {{ version_detail(addon, version, show_versions_link=False,
-                          src="version-history", itemclass="item") }}
+        {{ version_detail(addon, version, src='version-history', impala=True) }}
       {% endfor %}
     </div>
-    <div class="listing-footer">
-      {{ versions|paginator }}
-    </div>
+    {{ versions|impala_paginator }}
   </div>
-</div>
+</section>
 {% endblock %}

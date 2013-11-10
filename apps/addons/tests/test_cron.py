@@ -1,33 +1,31 @@
+import os
+import datetime
+
 from nose.tools import eq_
 import mock
-import test_utils
 
 import amo
+import amo.tests
 from addons import cron
 from addons.models import Addon, AppSupport
-from addons.utils import ReverseNameLookup
-from addons.tasks import fix_get_satisfaction
+from django.core.management.base import CommandError
 from files.models import File, Platform
+from lib.es.management.commands.reindex import flag_database, unflag_database
+from stats.models import UpdateCount
 from versions.models import Version
 
 
-class TestBuildReverseNameLookup(test_utils.TestCase):
-    fixtures = ('base/addon_3615',)
-
-    def test_lookup(self):
-        cron.build_reverse_name_lookup()
-        eq_(ReverseNameLookup().get('Delicious Bookmarks'), 3615)
-
-
-class CurrentVersionTestCase(test_utils.TestCase):
+class CurrentVersionTestCase(amo.tests.TestCase):
     fixtures = ['base/addon_3615']
 
+    @mock.patch('waffle.switch_is_active', lambda x: True)
     def test_addons(self):
         Addon.objects.filter(pk=3615).update(_current_version=None)
         eq_(Addon.objects.filter(_current_version=None, pk=3615).count(), 1)
         cron._update_addons_current_version(((3615,),))
         eq_(Addon.objects.filter(_current_version=None, pk=3615).count(), 0)
 
+    @mock.patch('waffle.switch_is_active', lambda x: True)
     def test_cron(self):
         Addon.objects.filter(pk=3615).update(_current_version=None)
         eq_(Addon.objects.filter(_current_version=None, pk=3615).count(), 1)
@@ -35,7 +33,7 @@ class CurrentVersionTestCase(test_utils.TestCase):
         eq_(Addon.objects.filter(_current_version=None, pk=3615).count(), 0)
 
 
-class TestLastUpdated(test_utils.TestCase):
+class TestLastUpdated(amo.tests.TestCase):
     fixtures = ['base/addon_3615', 'addons/listed', 'base/apps',
                 'addons/persona', 'base/seamonkey', 'base/thunderbird']
 
@@ -103,7 +101,7 @@ class TestLastUpdated(test_utils.TestCase):
         eq_(AppSupport.objects.filter(addon=3723).count(), 0)
         cron.update_addon_appsupport()
         eq_(AppSupport.objects.filter(addon=3723,
-                                      app=amo.FIREFOX.id).count(), 1)
+                                      app=amo.FIREFOX.id).count(), 0)
 
     def test_appsupport_seamonkey(self):
         addon = Addon.objects.get(pk=15663)
@@ -114,33 +112,7 @@ class TestLastUpdated(test_utils.TestCase):
                                       app=amo.SEAMONKEY.id).count(), 1)
 
 
-class TestGetSatisfactionFix(test_utils.TestCase):
-
-    def setUp(self):
-        self.addon = (Addon.objects.create(type=amo.ADDON_EXTENSION,
-                                           get_satisfaction_company='foo'))
-
-    def test_good_url(self):
-        self.addon.support_url = 'http://getsatisfaction.com/mozilla'
-        self.addon.save()
-        fix_get_satisfaction([self.addon.pk])
-        eq_(Addon.objects.get(pk=self.addon.pk).get_satisfaction_company,
-            'mozilla')
-
-    def test_bad_url(self):
-        self.addon.support_url = 'http://something.else.com/foo'
-        self.addon.save()
-        fix_get_satisfaction([self.addon.pk])
-        eq_(Addon.objects.get(pk=self.addon.pk).get_satisfaction_company, None)
-
-    def test_no_url(self):
-        self.addon.support_url = ''
-        self.addon.save()
-        fix_get_satisfaction([self.addon.pk])
-        eq_(Addon.objects.get(pk=self.addon.pk).get_satisfaction_company, None)
-
-
-class TestHideDisabledFiles(test_utils.TestCase):
+class TestHideDisabledFiles(amo.tests.TestCase):
     msg = 'Moving disabled file: %s => %s'
 
     def setUp(self):
@@ -169,8 +141,8 @@ class TestHideDisabledFiles(test_utils.TestCase):
             assert not os_mock.path.exists.called, (addon_status, file_status)
 
     @mock.patch('files.models.File.mv')
-    @mock.patch('files.models.os')
-    def test_move_user_disabled_addon(self, os_mock, mv_mock):
+    @mock.patch('files.models.storage')
+    def test_move_user_disabled_addon(self, m_storage, mv_mock):
         # Use Addon.objects.update so the signal handler isn't called.
         Addon.objects.filter(id=self.addon.id).update(
             status=amo.STATUS_PUBLIC, disabled_by_user=True)
@@ -180,21 +152,21 @@ class TestHideDisabledFiles(test_utils.TestCase):
         f2 = self.f2
         mv_mock.assert_called_with(f2.file_path, f2.guarded_file_path,
                                    self.msg)
-        os_mock.remove.assert_called_with(f2.mirror_file_path)
+        m_storage.delete.assert_called_with(f2.mirror_file_path)
         # Check that f1 was moved as well.
         f1 = self.f1
         mv_mock.call_args = mv_mock.call_args_list[0]
-        os_mock.remove.call_args = os_mock.remove.call_args_list[0]
+        m_storage.delete.call_args = m_storage.delete.call_args_list[0]
         mv_mock.assert_called_with(f1.file_path, f1.guarded_file_path,
                                    self.msg)
-        os_mock.remove.assert_called_with(f1.mirror_file_path)
+        m_storage.delete.assert_called_with(f1.mirror_file_path)
         # There's only 2 files, both should have been moved.
         eq_(mv_mock.call_count, 2)
-        eq_(os_mock.remove.call_count, 2)
+        eq_(m_storage.delete.call_count, 2)
 
     @mock.patch('files.models.File.mv')
-    @mock.patch('files.models.os')
-    def test_move_admin_disabled_addon(self, os_mock, mv_mock):
+    @mock.patch('files.models.storage')
+    def test_move_admin_disabled_addon(self, m_storage, mv_mock):
         Addon.objects.filter(id=self.addon.id).update(
             status=amo.STATUS_DISABLED)
         File.objects.update(status=amo.STATUS_PUBLIC)
@@ -203,23 +175,23 @@ class TestHideDisabledFiles(test_utils.TestCase):
         f2 = self.f2
         mv_mock.assert_called_with(f2.file_path, f2.guarded_file_path,
                                    self.msg)
-        os_mock.remove.assert_called_with(f2.mirror_file_path)
+        m_storage.delete.assert_called_with(f2.mirror_file_path)
         # Check that f1 was moved as well.
         f1 = self.f1
         mv_mock.call_args = mv_mock.call_args_list[0]
-        os_mock.remove.call_args = os_mock.remove.call_args_list[0]
+        m_storage.delete.call_args = m_storage.delete.call_args_list[0]
         mv_mock.assert_called_with(f1.file_path, f1.guarded_file_path,
                                    self.msg)
-        os_mock.remove.assert_called_with(f1.mirror_file_path)
+        m_storage.delete.assert_called_with(f1.mirror_file_path)
         # There's only 2 files, both should have been moved.
         eq_(mv_mock.call_count, 2)
-        eq_(os_mock.remove.call_count, 2)
+        eq_(m_storage.delete.call_count, 2)
 
     @mock.patch('files.models.File.mv')
-    @mock.patch('files.models.os')
-    def test_move_disabled_file(self, os_mock, mv_mock):
+    @mock.patch('files.models.storage')
+    def test_move_disabled_file(self, m_storage, mv_mock):
         Addon.objects.filter(id=self.addon.id).update(status=amo.STATUS_LITE)
-        File.objects.filter(id=self.f1.id).update(status=amo.STATUS_DISABLED)
+        File.objects.filter(id=self.f1.id).update(status=amo.STATUS_OBSOLETE)
         File.objects.filter(id=self.f2.id).update(status=amo.STATUS_UNREVIEWED)
         cron.hide_disabled_files()
         # Only f1 should have been moved.
@@ -228,5 +200,65 @@ class TestHideDisabledFiles(test_utils.TestCase):
                                    self.msg)
         eq_(mv_mock.call_count, 1)
         # It should have been removed from mirror stagins.
-        os_mock.remove.assert_called_with(f1.mirror_file_path)
-        eq_(os_mock.remove.call_count, 1)
+        m_storage.delete.assert_called_with(f1.mirror_file_path)
+        eq_(m_storage.delete.call_count, 1)
+
+
+class AvgDailyUserCountTestCase(amo.tests.TestCase):
+    fixtures = ['base/addon_3615']
+
+    def test_adu_is_adjusted_in_cron(self):
+        addon = Addon.objects.get(pk=3615)
+        self.assertTrue(
+            addon.average_daily_users > addon.total_downloads + 10000,
+            'Unexpected ADU count. ADU of %d not greater than %d' % (
+                addon.average_daily_users, addon.total_downloads + 10000))
+        cron._update_addon_average_daily_users([(3615, 6000000)])
+        addon = Addon.objects.get(pk=3615)
+        eq_(addon.average_daily_users, addon.total_downloads)
+
+    def test_adu_flag(self):
+        addon = Addon.objects.get(pk=3615)
+
+        now = datetime.datetime.now()
+        counter = UpdateCount.objects.create(addon=addon, date=now,
+                                             count=1234)
+        counter.save()
+
+        self.assertTrue(
+            addon.average_daily_users > addon.total_downloads + 10000,
+            'Unexpected ADU count. ADU of %d not greater than %d' % (
+                addon.average_daily_users, addon.total_downloads + 10000))
+
+        adu = cron.update_addon_average_daily_users
+        flag_database('new', 'old', 'alias')
+        try:
+            # Should fail.
+            self.assertRaises(CommandError, adu)
+
+            # Should work with the environ flag.
+            os.environ['FORCE_INDEXING'] = '1'
+            adu()
+        finally:
+            unflag_database()
+            del os.environ['FORCE_INDEXING']
+
+        addon = Addon.objects.get(pk=3615)
+        eq_(addon.average_daily_users, 1234)
+
+
+class TestReindex(amo.tests.ESTestCase):
+
+    @mock.patch('addons.models.update_search_index', new=mock.Mock)
+    def setUp(self):
+        self.addons = []
+        self.apps = []
+        for x in xrange(3):
+            self.addons.append(amo.tests.addon_factory())
+            self.apps.append(amo.tests.app_factory())
+
+    def test_job(self):
+        cron.reindex_addons()
+        self.refresh()
+        eq_(sorted(a.id for a in Addon.search()),
+            sorted(a.id for a in self.apps + self.addons))

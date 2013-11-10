@@ -2,6 +2,7 @@ from django.db import models
 
 import json_field
 
+import amo
 import amo.models
 
 
@@ -20,6 +21,16 @@ class CompatReport(amo.models.ModelBase):
     class Meta:
         db_table = 'compatibility_reports'
 
+    @classmethod
+    def get_counts(self, guid):
+        works = dict(CompatReport.objects.filter(guid=guid)
+                     .values_list('works_properly')
+                     .annotate(models.Count('id')))
+        return {
+            'success': works.get(True, 0),
+            'failure': works.get(False, 0)
+        }
+
 
 class AppCompat(amo.models.ModelBase):
     """
@@ -28,6 +39,15 @@ class AppCompat(amo.models.ModelBase):
         {id: addon.id,
          name: addon.name,
          slug: addon.slug,
+         guid: addon.guid,
+         current_version: version string,
+         current_version_id: version int,
+         binary: addon.binary_components,
+         count: total # of update counts,
+         top_95_all: {APP.id: bool},
+         top_95: {APP.id: {version int: bool}},
+         works: {APP.id: {version int: {success: int, failure: int, total: int,
+                                        failure_ratio: float}}},
          max_version: {APP.id: version string},
          usage: {APP.id: addon.daily_usage},
          support: {APP.id: {max: version int, min: version int},
@@ -36,3 +56,15 @@ class AppCompat(amo.models.ModelBase):
 
     class Meta:
         abstract = True
+        db_table = 'compat'
+
+
+class CompatTotals(amo.models.ModelBase):
+    """
+    Cache for totals of success/failure reports.
+    """
+    app = models.PositiveIntegerField()
+    total = models.PositiveIntegerField()
+
+    class Meta:
+        db_table = 'compat_totals'

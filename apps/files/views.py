@@ -1,6 +1,9 @@
-from django import http
+from urlparse import urljoin
+
+from django import http, shortcuts
 from django.conf import settings
 from django.views.decorators.cache import never_cache
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import condition
 
 import commonware.log
@@ -10,10 +13,11 @@ import waffle
 from access import acl
 from amo.decorators import json_view
 from amo.urlresolvers import reverse
-from amo.utils import HttpResponseSendFile, Message, Token
+from amo.utils import HttpResponseSendFile, Message, Token, urlparams
 from files.decorators import (etag, file_view, compare_file_view,
                               file_view_token, last_modified)
 from files.tasks import extract_file
+from . import forms
 
 from tower import ugettext as _
 
@@ -26,9 +30,18 @@ def setup_viewer(request, file_obj):
             'version': file_obj.version,
             'addon': file_obj.version.addon,
             'status': False,
-            'selected': {}}
+            'selected': {},
+            'validate_url': ''}
 
-    if acl.action_allowed(request, 'Editors', '%'):
+
+    if (acl.check_reviewer(request) or
+        acl.check_addon_ownership(request, file_obj.version.addon,
+                                  viewer=True, ignore_disabled=True)):
+        data['validate_url'] = reverse('devhub.json_file_validation',
+                                       args=[file_obj.version.addon.slug,
+                                             file_obj.id])
+
+    if acl.check_reviewer(request):
         data['file_link'] = {'text': _('Back to review'),
                              'url': reverse('editors.review',
                                             args=[data['addon'].slug])}
@@ -47,12 +60,34 @@ def poll(request, viewer):
             'msg': [Message('file-viewer:%s' % viewer).get(delete=True)]}
 
 
+def check_compare_form(request, form):
+    if request.method == 'POST':
+        if form.is_valid():
+            left = form.cleaned_data['left']
+            right = form.cleaned_data.get('right')
+            if right:
+                url = reverse('files.compare', args=[left, right])
+            else:
+                url = reverse('files.list', args=[left])
+        else:
+            url = request.path
+        return shortcuts.redirect(url)
+
+
+@csrf_exempt
 @file_view
 @condition(etag_func=etag, last_modified_func=last_modified)
 def browse(request, viewer, key=None, type='file'):
+    form = forms.FileCompareForm(request.POST or None, addon=viewer.addon,
+                                 initial={'left': viewer.file})
+    response = check_compare_form(request, form)
+    if response:
+        return response
+
     data = setup_viewer(request, viewer.file)
     data['viewer'] = viewer
     data['poll_url'] = reverse('files.poll', args=[viewer.file.id])
+    data['form'] = form
 
     if (not waffle.switch_is_active('delay-file-viewer') and
         not viewer.is_extracted()):
@@ -89,14 +124,23 @@ def compare_poll(request, diff):
     return {'status': diff.is_extracted(), 'msg': msgs}
 
 
+@csrf_exempt
 @compare_file_view
 @condition(etag_func=etag, last_modified_func=last_modified)
 def compare(request, diff, key=None, type='file'):
+    form = forms.FileCompareForm(request.POST or None, addon=diff.addon,
+                                 initial={'left': diff.left.file,
+                                          'right': diff.right.file})
+    response = check_compare_form(request, form)
+    if response:
+        return response
+
     data = setup_viewer(request, diff.left.file)
     data['diff'] = diff
     data['poll_url'] = reverse('files.compare.poll',
                                args=[diff.left.file.id,
                                      diff.right.file.id])
+    data['form'] = form
 
     if (not waffle.switch_is_active('delay-file-viewer')
         and not diff.is_extracted()):
@@ -129,9 +173,9 @@ def compare(request, diff, key=None, type='file'):
 def redirect(request, viewer, key):
     new = Token(data=[viewer.file.id, key])
     new.save()
-    url = '%s%s?token=%s' % (settings.STATIC_URL,
-                             reverse('files.serve', args=[viewer, key]),
-                             new.token)
+    url = urljoin(settings.STATIC_URL,
+                  reverse('files.serve', args=[viewer, key]))
+    url = urlparams(url, token=new.token)
     return http.HttpResponseRedirect(url)
 
 

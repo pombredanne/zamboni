@@ -1,5 +1,8 @@
 from inspect import isclass
 
+from django.conf import settings
+from django.core.files.storage import get_storage_class
+
 from celery.datastructures import AttributeDict
 from tower import ugettext_lazy as _
 
@@ -7,7 +10,7 @@ __all__ = ('LOG', 'LOG_BY_ID', 'LOG_KEEP',)
 
 
 class _LOG(object):
-    pass
+    action_class = None
 
 
 class CREATE_ADDON(_LOG):
@@ -30,7 +33,6 @@ class EDIT_DESCRIPTIONS(_LOG):
     format = _(u'{addon} description edited.')
 
 
-# TODO(gkoberger): Log this type
 class EDIT_CATEGORIES(_LOG):
     id = 4
     action_class = 'edit'
@@ -60,14 +62,12 @@ class EDIT_CONTRIBUTIONS(_LOG):
 
 class USER_DISABLE(_LOG):
     id = 8
-    action_class = None
     format = _(u'{addon} disabled.')
     keep = True
 
 
 class USER_ENABLE(_LOG):
     id = 9
-    action_class = None
     format = _(u'{addon} enabled.')
     keep = True
 
@@ -75,7 +75,6 @@ class USER_ENABLE(_LOG):
 # TODO(davedash): Log these types when pages are present
 class SET_PUBLIC_STATS(_LOG):
     id = 10
-    action_class = None
     format = _(u'Stats set public for {addon}.')
     keep = True
 
@@ -83,35 +82,29 @@ class SET_PUBLIC_STATS(_LOG):
 # TODO(davedash): Log these types when pages are present
 class UNSET_PUBLIC_STATS(_LOG):
     id = 11
-    action_class = None
     format = _(u'{addon} stats set to private.')
     keep = True
 
 
-# TODO(gkoberger): Log these types when editing statuses
 class CHANGE_STATUS(_LOG):
     id = 12
-    action_class = None
     # L10n: {0} is the status
     format = _(u'{addon} status changed to {0}.')
     keep = True
 
 
-# TODO(gkoberger): Do this in 604152
 class ADD_PREVIEW(_LOG):
     id = 13
     action_class = 'add'
     format = _(u'Preview added to {addon}.')
 
 
-# TODO(gkoberger): Do this in 604152
 class EDIT_PREVIEW(_LOG):
     id = 14
     action_class = 'edit'
     format = _(u'Preview edited for {addon}.')
 
 
-# TODO(gkoberger): Do this in 604152
 class DELETE_PREVIEW(_LOG):
     id = 15
     action_class = 'delete'
@@ -191,7 +184,6 @@ class REJECT_VERSION(_LOG):
 class RETAIN_VERSION(_LOG):
     # takes add-on, version, reviewtype
     id = 22
-    action_class = None
     format = _(u'{addon} {version} retained.')
     short = _(u'Retained')
     keep = True
@@ -202,7 +194,6 @@ class RETAIN_VERSION(_LOG):
 class ESCALATE_VERSION(_LOG):
     # takes add-on, version, reviewtype
     id = 23
-    action_class = None
     format = _(u'{addon} {version} escalated.')
     short = _(u'Escalated')
     keep = True
@@ -213,7 +204,6 @@ class ESCALATE_VERSION(_LOG):
 class REQUEST_VERSION(_LOG):
     # takes add-on, version, reviewtype
     id = 24
-    action_class = None
     format = _(u'{addon} {version} review requested.')
     short = _(u'Review requested')
     keep = True
@@ -223,7 +213,6 @@ class REQUEST_VERSION(_LOG):
 
 class REQUEST_INFORMATION(_LOG):
     id = 44
-    action_class = None
     format = _(u'{addon} {version} more information requested.')
     short = _(u'More information requested')
     keep = True
@@ -233,7 +222,6 @@ class REQUEST_INFORMATION(_LOG):
 
 class REQUEST_SUPER_REVIEW(_LOG):
     id = 45
-    action_class = None
     format = _(u'{addon} {version} super review requested.')
     short = _(u'Super review requested')
     keep = True
@@ -242,7 +230,6 @@ class REQUEST_SUPER_REVIEW(_LOG):
 
 class COMMENT_VERSION(_LOG):
     id = 49
-    action_class = None
     format = _(u'Comment on {addon} {version}.')
     short = _(u'Comment')
     keep = True
@@ -297,14 +284,12 @@ class REMOVE_RECOMMENDED_CATEGORY(_LOG):
 
 class ADD_RECOMMENDED(_LOG):
     id = 33
-    action_class = None
     format = _(u'{addon} is now featured.')
     keep = True
 
 
 class REMOVE_RECOMMENDED(_LOG):
     id = 34
-    action_class = None
     format = _(u'{addon} is no longer featured.')
     keep = True
 
@@ -319,7 +304,6 @@ class ADD_APPVERSION(_LOG):
 class CHANGE_USER_WITH_ROLE(_LOG):
     """ Expects: author.user, role, addon """
     id = 36
-    action_class = None
     # L10n: {0} is a user, {1} is their role
     format = _(u'{0.name} role changed to {1} for {addon}.')
     keep = True
@@ -363,34 +347,305 @@ class DELETE_REVIEW(_LOG):
     editor_event = True
 
 
-class BULK_VALIDATION_UPDATED(_LOG):
+class MAX_APPVERSION_UPDATED(_LOG):
     id = 46
-    action_class = None
     format = _(u'Application max version for {version} updated.')
 
 
 class BULK_VALIDATION_EMAILED(_LOG):
     id = 47
-    action_class = None
     format = _(u'Authors emailed about compatibility of {version}.')
 
 
 class CHANGE_PASSWORD(_LOG):
     id = 48
-    action_class = None
     format = _(u'Password changed.')
+
+
+class MAKE_PREMIUM(_LOG):
+    id = 50
+    format = _(u'{addon} changed to premium.')
+
+
+class PAYPAL_FAILED(_LOG):
+    id = 51
+    format = _(u'{addon} failed checks with PayPal.')
+
+
+class MANIFEST_UPDATED(_LOG):
+    id = 52
+    format = _(u'{addon} manifest updated.')
+
+
+class APPROVE_VERSION_WAITING(_LOG):
+    id = 53
+    action_class = 'approve'
+    format = _(u'{addon} {version} approved but waiting to be made public.')
+    short = _(u'Approved but unpublished')
+    keep = True
+    review_email_user = True
+    review_queue = True
+
+
+class PURCHASE_ADDON(_LOG):
+    id = 54
+    format = _(u'{addon} purchased.')
+
+
+class INSTALL_ADDON(_LOG):
+    id = 55
+    format = _(u'{addon} installed.')
+
+
+class REFUND_REQUESTED(_LOG):
+    id = 56
+    format = _(u'Refund requested for {addon}')
+
+
+class REFUND_DECLINED(_LOG):
+    id = 57
+    format = _(u'Refund declined for {addon} for {0}.')
+
+
+class REFUND_GRANTED(_LOG):
+    id = 58
+    format = _(u'Refund granted for {addon} for {0}.')
+
+
+class REFUND_INSTANT(_LOG):
+    id = 59
+    format = _(u'Instant refund granted for {addon}.')
+
+
+class USER_EDITED(_LOG):
+    id = 60
+    format = _(u'Account updated.')
+
+
+class PREAPPROVAL_ADDED(_LOG):
+    id = 62
+    format = _(u'Pre approval added.')
+
+
+class PREAPPROVAL_REMOVED(_LOG):
+    id = 63
+    format = _(u'Pre-approval removed.')
+
+
+class CURRENCY_UPDATED(_LOG):
+    id = 64
+    format = _(u'Account currency changed')
+
+
+class RECEIPT_CHECKED(_LOG):
+    id = 65
+    format = _(u'Valid receipt was checked for {addon}.')
+
+
+class ESCALATION_CLEARED(_LOG):
+    id = 66
+    format = _(u'Escalation cleared for {addon}.')
+    short = _(u'Escalation cleared')
+    keep = True
+    review_queue = True
+
+
+class APP_DISABLED(_LOG):
+    id = 67
+    format = _(u'{addon} disabled.')
+    short = _(u'App disabled')
+    keep = True
+    review_queue = True
+
+
+class ESCALATED_HIGH_ABUSE(_LOG):
+    id = 68
+    format = _(u'{addon} escalated because of high number of abuse reports.')
+    short = _(u'High Abuse Reports')
+    keep = True
+    review_queue = True
+
+
+class ESCALATED_HIGH_REFUNDS(_LOG):
+    id = 69
+    format = _(u'{addon} escalated because of high number of refund requests.')
+    short = _(u'High Refund Requests')
+    keep = True
+    review_queue = True
+
+
+class REREVIEW_MANIFEST_CHANGE(_LOG):
+    id = 70
+    format = _(u'{addon} re-reviewed because of manifest change.')
+    short = _(u'Manifest Change')
+    keep = True
+    review_queue = True
+
+
+class REREVIEW_PREMIUM_TYPE_UPGRADE(_LOG):
+    id = 71
+    format = _(u'{addon} re-reviewed because app upgraded premium type.')
+    short = _(u'Premium Type Upgrade')
+    keep = True
+    review_queue = True
+
+
+class REREVIEW_CLEARED(_LOG):
+    id = 72
+    format = _(u'Re-review cleared for {addon}.')
+    short = _(u'Re-review cleared')
+    keep = True
+    review_queue = True
+
+
+class ESCALATE_MANUAL(_LOG):
+    id = 73
+    format = _(u'{addon} escalated by reviewer.')
+    short = _(u'Reviewer escalation')
+    keep = True
+    review_queue = True
+# TODO(robhudson): Escalation log for editor escalation..
+
+
+class VIDEO_ERROR(_LOG):
+    id = 74
+    format = _(u'Video removed from {addon} because of a problem with '
+                'the video. ')
+    short = _(u'Video removed')
+
+
+class REREVIEW_DEVICES_ADDED(_LOG):
+    id = 75
+    format = _(u'{addon} re-review because of new device(s) added.')
+    short = _(u'Device(s) Added')
+    keep = True
+    review_queue = True
+
+
+class REVIEW_DEVICE_OVERRIDE(_LOG):
+    id = 76
+    format = _(u'{addon} device support manually changed by reviewer.')
+    short = _(u'Device(s) Changed by Reviewer')
+    keep = True
+    review_queue = True
+
+
+class WEBAPP_RESUBMIT(_LOG):
+    id = 77
+    format = _(u'{addon} resubmitted for review.')
+    short = _(u'App Resubmission')
+    keep = True
+    review_queue = True
 
 
 class CUSTOM_TEXT(_LOG):
     id = 98
-    action_class = None
     format = '{0}'
 
 
 class CUSTOM_HTML(_LOG):
     id = 99
-    action_class = None
     format = '{0}'
+
+
+class OBJECT_ADDED(_LOG):
+    id = 100
+    format = _(u'Created: {0}.')
+    admin_event = True
+
+
+class OBJECT_EDITED(_LOG):
+    id = 101
+    format = _(u'Edited field: {2} set to: {0}.')
+    admin_event = True
+
+
+class OBJECT_DELETED(_LOG):
+    id = 102
+    format = _(u'Deleted: {1}.')
+    admin_event = True
+
+
+class ADMIN_USER_EDITED(_LOG):
+    id = 103
+    format = _(u'User {user} edited, reason: {1}')
+    admin_event = True
+
+
+class ADMIN_USER_ANONYMIZED(_LOG):
+    id = 104
+    format = _(u'User {user} anonymized.')
+    admin_event = True
+
+
+class ADMIN_USER_RESTRICTED(_LOG):
+    id = 105
+    format = _(u'User {user} restricted.')
+    admin_event = True
+
+
+class ADMIN_VIEWED_LOG(_LOG):
+    id = 106
+    format = _(u'Admin {0} viewed activity log for {user}.')
+    admin_event = True
+
+
+class EDIT_REVIEW(_LOG):
+    id = 107
+    action_class = 'review'
+    format = _(u'{review} for {addon} updated.')
+
+
+class THEME_REVIEW(_LOG):
+    id = 108
+    action_class = 'review'
+    format = _(u'{addon} reviewed.')
+
+
+class GROUP_USER_ADDED(_LOG):
+    id = 120
+    action_class = 'access'
+    format = _(u'User {0.name} added to {group}.')
+    keep = True
+    admin_event = True
+
+
+class GROUP_USER_REMOVED(_LOG):
+    id = 121
+    action_class = 'access'
+    format = _(u'User {0.name} removed from {group}.')
+    keep = True
+    admin_event = True
+
+
+class REVIEW_FEATURES_OVERRIDE(_LOG):
+    id = 122
+    format = _(u'{addon} minimum requirements manually changed by reviewer.')
+    short = _(u'Requirements Changed by Reviewer')
+    keep = True
+    review_queue = True
+
+
+class REREVIEW_FEATURES_CHANGED(_LOG):
+    id = 123
+    format = _(u'{addon} minimum requirements manually changed.')
+    short = _(u'Requirements Changed')
+    keep = True
+    review_queue = True
+
+
+class CHANGE_VERSION_STATUS(_LOG):
+    id = 124
+    # L10n: {0} is the status
+    format = _(u'{version} status changed to {0}.')
+    keep = True
+
+
+class DELETE_USER_LOOKUP(_LOG):
+    id = 125
+    # L10n: {0} is the status
+    format = _(u'User {0.name} {0.id} deleted via lookup tool.')
+    keep = True
 
 
 LOGS = [x for x in vars().values()
@@ -398,6 +653,7 @@ LOGS = [x for x in vars().values()
 
 LOG_BY_ID = dict((l.id, l) for l in LOGS)
 LOG = AttributeDict((l.__name__, l) for l in LOGS)
+LOG_ADMINS = [l.id for l in LOGS if hasattr(l, 'admin_event')]
 LOG_KEEP = [l.id for l in LOGS if hasattr(l, 'keep')]
 LOG_EDITORS = [l.id for l in LOGS if hasattr(l, 'editor_event')]
 LOG_REVIEW_QUEUE = [l.id for l in LOGS if hasattr(l, 'review_queue')]
@@ -406,7 +662,8 @@ LOG_REVIEW_QUEUE = [l.id for l in LOGS if hasattr(l, 'review_queue')]
 LOG_REVIEW_EMAIL_USER = [l.id for l in LOGS if hasattr(l, 'review_email_user')]
 # Logs *not* to show to the developer.
 LOG_HIDE_DEVELOPER = [l.id for l in LOGS
-                           if getattr(l, 'hide_developer', False)]
+                           if (getattr(l, 'hide_developer', False)
+                               or l.id in LOG_ADMINS)]
 
 
 def log(action, *args, **kw):
@@ -414,12 +671,15 @@ def log(action, *args, **kw):
     e.g. amo.log(amo.LOG.CREATE_ADDON, []),
          amo.log(amo.LOG.ADD_FILE_TO_VERSION, file, version)
     """
-    from devhub.models import (ActivityLog, AddonLog, UserLog,
-                               CommentLog, VersionLog)
+    from access.models import Group
     from addons.models import Addon
+    from amo import get_user, logger_log
+    from devhub.models import (ActivityLog, ActivityLogAttachment, AddonLog,
+                               AppLog, CommentLog, GroupLog, UserLog,
+                               VersionLog)
+    from mkt.webapps.models import Webapp
     from users.models import UserProfile
     from versions.models import Version
-    from amo import get_user, logger_log
 
     user = kw.get('user', get_user())
 
@@ -442,22 +702,45 @@ def log(action, *args, **kw):
         # Double save necessary since django resets the created date on save.
         al.save()
 
+    if 'attachments' in kw:
+        formset = kw['attachments']
+        storage = get_storage_class()()
+        for form in formset:
+            data = form.cleaned_data
+            if 'attachment' in data:
+                attachment = data['attachment']
+                storage.save('%s/%s' % (settings.REVIEWER_ATTACHMENTS_PATH,
+                                        attachment.name), attachment)
+                ActivityLogAttachment(activity_log=al,
+                                      description=data['description'],
+                                      mimetype=attachment.content_type,
+                                      filepath=attachment.name).save()
+
     for arg in args:
         if isinstance(arg, tuple):
-            if arg[0] == Addon:
+            if arg[0] == Webapp:
+                AppLog(addon_id=arg[1], activity_log=al).save()
+            elif arg[0] == Addon:
                 AddonLog(addon_id=arg[1], activity_log=al).save()
             elif arg[0] == Version:
                 VersionLog(version_id=arg[1], activity_log=al).save()
             elif arg[0] == UserProfile:
                 UserLog(user_id=arg[1], activity_log=al).save()
+            elif arg[0] == Group:
+                GroupLog(group_id=arg[1], activity_log=al).save()
 
-        if isinstance(arg, Addon):
+        # Webapp first since Webapp subclasses Addon.
+        if isinstance(arg, Webapp):
+            AppLog(addon=arg, activity_log=al).save()
+        elif isinstance(arg, Addon):
             AddonLog(addon=arg, activity_log=al).save()
         elif isinstance(arg, Version):
             VersionLog(version=arg, activity_log=al).save()
         elif isinstance(arg, UserProfile):
             # Index by any user who is mentioned as an argument.
             UserLog(activity_log=al, user=arg).save()
+        elif isinstance(arg, Group):
+            GroupLog(group=arg, activity_log=al).save()
 
     # Index by every user
     UserLog(activity_log=al, user=user).save()

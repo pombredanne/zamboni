@@ -4,17 +4,17 @@ Borrowed from: http://code.google.com/p/django-localeurl
 Note: didn't make sense to use localeurl since we need to capture app as well
 """
 import contextlib
-import time
 import urllib
 
 from django.conf import settings
 from django.contrib.sessions.middleware import SessionMiddleware
-from django.http import HttpResponsePermanentRedirect
+from django.core.urlresolvers import is_valid_path
+from django.http import (Http404, HttpResponseRedirect,
+                         HttpResponsePermanentRedirect)
 from django.middleware import common
 from django.utils.cache import patch_vary_headers, patch_cache_control
 from django.utils.encoding import iri_to_uri, smart_str
 
-import commonware.log
 import MySQLdb as mysql
 import tower
 import jingo
@@ -35,8 +35,19 @@ class LocaleAndAppURLMiddleware(object):
     def process_request(self, request):
         # Find locale, app
         prefixer = urlresolvers.Prefixer(request)
+        if settings.DEBUG:
+            redirect_type = HttpResponseRedirect
+        else:
+            redirect_type = HttpResponsePermanentRedirect
         urlresolvers.set_url_prefix(prefixer)
         full_path = prefixer.fix(prefixer.shortened_path)
+        # In mkt, don't vary headers on User-Agent.
+        with_app = not getattr(settings, 'MARKETPLACE', False)
+
+        if (prefixer.app == amo.MOBILE.short and
+                request.path.rstrip('/').endswith('/' + amo.MOBILE.short)):
+            # TODO: Eventually put MOBILE in RETIRED_APPS, but not yet.
+            return redirect_type(request.path.replace('/mobile', '/android'))
 
         if 'lang' in request.GET:
             # Blank out the locale so that we can set a new one.  Remove lang
@@ -45,7 +56,7 @@ class LocaleAndAppURLMiddleware(object):
             new_path = prefixer.fix(prefixer.shortened_path)
             query = dict((smart_str(k), request.GET[k]) for k in request.GET)
             query.pop('lang')
-            return HttpResponsePermanentRedirect(urlparams(new_path, **query))
+            return redirect_type(urlparams(new_path, **query))
 
         if full_path != request.path:
             query_string = request.META.get('QUERY_STRING', '')
@@ -54,24 +65,26 @@ class LocaleAndAppURLMiddleware(object):
             if query_string:
                 full_path = "%s?%s" % (full_path, query_string)
 
-            response = HttpResponsePermanentRedirect(full_path)
+            response = redirect_type(full_path)
             # Cache the redirect for a year.
-            patch_cache_control(response, max_age=60 * 60 * 24 * 365)
+            if not settings.DEBUG:
+                patch_cache_control(response, max_age=60 * 60 * 24 * 365)
 
             # Vary on Accept-Language or User-Agent if we changed the locale or
             # app.
             old_app = prefixer.app
             old_locale = prefixer.locale
             new_locale, new_app, _ = prefixer.split_path(full_path)
+
             if old_locale != new_locale:
                 patch_vary_headers(response, ['Accept-Language'])
-            if old_app != new_app:
+            if with_app and old_app != new_app:
                 patch_vary_headers(response, ['User-Agent'])
             return response
 
         request.path_info = '/' + prefixer.shortened_path
         tower.activate(prefixer.locale)
-        request.APP = amo.APPS.get(prefixer.app)
+        request.APP = amo.APPS.get(prefixer.app, amo.FIREFOX)
         request.LANG = prefixer.locale
 
 
@@ -86,12 +99,18 @@ class NoVarySessionMiddleware(SessionMiddleware):
     Cookie at this level only hurts us.
     """
 
+    def process_request(self, request):
+        if not getattr(request, 'API', False):
+            super(NoVarySessionMiddleware, self).process_request(request)
+
     def process_response(self, request, response):
         if settings.READ_ONLY:
             return response
         # Let SessionMiddleware do its processing but prevent it from changing
         # the Vary header.
-        vary = response.get('Vary', None)
+        vary = None
+        if hasattr(response, 'get'):
+            vary = response.get('Vary', None)
         new_response = (super(NoVarySessionMiddleware, self)
                         .process_response(request, response))
         if vary:
@@ -112,13 +131,13 @@ class RemoveSlashMiddleware(object):
     def process_response(self, request, response):
         if (response.status_code == 404
             and request.path_info.endswith('/')
-            and not common._is_valid_path(request.path_info)
-            and common._is_valid_path(request.path_info[:-1])):
+            and not is_valid_path(request.path_info)
+            and is_valid_path(request.path_info[:-1])):
             # Use request.path because we munged app/locale in path_info.
             newurl = request.path[:-1]
             if request.GET:
                 with safe_query_string(request):
-                    newurl += '?' + request.META['QUERY_STRING']
+                    newurl += '?' + request.META.get('QUERY_STRING', '')
             return HttpResponsePermanentRedirect(newurl)
         else:
             return response
@@ -132,7 +151,7 @@ def safe_query_string(request):
     We need unicode so it can be combined with a reversed URL, but it has to be
     ascii to go in a Location header.  iri_to_uri seems like a good compromise.
     """
-    qs = request.META['QUERY_STRING']
+    qs = request.META.get('QUERY_STRING', '')
     try:
         request.META['QUERY_STRING'] = iri_to_uri(qs)
         yield
@@ -158,21 +177,24 @@ class ReadOnlyMiddleware(object):
             return jingo.render(request, 'amo/read-only.html', status=503)
 
 
-timing_log = commonware.log.getLogger('z.timer')
+class ViewMiddleware(object):
+
+    def get_name(self, view_func):
+        # Find a function name or used the class based view class name.
+        if not hasattr(view_func, '__name__'):
+            name = view_func.__class__.__name__
+        else:
+            name = view_func.__name__
+        return '%s.%s' % (view_func.__module__, name)
 
 
-class TimingMiddleware(object):
+class NoAddonsMiddleware(ViewMiddleware):
+    """
+    If enabled will try and stop any requests to addons by 404'ing them.
+    Here there be dragons. Fortunately this is temporary right?
+    """
 
-    def process_request(self, request):
-        request._start = time.time()
-
-    def process_response(self, request, response):
-        auth = 'ANON'
-        if hasattr(request, 'user') and request.user.is_authenticated():
-            auth = 'AUTH'
-        d = {'method': request.method, 'time': time.time() - request._start,
-             'code': response.status_code, 'auth': auth,
-             'url': smart_str(request.path_info)}
-        msg = '{method} "{url}" ({code}) {time:.2f} [{auth}]'.format(**d)
-        timing_log.info(msg)
-        return response
+    def process_view(self, request, view_func, view_args, view_kwargs):
+        name = self.get_name(view_func)
+        if name.startswith(settings.NO_ADDONS_MODULES):
+            raise Http404

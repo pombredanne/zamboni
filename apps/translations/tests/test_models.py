@@ -1,25 +1,32 @@
 # -*- coding: utf-8 -*-
+from contextlib import nested
+
+import django
 from django.conf import settings
-from django import test
+from django.db import connections, reset_queries
+from django.test.utils import override_settings
 from django.utils import translation
 from django.utils.functional import lazy
 
 import jinja2
+import multidb
+from mock import patch
+from nose import SkipTest
 from nose.tools import eq_
-from test_utils import ExtraAppTestCase, trans_eq
+from test_utils import trans_eq, TestCase
 
 from testapp.models import TranslatedModel, UntranslatedModel, FancyModel
-from translations.models import (Translation, PurifiedTranslation,
-                                 TranslationSequence)
 from translations import widgets
 from translations.query import order_by_translation
+from translations.models import (LinkifiedTranslation, PurifiedTranslation,
+                                 Translation, TranslationSequence)
 
 
 def ids(qs):
     return [o.id for o in qs]
 
 
-class TranslationFixturelessTestCase(test.TestCase):
+class TranslationFixturelessTestCase(TestCase):
     "We want to be able to rollback stuff."
 
     def test_whitespace(self):
@@ -28,7 +35,7 @@ class TranslationFixturelessTestCase(test.TestCase):
         eq_('khaaaaaan!', t.localized_string)
 
 
-class TranslationSequenceTestCase(test.TestCase):
+class TranslationSequenceTestCase(TestCase):
     """
     Make sure automatic translation sequence generation works
     as expected.
@@ -61,9 +68,8 @@ class TranslationSequenceTestCase(test.TestCase):
             'Translation sequence needs to keep increasing.')
 
 
-class TranslationTestCase(ExtraAppTestCase):
+class TranslationTestCase(TestCase):
     fixtures = ['testapp/test_models.json']
-    extra_apps = ['translations.tests.testapp']
 
     def setUp(self):
         super(TranslationTestCase, self).setUp()
@@ -71,6 +77,7 @@ class TranslationTestCase(ExtraAppTestCase):
         self.redirect_secret_key = settings.REDIRECT_SECRET_KEY
         settings.REDIRECT_URL = None
         settings.REDIRECT_SECRET_KEY = 'sekrit'
+        translation.activate('en-US')
 
     def tearDown(self):
         super(TranslationTestCase, self).tearDown()
@@ -199,14 +206,24 @@ class TranslationTestCase(ExtraAppTestCase):
         translation.activate('fr')
         trans_eq(get_model().name, 'oui', 'fr')
 
+    def test_dict_with_hidden_locale(self):
+        with self.settings(HIDDEN_LANGUAGES=('xxx',)):
+            o = TranslatedModel.objects.get(id=1)
+            o.name = {'en-US': 'active language', 'xxx': 'hidden language',
+                      'de': 'another language'}
+            o.save()
+        ts = Translation.objects.filter(id=o.name_id)
+        eq_(sorted(ts.values_list('locale', flat=True)),
+            ['de', 'en-US', 'xxx'])
+
     def test_dict_bad_locale(self):
         m = TranslatedModel.objects.get(id=1)
-        m.name = {'de': 'oof', 'xxx': 'bam', 'es-ES': 'si'}
+        m.name = {'de': 'oof', 'xxx': 'bam', 'es': 'si'}
         m.save()
 
         ts = Translation.objects.filter(id=m.name_id)
         eq_(sorted(ts.values_list('locale', flat=True)),
-            ['de', 'en-US', 'es-ES'])
+            ['de', 'en-US', 'es'])
 
     def test_sorting(self):
         """Test translation comparisons in Python code."""
@@ -316,7 +333,8 @@ class TranslationTestCase(ExtraAppTestCase):
         m = FancyModel.objects.create(linkified=s)
         eq_(m.linkified.localized_string_clean,
             'I like <a href="http://example.com/'
-            '45cfcbcc274c1b6a4bbff81584f3463dd5a08221/http%3A//example.org/'
+            '40979175e3ef6d7a9081085f3b99f2f05447b22ba790130517dd62b7ee59ef94/'
+            'http%3A//example.org/'
             'awesomepage.html" rel="nofollow">http://example.org/awesomepage'
             '.html</a> .')
         eq_(m.linkified.localized_string, s)
@@ -333,6 +351,116 @@ class TranslationTestCase(ExtraAppTestCase):
         obj = TranslatedModel.objects.get(id=1)
         eq_(unicode(obj.no_locale), 'blammo')
         eq_(obj.no_locale.locale, 'fr')
+
+    def test_delete_set_null(self):
+        """
+        Test that deleting a translation sets the corresponding FK to NULL,
+        if it was the only translation for this field.
+        """
+        obj = TranslatedModel.objects.get(id=1)
+        trans_id = obj.description.id
+        eq_(Translation.objects.filter(id=trans_id).count(), 1)
+
+        obj.description.delete()
+
+        obj = TranslatedModel.objects.no_cache().get(id=1)
+        eq_(obj.description_id, None)
+        eq_(obj.description, None)
+        eq_(Translation.objects.no_cache().filter(id=trans_id).exists(), False)
+
+    @patch.object(TranslatedModel, 'get_fallback', create=True)
+    def test_delete_keep_other_translations(self, get_fallback):
+        # To make sure both translations for the name are used, set the
+        # fallback to the second locale, which is 'de'.
+        get_fallback.return_value = 'de'
+
+        obj = TranslatedModel.objects.get(id=1)
+
+        orig_name_id = obj.name.id
+        eq_(obj.name.locale.lower(), 'en-us')
+        eq_(Translation.objects.filter(id=orig_name_id).count(), 2)
+
+        obj.name.delete()
+
+        obj = TranslatedModel.objects.no_cache().get(id=1)
+        eq_(Translation.objects.no_cache().filter(id=orig_name_id).count(), 1)
+
+        # We shouldn't have set name_id to None.
+        eq_(obj.name_id, orig_name_id)
+
+        # We should find a Translation.
+        eq_(obj.name.id, orig_name_id)
+        eq_(obj.name.locale, 'de')
+
+
+class TranslationMultiDbTests(TestCase):
+    fixtures = ['testapp/test_models.json']
+
+    def setUp(self):
+        super(TranslationMultiDbTests, self).setUp()
+        translation.activate('en-US')
+
+    def tearDown(self):
+        self.cleanup_fake_connections()
+        super(TranslationMultiDbTests, self).tearDown()
+
+    @property
+    def mocked_dbs(self):
+        return {
+            'default': settings.DATABASES['default'],
+            'slave-1': settings.DATABASES['default'].copy(),
+            'slave-2': settings.DATABASES['default'].copy(),
+        }
+
+    def cleanup_fake_connections(self):
+        with patch.object(django.db.connections, 'databases', self.mocked_dbs):
+            for key in ('default', 'slave-1', 'slave-2'):
+                connections[key].close()
+
+    @override_settings(DEBUG=True)
+    def test_translations_queries(self):
+        # Make sure we are in a clean environnement.
+        reset_queries()
+        TranslatedModel.objects.get(pk=1)
+        eq_(len(connections['default'].queries), 3)
+
+    @override_settings(DEBUG=True)
+    def test_translations_reading_from_multiple_db(self):
+        with patch.object(django.db.connections, 'databases', self.mocked_dbs):
+            # Make sure we are in a clean environnement.
+            reset_queries()
+
+            with patch('multidb.get_slave', lambda: 'slave-2'):
+                TranslatedModel.objects.get(pk=1)
+                eq_(len(connections['default'].queries), 0)
+                eq_(len(connections['slave-1'].queries), 0)
+                eq_(len(connections['slave-2'].queries), 3)
+
+    @override_settings(DEBUG=True)
+    def test_translations_reading_from_multiple_db_using(self):
+        raise SkipTest('Will need a django-queryset-transform patch to work')
+        with patch.object(django.db.connections, 'databases', self.mocked_dbs):
+            # Make sure we are in a clean environnement.
+            reset_queries()
+
+            with patch('multidb.get_slave', lambda: 'slave-2'):
+                TranslatedModel.objects.using('slave-1').get(pk=1)
+                eq_(len(connections['default'].queries), 0)
+                eq_(len(connections['slave-1'].queries), 3)
+                eq_(len(connections['slave-2'].queries), 0)
+
+    @override_settings(DEBUG=True)
+    def test_translations_reading_from_multiple_db_pinning(self):
+        with patch.object(django.db.connections, 'databases', self.mocked_dbs):
+            # Make sure we are in a clean environnement.
+            reset_queries()
+
+            with nested(patch('multidb.get_slave', lambda: 'slave-2'),
+                        multidb.pinning.use_master):
+                TranslatedModel.objects.get(pk=1)
+                eq_(len(connections['default'].queries), 3)
+                eq_(len(connections['slave-1'].queries), 0)
+                eq_(len(connections['slave-2'].queries), 0)
 
 
 def test_translation_bool():
@@ -371,3 +499,17 @@ def test_comparison_with_lazy():
     lazy_u = lazy(lambda x: x, unicode)
     x == lazy_u('xxx')
     lazy_u('xxx') == x
+
+
+def test_cache_key():
+    # Test that we are not taking the db into account when building our
+    # cache keys for django-cache-machine. See bug 928881.
+    eq_(Translation._cache_key(1, 'default'),
+        Translation._cache_key(1, 'slave'))
+
+    # Test that we are using the same cache no matter what Translation class
+    # we use.
+    eq_(PurifiedTranslation._cache_key(1, 'default'),
+        Translation._cache_key(1, 'default'))
+    eq_(LinkifiedTranslation._cache_key(1, 'default'),
+        Translation._cache_key(1, 'default'))

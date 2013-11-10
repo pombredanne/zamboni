@@ -1,77 +1,39 @@
-from django.conf import settings
-
 import jinja2
+import waffle
 
-from jingo import register, env
+from jingo import env, register
 from tower import ugettext as _
-from amo.helpers import locale_url
+from access import acl
+from addons.models import Addon
+from bandwagon.models import Collection
+from amo.urlresolvers import reverse
 
 
-@register.inclusion_tag('stats/report_menu.html')
+@register.function
 @jinja2.contextfunction
-def report_menu(context, addon, report):
-
-    report_tree = [
-        {
-            'name': 'overview',
-            'url': '/',
-            'title': _('Overview'),
-        },
-        {
-            'name': 'downloads',
-            'url': '/downloads/',
-            'title': _('Downloads'),
-            'children': [
-                {
-                    'name': 'sources',
-                    'url': '/downloads/sources/',
-                    'title': _('by Source'),
-                },
-            ]
-        },
-        {
-            'name': 'usage',
-            'url': '/usage/',
-            'title': _('Daily Users'),
-            'children': [
-                {
-                    'name': 'versions',
-                    'url': '/usage/versions/',
-                    'title': _('by Add-on Version')
-                },
-                {
-                    'name': 'apps',
-                    'url': '/usage/applications/',
-                    'title': _('by Application')
-                },
-                {
-                    'name': 'locales',
-                    'url': '/usage/languages/',
-                    'title': _('by Language')
-                },
-                {
-                    'name': 'os',
-                    'url': '/usage/os/',
-                    'title': _('by Operating System')
-                },
-                {
-                    'name': 'status',
-                    'url': '/usage/status/',
-                    'title': _('by Add-on Status')
-                },
-            ]
-        },
-        {
-            'name': 'contributions',
-            'url': '/contributions/',
-            'title': _('Contributions')
-        },
-    ]
-
-    base_url = '/addon/%d/statistics' % (addon.id)
-
+def report_menu(context, request, report, obj=None):
     """Reports Menu. navigation for the various statistic reports."""
-    c = {'report': report,
-        'base_url': locale_url(base_url),
-        'report_tree': report_tree}
-    return c
+    if obj:
+        if isinstance(obj, Addon):
+            has_privs = False
+            if (request.user.is_authenticated() and (
+                acl.action_allowed(request, 'Stats', 'View') or
+                obj.has_author(request.amo_user))):
+                has_privs = True
+            t = env.get_template('stats/addon_report_menu.html')
+            if obj.is_webapp() and waffle.switch_is_active('marketplace'):
+                t = env.get_template('appstats/app_report_menu.html')
+            c = {
+                'addon': obj,
+                'has_privs': has_privs
+            }
+            return jinja2.Markup(t.render(c))
+        if isinstance(obj, Collection):
+            t = env.get_template('stats/collection_report_menu.html')
+            c = {
+                'collection': obj,
+            }
+            return jinja2.Markup(t.render(c))
+
+    t = env.get_template('stats/global_report_menu.html')
+    return jinja2.Markup(t.render())

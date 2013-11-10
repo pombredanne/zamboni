@@ -21,7 +21,6 @@
         "pk": 4043307,
         "model": "users.userprofile",
         "fields": {
-            "sandboxshown": 1,
             "display_collections_fav": 1,
             "display_collections": 1,
             "occupation": "",
@@ -33,13 +32,10 @@
             "email": "jbalogh@mozilla.com",
             "notifycompat": 1,
             "bio": null,
-            "firstname": "Jeff",
             "deleted": 0,
-            "lastname": "Balogh",
             "emailhidden": 0,
             "user": 4043307,
             "password": "sha512$32e15df727a054aa56cf69accc142d1573372641a176aab9b0f1458e27dc6f3b$5bd3bd7811569776a07fbbb5e50156aa6ebdd0bec9267249b57da065340f0324190f1ad0d5f609dca19179a86c64807e22f789d118e6f7109c95b9c64ae8f619",
-            "nickname": "jbalogh",
             "username": "jbalogh",
             "display_name": "Jeff Balogh \u0627\u0644\u062a\u0637\u0628",
             "resetcode_expires": "2010-01-12 15:28:07",
@@ -76,7 +72,6 @@
         "pk": 9945,
         "model": "users.userprofile",
         "fields": {
-            "sandboxshown": 1,
             "display_collections_fav": 1,
             "display_collections": 1,
             "occupation": "Add-ons Product Management @ Mozilla",
@@ -88,13 +83,10 @@
             "email": "fligtar@gmail.com",
             "notifycompat": 1,
             "bio": null,
-            "firstname": "Justin",
             "deleted": 0,
-            "lastname": "Scott",
             "emailhidden": 1,
-            "user": null,
+            "user": 9945,
             "password": "sha512$32e15df727a054aa56cf69accc142d1573372641a176aab9b0f1458e27dc6f3b$5bd3bd7811569776a07fbbb5e50156aa6ebdd0bec9267249b57da065340f0324190f1ad0d5f609dca19179a86c64807e22f789d118e6f7109c95b9c64ae8f619",
-            "nickname": "fligtar",
             "username": "fligtar",
             "display_name": "Justin Scott \u0627\u0644\u062a\u0637\u0628",
             "resetcode_expires": "2010-01-12 15:28:07",
@@ -102,7 +94,8 @@
             "created": "2007-03-05 13:09:37",
             "notes": "",
             "modified": "2009-09-24 20:11:30",
-            "notifyevents": 1
+            "notifyevents": 1,
+            "read_dev_agreement": "2012-08-20 00:00:00"
         }
     },
     {
@@ -127,7 +120,6 @@
         "pk": 5349055,
         "model": "users.userprofile",
         "fields": {
-            "sandboxshown": false,
             "display_collections_fav": false,
             "display_collections": false,
             "occupation": "",
@@ -139,13 +131,10 @@
             "email": "testo@example.com",
             "notifycompat": true,
             "bio": 1124105,
-            "firstname": "Barry",
             "deleted": false,
-            "lastname": "",
             "emailhidden": false,
             "user": 5349055,
             "password": "sha512$9ec347fc67fc17c99a9dd43d1431a5959011acf247fb2128228c9a04208d1991$edcc677c7045ee2a379286e2ad6d99bd58af6b4a2117e1e4c2743923a9a297ce56d5311fe51baa4584c5483af0eaedc57700fbb4b719c0a84597c1609536ca4d",
-            "nickname": "barry",
             "username": "barry",
             "display_name": "barry \u0627\u0644\u062a\u0637\u0628",
             "resetcode_expires": "2010-07-23 00:37:10",
@@ -173,5 +162,36 @@
             "modified": "2010-09-07 00:31:40",
             "created": "2010-09-07 00:31:40"
         }
+    },
+    {
+        "pk": 9946,
+        "model": "users.userprofile",
+        "fields": {
+            "display_collections_fav": 1,
+            "display_collections": 1,
+            "occupation": "",
+            "confirmationcode": "",
+            "location": "",
+            "picture_type": "image/jpeg",
+            "averagerating": "3.73",
+            "homepage": "http://example.com",
+            "email": "alice@example.com",
+            "notifycompat": 1,
+            "bio": null,
+            "deleted": 0,
+            "emailhidden": 1,
+            "user": null,
+            "password": "sha512$32e15df727a054aa56cf69accc142d1573372641a176aab9b0f1458e27dc6f3b$5bd3bd7811569776a07fbbb5e50156aa6ebdd0bec9267249b57da065340f0324190f1ad0d5f609dca19179a86c64807e22f789d118e6f7109c95b9c64ae8f619",
+            "username": "alice",
+            "display_name": "Alice Smith \u0627\u0644\u062a\u0637\u0628",
+            "resetcode_expires": "2010-01-12 15:28:07",
+            "resetcode": "",
+            "created": "2007-03-05 13:09:37",
+            "notes": "",
+            "modified": "2009-09-24 20:11:30",
+            "notifyevents": 1,
+            "read_dev_agreement": "2012-08-20 00:00:00"
+        }
     }
+
 ]

@@ -1,144 +1,213 @@
-from datetime import date
-from decimal import Decimal
+# -*- coding: utf-8 -*-
+from datetime import datetime, timedelta
+import json
 
-from django import test
+from django.conf import settings
+from django.core import mail
+from django.db import models
+from django.test.client import RequestFactory
+from django.utils import translation
 
+import phpserialize as php
 from nose.tools import eq_
 
-from stats.db import StatsDict
-from stats.models import Contribution, DownloadCount, UpdateCount
+import amo
+import amo.tests
+from addons.models import Addon
+from stats.models import ClientData, Contribution
+from stats.db import StatsDictField
+from users.models import UserProfile
+from market.models import Refund
+from zadmin.models import DownloadSource
 
 
-class TestDownloadCountModel(test.TestCase):
+class TestStatsDictField(amo.tests.TestCase):
+
+    def test_to_python_none(self):
+        eq_(StatsDictField().to_python(None), None)
+
+    def test_to_python_dict(self):
+        eq_(StatsDictField().to_python({'a': 1}), {'a': 1})
+
+    def test_to_python_php(self):
+        val = {'a': 1}
+        eq_(StatsDictField().to_python(php.serialize(val)), val)
+
+    def test_to_python_json(self):
+        val = {'a': 1}
+        eq_(StatsDictField().to_python(json.dumps(val)), val)
+
+
+class TestContributionModel(amo.tests.TestCase):
     fixtures = ['stats/test_models.json']
 
-    def test_sources(self):
-        dc = DownloadCount.stats.get(id=1)
+    def setUp(self):
+        user = UserProfile.objects.create(username='t@t.com')
+        self.con = Contribution.objects.get(pk=1)
+        self.con.update(type=amo.CONTRIB_PURCHASE, user=user)
 
-        assert isinstance(dc.sources, StatsDict), 'sources is not a StatsDict'
-        assert len(dc.sources) > 0, 'sources is empty'
+    def test_related_protected(self):
+        user = UserProfile.objects.create(username='foo@bar.com')
+        addon = Addon.objects.create(type=amo.ADDON_EXTENSION)
+        payment = Contribution.objects.create(user=user, addon=addon)
+        Contribution.objects.create(user=user, addon=addon, related=payment)
+        self.assertRaises(models.ProtectedError, payment.delete)
 
-    def test_summary(self):
-        # somewhat contrived, but a good test: summarize the entire dataset
-        summary = DownloadCount.stats.all().summary(
-                count_sum='count', sources_sum='sources')
+    def test_locale(self):
+        translation.activate('en_US')
+        eq_(Contribution.objects.all()[0].get_amount_locale(), u'$1.99')
+        translation.activate('fr')
+        eq_(Contribution.objects.all()[0].get_amount_locale(), u'1,99\xa0$US')
 
-        eq_(len(summary), 5, 'unexpected number of keys in summary')
-        eq_(summary['start'], date(2009, 6, 1),
-            'unexpected summary start date')
-        eq_(summary['end'], date(2009, 9, 3), 'unexpected summary end date')
-        assert summary['row_count'] > 0, 'zero rows in summary'
-        assert summary['count_sum'] > 0, 'zero count_sum in summary'
-        assert sum(summary['sources_sum'].values()) > 0, \
-                'zero sources in summary'
+    def test_instant_refund(self):
+        self.con.update(created=datetime.now())
+        assert self.con.is_instant_refund(), 'Refund should be instant'
 
-    def test_remap_special_fields(self):
-        qs = DownloadCount.stats.filter(pk=1)
-        days = list(qs.daily_summary(date='start', rows='row_count',
-                                     start='count'))
+    def test_not_instant_refund(self):
+        diff = timedelta(seconds=settings.PAYPAL_REFUND_INSTANT + 10)
+        self.con.update(created=datetime.now() - diff)
+        assert not self.con.is_instant_refund(), "Refund shouldn't be instant"
 
-        eq_(len(days), 1, 'unexpected number of days')
-        assert 'date' in days[0], 'date key not in summary results'
-        assert 'rows' in days[0], 'rows key not in summary results'
-        assert 'start' in days[0], 'start key not in summary results'
-        eq_(days[0]['date'], date(2009, 6, 1), 'unexpected date value')
-        eq_(days[0]['rows'], 1, 'unexpected rows value')
-        eq_(days[0]['start'], 10, 'unexpected start value')
+    def test_refunded(self):
+        user = UserProfile.objects.create(username='foo@bar.com')
+        addon = Addon.objects.create(type=amo.ADDON_EXTENSION)
 
-    def test_weekly_summary(self):
-        qs = DownloadCount.stats.filter(addon=4,
-                date__range=(date(2009, 6, 1), date(2009, 7, 3)))
-        weeks = list(qs.weekly_summary('count', 'sources'))
-
-        eq_(len(weeks), 5, 'unexpected number of weeks')
-        eq_(weeks[0]['start'], date(2009, 6, 29),
-            'unexpected start date for week 1')
-        eq_(weeks[4]['start'], date(2009, 6, 1),
-            'unexpected start date for week 5')
-        eq_(weeks[4]['row_count'], 2, 'unexpected # of rows in week 5')
-        eq_(weeks[4]['count'], 20, 'unexpected count total in week 5')
-        eq_(sum(weeks[4]['sources'].values()), 10,
-            'unexpected sources total in week 5')
-
-    def test_monthly_summary(self):
-        qs = DownloadCount.stats.filter(addon=4,
-                date__range=(date(2009, 6, 1), date(2009, 9, 30)))
-        months = list(qs.monthly_summary('count', 'sources'))
-
-        eq_(len(months), 4, 'unexpected number of months')
-        eq_(months[0]['start'], date(2009, 9, 1),
-            'unexpected start date for month 1')
-        eq_(months[3]['start'], date(2009, 6, 1),
-            'unexpected start date for month 4')
-        eq_(months[3]['row_count'], 5, 'unexpected # of rows in month 4')
-        eq_(months[3]['count'], 50, 'unexpected count total in month 4')
-        eq_(sum(months[3]['sources'].values()), 25,
-                'unexpected sources total in month 4')
-
-    def test_daily_fill_holes(self):
-        qs = DownloadCount.stats.filter(addon=4,
-                date__range=(date(2009, 6, 1), date(2009, 6, 7)))
-        days = list(qs.daily_summary('count', 'sources', fill_holes=True))
-
-        eq_(len(days), 7, 'unexpected number of days')
-        eq_(days[1]['start'], date(2009, 6, 6),
-            'unexpected start date for day 2')
-        eq_(days[1]['row_count'], 0, 'unexpected non-zero row_count')
-        eq_(days[1]['count'], 0, 'unexpected non-zero count')
-        eq_(days[1]['sources'], {}, 'unexpected non-empty sources')
+        assert not self.con.is_refunded()
+        Contribution.objects.create(user=user, addon=addon, related=self.con,
+                                    type=amo.CONTRIB_REFUND)
+        assert self.con.is_refunded()
 
 
-class TestUpdateCountModel(test.TestCase):
-    fixtures = ['stats/test_models.json']
-    test_app = '{ec8030f7-c20a-464f-9b0e-13a3a9e97384}'
-    test_ver = '3.0.9'
+class TestEmail(amo.tests.TestCase):
+    fixtures = ['base/users', 'base/addon_3615']
 
-    def test_serial_types(self):
-        uc = UpdateCount.stats.get(id=1)
+    def setUp(self):
+        self.addon = Addon.objects.get(pk=3615)
+        self.user = UserProfile.objects.get(pk=999)
 
-        assert isinstance(uc.versions, StatsDict), 'versions not a StatsDict'
-        assert isinstance(uc.statuses, StatsDict), 'statuses not a StatsDict'
-        assert isinstance(uc.applications, StatsDict), \
-            'applications not a StatsDict'
-        assert isinstance(uc.oses, StatsDict), 'oses not a StatsDict'
-        assert uc.locales == None, 'locales is not None'
-        assert len(uc.statuses) > 0, 'statuses is empty'
+    def make_contribution(self, amount, locale, type):
+        return Contribution.objects.create(type=type, addon=self.addon,
+                                           user=self.user, amount=amount,
+                                           source_locale=locale)
 
-    def test_applications(self):
-        uc = UpdateCount.stats.get(id=1)
+    def chargeback_email(self, amount, locale):
+        cont = self.make_contribution(amount, locale, amo.CONTRIB_CHARGEBACK)
+        cont.mail_chargeback()
+        eq_(len(mail.outbox), 1)
+        return mail.outbox[0]
 
-        assert isinstance(uc.applications[self.test_app], dict), \
-            'applications item is not a dict'
-        assert uc.applications[self.test_app][self.test_ver] == 1000, \
-            'unexpected count for app version'
+    def test_chargeback_email(self):
+        email = self.chargeback_email('10', 'en-US')
+        eq_(email.subject, u'%s payment reversal' % self.addon.name)
+        assert str(self.addon.name) in email.body
 
-    def test_applications_summary(self):
-        qs = UpdateCount.stats.filter(addon=4,
-                date__range=(date(2009, 6, 1), date(2009, 6, 2)))
-        summary = qs.summary(apps='applications')
+    def test_chargeback_negative(self):
+        email = self.chargeback_email('-10', 'en-US')
+        assert '$10.00' in email.body
 
-        eq_(summary['row_count'], 2,
-            'unexpected row_count in applications summary')
-        eq_(summary['apps'][self.test_app][self.test_ver], 2500,
-            'unexpected total for app version')
+    def test_chargeback_positive(self):
+        email = self.chargeback_email('10', 'en-US')
+        assert '$10.00' in email.body
+
+    def test_chargeback_unicode(self):
+        self.addon.name = u'Азәрбајҹан'
+        self.addon.save()
+        email = self.chargeback_email('-10', 'en-US')
+        assert '$10.00' in email.body
+
+    def test_chargeback_locale(self):
+        self.addon.name = {'fr': u'België'}
+        self.addon.locale = 'fr'
+        self.addon.save()
+        email = self.chargeback_email('-10', 'fr')
+        assert u'België' in email.body
+        assert u'10,00\xa0$US' in email.body
+
+    def notification_email(self, amount, locale, method):
+        cont = self.make_contribution(amount, locale, amo.CONTRIB_REFUND)
+        getattr(cont, method)()
+        eq_(len(mail.outbox), 1)
+        return mail.outbox[0]
+
+    def test_accepted_email(self):
+        email = self.notification_email('10', 'en-US', 'mail_approved')
+        eq_(email.subject, u'%s refund approved' % self.addon.name)
+        assert str(self.addon.name) in email.body
+
+    def test_accepted_unicode(self):
+        self.addon.name = u'Азәрбајҹан'
+        self.addon.save()
+        email = self.notification_email('10', 'en-US', 'mail_approved')
+        assert '$10.00' in email.body
+
+    def test_accepted_locale(self):
+        self.addon.name = {'fr': u'België'}
+        self.addon.locale = 'fr'
+        self.addon.save()
+        email = self.notification_email('-10', 'fr', 'mail_approved')
+        assert u'België' in email.body
+        assert u'10,00\xa0$US' in email.body
+
+    def test_declined_email(self):
+        email = self.notification_email('10', 'en-US', 'mail_declined')
+        eq_(email.subject, u'%s refund declined' % self.addon.name)
+
+    def test_declined_unicode(self):
+        self.addon.name = u'Азәрбајҹан'
+        self.addon.save()
+        email = self.notification_email('10', 'en-US', 'mail_declined')
+        eq_(email.subject, u'%s refund declined' % self.addon.name)
+
+    def test_failed_email(self):
+        cont = self.make_contribution('10', 'en-US', amo.CONTRIB_PURCHASE)
+        msg = 'oh no'
+        cont.record_failed_refund(msg, self.user)
+        eq_(Refund.objects.count(), 1)
+        rf = Refund.objects.get(contribution=cont)
+        eq_(rf.status, amo.REFUND_FAILED)
+        eq_(rf.rejection_reason, msg)
+        eq_(len(mail.outbox), 2)
+        usermail, devmail = mail.outbox
+        eq_(usermail.to, [self.user.email])
+        eq_(devmail.to, [self.addon.support_email])
+        assert msg in devmail.body
+
+    def test_thankyou_note(self):
+        self.addon.enable_thankyou = True
+        self.addon.thankyou_note = u'Thank "quoted". <script>'
+        self.addon.name = u'Test'
+        self.addon.save()
+        cont = self.make_contribution('10', 'en-US', amo.CONTRIB_PURCHASE)
+        cont.update(transaction_id='yo',
+                    post_data={'payer_email': 'test@tester.com'})
+
+        cont.mail_thankyou()
+        eq_(len(mail.outbox), 1)
+        email = mail.outbox[0]
+        eq_(email.to, ['test@tester.com'])
+        assert '&quot;' not in email.body
+        assert u'Thank "quoted".' in email.body
+        assert '<script>' not in email.body
+        assert '&lt;script&gt;' not in email.body
 
 
-class TestContributionModel(test.TestCase):
-    fixtures = ['stats/test_models.json']
+class TestClientData(amo.tests.TestCase):
 
-    def test_basic(self):
-        c = Contribution.stats.get(id=1)
+    def test_get_or_create(self):
+        download_source = DownloadSource.objects.create(name='mkt-home')
+        device_type = 'desktop'
+        user_agent = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:16.0)'
+        client = RequestFactory()
+        request = client.post('/somewhere',
+                              data={'src': download_source.name,
+                                    'device_type': device_type,
+                                    'is_chromeless': False},
+                              **{'HTTP_USER_AGENT': user_agent})
 
-        eq_(c.amount, Decimal('1.99'), 'unexpected amount')
-        assert isinstance(c.post_data, StatsDict), \
-            'post_data is not a StatsDict'
-        eq_(c.email, 'nobody@mozilla.com', 'unexpected payer_email')
-
-    def test_daily_summary(self):
-        qs = Contribution.stats.filter(addon=4, transaction_id__isnull=False,
-                created__range=(date(2009, 6, 2), date(2009, 6, 3)))
-        days = list(qs.daily_summary('amount'))
-
-        eq_(len(days), 1, 'unexpected number of days')
-        eq_(days[0]['row_count'], 2, 'unexpected row_count')
-        eq_(days[0]['amount'], Decimal('4.98'), 'unexpected total amount')
+        cli = ClientData.get_or_create(request)
+        eq_(cli.download_source, download_source)
+        eq_(cli.device_type, device_type)
+        eq_(cli.user_agent, user_agent)
+        eq_(cli.is_chromeless, False)
+        eq_(cli.language, 'en-us')
+        eq_(cli.region, None)

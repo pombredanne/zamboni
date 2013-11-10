@@ -1,24 +1,6 @@
 // Things global to the site should go here, such as re-usable helper
 // functions and common ui components.
 
-// CSRF Tokens
-// Hijack the AJAX requests, and insert a CSRF token as a header.
-
-$('html').ajaxSend(function(event, xhr, ajaxSettings) {
-    var csrf, $meta;
-    // Block anything that starts with "http:", "https:", "://" or "//"
-    if (!/^((https?:)|:?[/]{2})/.test(ajaxSettings.url)) {
-        // Only send the token to relative URLs i.e. locally.
-        $meta = $('meta[name=csrf]');
-        if (!z.anonymous && $meta.exists()) {
-            csrf = $meta.attr('content');
-        } else {
-            csrf = $("#csrfmiddlewaretoken").val();
-        }
-        if (csrf) xhr.setRequestHeader("X-CSRFToken", csrf);
-    }
-});
-
 // Tooltip display. If you give an element a class of 'tooltip', it will
 // display a tooltip on hover. The contents of the tip will be the element's
 // title attribute OR the first title attribute in its children. Titles are
@@ -42,27 +24,27 @@ jQuery.fn.tooltip = function(tip_el) {
         timeout = false,
         $tgt, $title, delay;
 
-
     function setTip() {
         if (!$tgt) return;
         var pos = $tgt.offset(),
-            title = $title.attr('title');
+            title = $title.attr('title'),
+            html = $title.attr('data-tooltip-html');
 
         delay = $title.is('[data-delay]') ? $title.attr('data-delay') : 300;
 
-        if(title.indexOf('::') > 0) {
+        if (!html && title.indexOf('::') > 0) {
             var title_split = title.split('::');
             $msg.text("");
             $msg.append($("<strong>", {'text': title_split[0].trim()}));
             $msg.append($("<span>", {'text': title_split[1].trim()}));
         } else {
-            $msg.text(title);
+            $msg[html ? 'html' : 'text'](title);
         }
 
         $title.attr('data-oldtitle', title).attr('title', '');
 
-        var tw  = $tip.outerWidth() / 2,
-            th  = $tip.outerHeight(),
+        var tw  = $tip.outerWidth(false) / 2,
+            th  = $tip.outerHeight(false),
             toX = pos.left + $tgt.innerWidth() / 2 - tw - 1,
             toY = pos.top - $tgt.innerHeight() - th - 2;
 
@@ -75,14 +57,17 @@ jQuery.fn.tooltip = function(tip_el) {
     }
 
     $(document.body).bind("tooltip_change", setTip);
-    $targets.live("mouseover", function (e) {
+
+    function mouseover(e) {
         $tgt = $(this);
         if ($tgt.hasClass("formerror")) $tip.addClass("error");
         $title = $tgt.attr('title') ? $tgt : $("[title]", $tgt).first();
         if ($title.length) {
             setTip();
         }
-    }).live("mouseout", function (e) {
+    }
+
+    function mouseout(e) {
         clearTimeout(timeout);
         $tip.hide()
             .removeClass("error");
@@ -91,7 +76,16 @@ jQuery.fn.tooltip = function(tip_el) {
             $title.attr('title', $title.attr('data-oldtitle'))
                   .attr('data-oldtitle', '');
         }
-    });
+    }
+
+    if (parseFloat(jQuery.fn.jquery) < 1.7) {
+        // TODO: Upgrade to jQuery 1.9 on AMO (bug 841819).
+        $targets.live('mouseover', mouseover)
+                .live('mouseout', mouseout);
+    } else {
+        $targets.on('mouseover', mouseover)
+                .on('mouseout', mouseout);
+    }
 };
 
 // Setting up site tooltips.
@@ -116,6 +110,9 @@ function makeBlurHideCallback(el) {
         el.hideMe();
         if (el.o.emptyme) {
             el.empty();
+        }
+        if (el.o.deleteme) {
+            el.remove();
         }
     };
     return hider;
@@ -146,7 +143,8 @@ $.fn.popup = function(click_target, o) {
 
     var $ct         = $(click_target),
         $popup      = this,
-        uid         = (z.uid++);
+        uid         = (z.uid++),
+        spawned     = 0;
 
     $popup.o = $.extend({
         delegate:   false,
@@ -171,10 +169,10 @@ $.fn.popup = function(click_target, o) {
         $popup.detach().appendTo("body");
         var pt  = $(el),
             pos = pt.offset(),
-            tw  = pt.outerWidth() / 2,
-            th  = pt.outerHeight(),
-            pm  = pos.left + tw > $("body").outerWidth() / 2,
-            os  = pm ? $popup.outerWidth() - 84 : 63,
+            tw  = pt.outerWidth(false) / 2,
+            th  = pt.outerHeight(false),
+            pm  = pos.left + tw > $("body").outerWidth(false) / 2,
+            os  = pm ? $popup.outerWidth(false) - 84 : 63,
             toX = pos.left + (offset.x || tw) - os,
             toY = pos.top + (offset.y || th) + 4;
         $popup.removeClass("left");
@@ -195,12 +193,12 @@ $.fn.popup = function(click_target, o) {
         $popup.unbind();
         $popup.undelegate();
         $(document.body).unbind('click.'+uid, $popup.hider);
-
         return $popup;
     };
 
     function handler(e) {
         e.preventDefault();
+        spawned = e.timeStamp;
         var resp = o.callback ? (o.callback.call($popup, {
                 click_target: this,
                 evt: e
@@ -212,8 +210,13 @@ $.fn.popup = function(click_target, o) {
     }
 
     $popup.render = function() {
-        var p = $popup.o;
-        $popup.hider = makeBlurHideCallback($popup);
+        var p = $popup.o,
+            hideCallback = makeBlurHideCallback($popup);
+        $popup.hider = function(e) {
+            if (e.timeStamp != spawned) {
+                hideCallback.call(this, e);
+            }
+        };
         if (p.hideme) {
             setTimeout(function(){
                 $(document.body).bind('click.'+uid, $popup.hider);
@@ -252,7 +255,7 @@ $.fn.popup = function(click_target, o) {
 // currently presumes the given element uses the '.modal' style
 // o takes the following optional fields:
 //     callback:    a function to run before displaying the modal. Returning
-//                  false from the function cancels the modal.
+//                  false will cancel the modal.
 //     container:   if set the modal will be appended to the container before
 //                  being displayed.
 //     width:       the width of the modal.
@@ -262,8 +265,16 @@ $.fn.popup = function(click_target, o) {
 //                  when the user clicks outside of it.
 //     emptyme:     defaults to false; if set to true, modal will be cleared
 //                  after it is hidden.
+//     deleteme:    defaults to false; if set to true, popup will be deleted
+//                  after it is hidden.
+//     close:       defaults to false; if set to true, modal will have a
+//                  close button
 // note: all options may be overridden and modified by returning them in an
 //       object from the callback.
+//
+// If you want to close all existing modals, use:
+//      $('.modal').trigger('close');
+
 $.fn.modal = function(click_target, o) {
     o = o || {};
 
@@ -276,6 +287,7 @@ $.fn.modal = function(click_target, o) {
         onresize:   function(){$modal.setPos();},
         hideme:     true,
         emptyme:    false,
+        deleteme:   false,
         offset:     {},
         width:      450
     }, o);
@@ -289,14 +301,14 @@ $.fn.modal = function(click_target, o) {
         offset = offset || $modal.o.offset;
 
         $modal.detach().appendTo("body");
-        var toX = ($(window).width() - $modal.outerWidth()) / 2,
-            toY = ($(window).height() - $modal.outerHeight()) / 2;
+        var toX = ($(window).width() - $modal.outerWidth(false)) / 2,
+            toY = $(window).scrollTop() + 26; //distance from top of the window
         $modal.css({
             'left': toX,
-            'top': toY,
+            'top': toY + 'px',
             'right': 'inherit',
             'bottom': 'inherit',
-            'position': 'fixed'
+            'position': 'absolute'
         });
         return $modal;
     };
@@ -318,9 +330,10 @@ $.fn.modal = function(click_target, o) {
         var resp = o.callback ? (o.callback.call($modal, {
                 click_target: this,
                 evt: e
-            })) : true;
+            })) !== false : true;
         $modal.o = $.extend({click_target: this}, $modal.o, resp);
         if (resp) {
+            $('.modal').trigger('close'); // We don't want two!
             $modal.render();
         }
     }
@@ -329,12 +342,34 @@ $.fn.modal = function(click_target, o) {
         var p = $modal.o;
         $modal.hider = makeBlurHideCallback($modal);
         if (p.hideme) {
-            setTimeout(function(){
-                $(document.body).bind('click modal', $modal.hider);
-            }, 0);
+            try {
+                setTimeout(function(){
+                    $('.modal-overlay, .close').bind('click modal',
+                                                     $modal.hider);
+                }, 0);
+            } catch (err) {
+                // TODO(Kumar) handle this more gracefully. See bug 701221.
+                if (typeof console !== 'undefined') {
+                    console.error('Could not close modal:', err);
+                }
+            }
+        }
+        if (p.close) {
+            var close = $("<a>", {'class': 'close', 'text': 'X'});
+            $modal.append(close);
         }
         $('.popup').hide();
         $modal.delegate('.close', 'click', function(e) {
+            e.preventDefault();
+            $modal.trigger('close');
+        });
+        $modal.bind('close', function(e) {
+            if (p.emptyme) {
+                $modal.empty();
+            }
+            if (p.deleteme) {
+                $modal.remove();
+            }
             e.preventDefault();
             $modal.hideMe();
         });
@@ -367,6 +402,33 @@ $.fn.modal = function(click_target, o) {
     return $modal;
 };
 
+// Modal from URL. Pass in a URL, and load it in a modal.
+function modalFromURL(url, settings) {
+    var a = $('<a>'),
+        defaults = {'deleteme': true, 'close': true},
+        settings = settings || {},
+        data = settings['data'] || {},
+        callback = settings['callback'];
+
+    delete settings['callback'];
+    settings = $.extend(defaults, settings);
+
+    var inside = $('<div>', {'class': 'modal-inside', 'text': gettext('Loading...')}),
+        modal = $("<div>", {'class': 'modal'}).modal(a, settings);
+
+    modal.append(inside);
+    a.trigger('click');
+
+    $.get(url, data, function(html){
+        modal.appendTo('body');
+        inside.html("").append(html);
+        if(callback) {
+            callback.call(modal);
+        }
+    });
+    return modal;
+}
+
 // Slugify
 // This allows you to create a line of text with a "Edit" field,
 // and swap it out for an editable slug.  For example:
@@ -380,11 +442,11 @@ function load_unicode() {
     $body.append("<script src='" + $body.attr('data-media-url') + "/js/zamboni/unicode.js'></script>");
 }
 
-function makeslug(s) {
-    if(! s) return "";
+function makeslug(s, delimiter) {
+    if (!s) return "";
     var re = new RegExp("[^\\w" + z.unicode_letters + "\\s-]+","g");
     s = $.trim(s.replace(re, ' '));
-    s = s.replace(/[-\s]+/g, '-').toLowerCase();
+    s = s.replace(/[-\s]+/g, delimiter || '-').toLowerCase();
     return s;
 }
 
@@ -420,7 +482,9 @@ function initCharCount() {
         var $el = $(el),
             val = $el.val(),
             max = parseInt(cc.attr('data-maxlength'), 10),
-            left = max - val.length;
+            // Count \r\n as one character, not two.
+            lineBreaks = val.split('\n').length - 1,
+            left = max - val.length - lineBreaks;
         // L10n: {0} is the number of characters left.
         cc.html(format(ngettext('<b>{0}</b> character left.',
                                 '<b>{0}</b> characters left.', left), [left]))
@@ -431,11 +495,11 @@ function initCharCount() {
             $form = $(this).closest('form'),
             $el;
         if ($cc.attr('data-for-startswith') !== undefined) {
-            $el = $('textarea[id^=' + $cc.attr('data-for-startswith') + ']:visible', $form);
+            $el = $('textarea[id^="' + $cc.attr('data-for-startswith') + '"]:visible', $form);
         } else {
             $el = $('textarea#' + $cc.attr('data-for'), $form);
         }
-        $el.bind('keyup blur', function() { countChars(this, $cc) }).trigger('blur');
+        $el.bind('keyup blur', function() { countChars(this, $cc); }).trigger('blur');
     });
 }
 
@@ -464,14 +528,14 @@ function initCharCount() {
         this.xhr = new XMLHttpRequest();
         this.boundary = "z" + (new Date().getTime()) + "" + Math.floor(Math.random() * 10000000);
 
-        if(hasFormData) {
+        if (hasFormData) {
             this.formData = new FormData();
         } else {
             this.output = "";
         }
 
         this.append = function(name, val) {
-            if(hasFormData) {
+            if (hasFormData) {
                 this.formData.append(name, val);
             } else {
                 if(typeof val == "object" && "fileName" in val) {
@@ -494,14 +558,14 @@ function initCharCount() {
                     this.output += "\r\n";
                 }
             }
-        }
+        };
 
         this.open = function(mode, url, bool, login, pass) {
             this.xhr.open(mode, url, bool, login, pass);
-        }
+        };
 
         this.send = function() {
-            if(hasFormData) {
+            if (hasFormData) {
                 this.xhr.send(this.formData);
             } else {
                 content_type = "multipart/form-data;boundary=" + this.boundary;
@@ -510,14 +574,25 @@ function initCharCount() {
                 this.output += "--" + this.boundary + "--";
                 this.xhr.sendAsBinary(this.output);
             }
-        }
-    }
+        };
+    };
 })();
 
 // .exists()
 // This returns true if length > 0.
 
-$.fn.exists = function(){
-  return $(this).length > 0;
+$.fn.exists = function(callback, args){
+    var $this = $(this),
+        len = $this.length;
+
+    if (len && callback) {
+        callback.apply(null, args);
+    }
+    return len > 0;
 };
 
+// Bind to the mobile site if a mobile link is clicked.
+$(document).delegate('.mobile-link', 'click', function() {
+    $.cookie('mamo', 'on', {expires:30, path: '/'});
+    window.location.reload();
+});

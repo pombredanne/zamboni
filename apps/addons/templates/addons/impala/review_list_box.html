@@ -6,7 +6,7 @@
       <div class="review">
         <h3>
           {% if review.title %}
-            <span>{{ review.title }}</span>
+            <b>{{ review.title }}</b>
           {% endif %}
           {{ review.rating|stars }}
         </h3>
@@ -14,6 +14,9 @@
           {% trans user=review.user|user_link, date=review.created|datetime %}
             by {{ user }} on {{ date }}
           {% endtrans %}
+          &middot;
+          <a class="permalink"
+             href="{{ shared_url('reviews.detail', addon, review.id) }}">{{ _('permalink') }}</a>
         </p>
         <p class="description">{{ review.body|nl2br }}</p>
         {% if replies[review.id] %}
@@ -24,7 +27,7 @@
     {% endfor %}
     {% if addon %}
       <p>
-        <a class="more-info" href="{{ url('reviews.list', addon.slug) }}">
+        <a class="more-info" href="{{ addon.reviews_url }}">
           {% trans num=addon.total_reviews, cnt=addon.total_reviews|numberfmt %}
             See all user reviews
           {% pluralize %}
@@ -36,10 +39,16 @@
   {% else %}
     <div class="review no-reviews">
       <h3>
-        {% trans url = url('reviews.add', addon.slug) %}
-          This add-on has not yet been reviewed.
-          <a href="{{ url }}">Be the first!</a>
-        {% endtrans %}
+        {% if addon.is_webapp() %}
+          {{ _('This app has not yet been reviewed.') }}
+        {% else %}
+          {{ _('This add-on has not yet been reviewed.') }}
+        {% endif %}
+        {% if addon.can_review(amo_user) %}
+          <a id="add-first-review" href="{{ shared_url('reviews.add', addon) }}">
+            {{ _('Be the first!') }}
+          </a>
+        {% endif %}
       </h3>
     </div>
   {% endif %}

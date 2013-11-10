@@ -16,19 +16,12 @@
     Here's a few of our favorite add-ons to help you get started customizing
     {{ app }}.
     {% endtrans %}
-    {% if APP == amo.FIREFOX %}
-      {% trans url="http://www.rockyourfirefox.com?src=amo-featured" %}
-      Be sure to visit
-      <a href="{{ url }}">Rock Your Firefox</a>
-      to learn about other useful add-ons every week!
-      {% endtrans %}
-    {% endif %}
   </p>
 
   {% cache addons %}
   <div class="featured listing">
     <div class="featured-inner">
-      {{ addon_listing_items(addons, src="browse") }}
+      {{ addon_listing_items(addons, src="recommended") }}
     </div>
   </div>
   {% endcache %}

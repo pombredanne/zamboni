@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.conf.urls.defaults import patterns, url, include
+from django.conf.urls import include, patterns, url
 
 from piston.resource import Resource
 
@@ -21,6 +21,7 @@ type_regexp = '/(?P<addon_type>[^/]*)'
 limit_regexp = '/(?P<limit>\d*)'
 platform_regexp = '/(?P<platform>\w*)'
 version_regexp = '/(?P<version>[^/]*)'
+compat_mode = '(?:/(?P<compat_mode>(?:strict|normal|ignore)))?'
 
 
 def build_urls(base, appendages):
@@ -32,6 +33,7 @@ def build_urls(base, appendages):
     .
     .
     /search/:query/:type/:limit/:platform/:version
+    /search/:query/:type/:limit/:platform/:version/:compatMode
     """
     urls = [base]
     for i in range(len(appendages)):
@@ -41,7 +43,8 @@ def build_urls(base, appendages):
 
 
 base_search_regexp = r'search/(?P<query>[^/]+)'
-appendages = [type_regexp, limit_regexp, platform_regexp, version_regexp]
+appendages = [type_regexp, limit_regexp, platform_regexp, version_regexp,
+              compat_mode]
 search_regexps = build_urls(base_search_regexp, appendages)
 
 base_list_regexp = r'list'
@@ -64,9 +67,10 @@ for regexp in list_regexps:
     api_patterns += patterns('',
             url(regexp + '/?$', class_view(views.ListView), name='api.list'))
 
-ad = dict(authentication=authentication.AMOOAuthAuthentication())
+ad = {'authentication': authentication.AMOOAuthAuthentication(two_legged=True)}
 user_resource = Resource(handler=handlers.UserHandler, **ad)
 addons_resource = Resource(handler=handlers.AddonsHandler, **ad)
+apps_resource = Resource(handler=handlers.AppsHandler, **ad)
 version_resource = Resource(handler=handlers.VersionsHandler, **ad)
 
 piston_patterns = patterns('',
@@ -77,6 +81,8 @@ piston_patterns = patterns('',
         name='api.versions'),
     url(r'^addon/%s/version/(?P<version_id>\d+)$' % ADDON_ID,
         version_resource, name='api.version'),
+    url(r'^apps/$', apps_resource, name='api.apps'),
+    url(r'^app/%s$' % ADDON_ID, apps_resource, name='api.app'),
 )
 
 urlpatterns = patterns('',
@@ -85,8 +91,11 @@ urlpatterns = patterns('',
 
     # Piston
     url(r'^2/', include(piston_patterns)),
-
+    url(r'^2/performance/add$', views.performance_add,
+        name='api.performance.add'),
+    url(r'^1.5/search_suggestions/', views.search_suggestions),
     # Append api_version to the real api views
+    url(r'^(?P<api_version>\d+|\d+.\d+)/search/guid:(?P<guids>.*)',
+        views.guid_search),
     url(r'^(?P<api_version>\d+|\d+.\d+)/', include(api_patterns)),
-
 )

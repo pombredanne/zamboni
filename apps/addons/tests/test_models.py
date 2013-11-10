@@ -1,61 +1,67 @@
 # -*- coding: utf-8 -*-
-from datetime import datetime, timedelta
 import itertools
+import json
+import os
+import tempfile
+import time
+from contextlib import nested
+from datetime import datetime, timedelta
 from urlparse import urlparse
 
 from django import forms
+from django.contrib.auth.models import AnonymousUser
 from django.conf import settings
 from django.core import mail
-from django.core.cache import cache
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError
 from django.utils import translation
 
-from mock import patch, Mock
-from nose.tools import eq_, assert_not_equal
-import test_utils
+from mock import Mock, patch
+from nose.tools import assert_not_equal, eq_, ok_, raises
 
 import amo
 import amo.tests
-import addons.search
 from amo import set_user
 from amo.helpers import absolutify
 from amo.signals import _connect, _disconnect
 from addons.models import (Addon, AddonCategory, AddonDependency,
-                           AddonRecommendation, AddonType, BlacklistedGuid,
-                           Category, Charity, Feature, FrozenAddon, Persona,
-                           Preview)
+                           AddonDeviceType, AddonRecommendation, AddonType,
+                           AddonUpsell, AddonUser, AppSupport, BlacklistedGuid,
+                           Category, Charity, CompatOverride,
+                           CompatOverrideRange, FrozenAddon,
+                           IncompatibleVersions, Persona, Preview)
+from addons.search import setup_mapping
 from applications.models import Application, AppVersion
-from bandwagon.models import CollectionAddon, FeaturedCollection
-from devhub.models import ActivityLog
+from constants.applications import DEVICE_TYPES
+from devhub.models import ActivityLog, AddonLog, RssKey, SubmitStep
+from editors.models import EscalationQueue
 from files.models import File, Platform
-from files.tests.test_models import UploadTest
+from files.tests.test_models import LanguagePackBase, UploadTest
+from market.models import AddonPaymentData, AddonPremium, Price
 from reviews.models import Review
-from translations.models import TranslationSequence, Translation
+from translations.models import Translation, TranslationSequence
 from users.models import UserProfile
 from versions.models import ApplicationsVersions, Version
 from versions.compare import version_int
+from mkt.webapps.models import Webapp
 
 
-class TestAddonManager(test_utils.TestCase):
-    fixtures = ['addons/featured', 'addons/test_manager', 'base/collections',
-                'base/featured', 'bandwagon/featured_collections',
-                'base/addon_5299_gcal']
+class TestAddonManager(amo.tests.TestCase):
+    fixtures = ['base/apps', 'base/appversion', 'base/users',
+                'base/addon_3615', 'addons/featured', 'addons/test_manager',
+                'base/collections', 'base/featured',
+                'bandwagon/featured_collections', 'base/addon_5299_gcal']
 
     def setUp(self):
         set_user(None)
 
-    @patch.object(settings, 'NEW_FEATURES', False)
     def test_featured(self):
-        featured = Addon.objects.featured(amo.FIREFOX)[0]
-        eq_(featured.id, 1)
-        eq_(Addon.objects.featured(amo.FIREFOX).count(), 5)
-
-    @patch.object(settings, 'NEW_FEATURES', True)
-    def test_new_featured(self):
-        featured = Addon.objects.featured(amo.FIREFOX)[0]
-        eq_(featured.id, 1001)
-        eq_(Addon.objects.featured(amo.FIREFOX).count(), 6)
+        eq_(Addon.objects.featured(amo.FIREFOX).count(), 3)
 
     def test_listed(self):
+        # We need this for the fixtures, but it messes up the tests.
+        Addon.objects.get(pk=3615).update(disabled_by_user=True)
+        # No continue as normal.
         Addon.objects.filter(id=5299).update(disabled_by_user=True)
         q = Addon.objects.listed(amo.FIREFOX, amo.STATUS_PUBLIC)
         eq_(len(q.all()), 4)
@@ -88,6 +94,10 @@ class TestAddonManager(test_utils.TestCase):
             assert_not_equal(
                 a.id, 3, 'public() must not return unreviewed add-ons')
 
+    def test_reviewed(self):
+        for a in Addon.objects.reviewed():
+            assert a.status in amo.REVIEWED_STATUSES, (a.id, a.status)
+
     def test_unreviewed(self):
         """
         Tests for unreviewed addons.
@@ -96,7 +106,7 @@ class TestAddonManager(test_utils.TestCase):
 
         for addon in exp:
             assert addon.status in amo.UNREVIEWED_STATUSES, (
-                    "unreviewed() must return unreviewed addons.")
+                'unreviewed() must return unreviewed addons.')
 
     def test_valid(self):
         addon = Addon.objects.get(pk=5299)
@@ -108,35 +118,122 @@ class TestAddonManager(test_utils.TestCase):
             assert not addon.disabled_by_user
 
     def test_valid_disabled_by_user(self):
+        before = Addon.objects.valid_and_disabled_and_pending().count()
         addon = Addon.objects.get(pk=5299)
         addon.update(disabled_by_user=True)
-        eq_(Addon.objects.valid_and_disabled().count(), 10)
+        eq_(Addon.objects.valid_and_disabled_and_pending().count(), before)
 
     def test_valid_disabled_by_admin(self):
+        before = Addon.objects.valid_and_disabled_and_pending().count()
         addon = Addon.objects.get(pk=5299)
         addon.update(status=amo.STATUS_DISABLED)
-        eq_(Addon.objects.valid_and_disabled().count(), 10)
+        eq_(Addon.objects.valid_and_disabled_and_pending().count(), before)
 
+    def test_invalid_deleted(self):
+        before = Addon.objects.valid_and_disabled_and_pending().count()
+        addon = Addon.objects.get(pk=5299)
+        addon.update(status=amo.STATUS_DELETED)
+        eq_(Addon.objects.valid_and_disabled_and_pending().count(), before - 1)
 
-class TestAddonManagerFeatured(test_utils.TestCase):
-    # TODO(cvan): Merge with above once new featured add-ons are enabled.
-    fixtures = ['addons/featured', 'bandwagon/featured_collections',
-                'base/collections', 'base/featured']
+    def test_valid_disabled_pending(self):
+        before = Addon.objects.valid_and_disabled_and_pending().count()
+        amo.tests.addon_factory(status=amo.STATUS_PENDING)
+        eq_(Addon.objects.valid_and_disabled_and_pending().count(), before + 1)
 
-    @patch.object(settings, 'NEW_FEATURES', True)
+    def test_valid_disabled_version(self):
+        before = Addon.objects.valid_and_disabled_and_pending().count()
+
+        # Add-on, no version. Doesn't count.
+        addon = amo.tests.addon_factory()
+        addon.update(_current_version=None, _signal=False)
+        eq_(Addon.objects.valid_and_disabled_and_pending().count(), before)
+
+        # Theme, no version. Counts.
+        addon = amo.tests.addon_factory(type=amo.ADDON_PERSONA)
+        addon.update(_current_version=None, _signal=False)
+        eq_(Addon.objects.valid_and_disabled_and_pending().count(), before + 1)
+
+    def test_top_free_public(self):
+        addons = list(Addon.objects.listed(amo.FIREFOX))
+        eq_(list(Addon.objects.top_free(amo.FIREFOX)),
+            sorted(addons, key=lambda x: x.weekly_downloads, reverse=True))
+        eq_(list(Addon.objects.top_free(amo.THUNDERBIRD)), [])
+
+    def test_top_free_all(self):
+        addons = list(Addon.objects.filter(appsupport__app=amo.FIREFOX.id)
+                     .exclude(premium_type__in=amo.ADDON_PREMIUMS)
+                     .exclude(addonpremium__price__price__isnull=False))
+        eq_(list(Addon.objects.top_free(amo.FIREFOX, listed=False)),
+            sorted(addons, key=lambda x: x.weekly_downloads, reverse=True))
+        eq_(list(Addon.objects.top_free(amo.THUNDERBIRD, listed=False)), [])
+
+    def make_paid(self, addons, type=amo.ADDON_PREMIUM):
+        price = Price.objects.create(price='1.00')
+        for addon in addons:
+            addon.update(premium_type=type)
+            AddonPremium.objects.create(addon=addon, price=price)
+
+    def test_top_paid_public(self):
+        addons = list(Addon.objects.listed(amo.FIREFOX)[:3])
+        self.make_paid(addons)
+        eq_(list(Addon.objects.top_paid(amo.FIREFOX)),
+            sorted(addons, key=lambda x: x.weekly_downloads, reverse=True))
+        eq_(list(Addon.objects.top_paid(amo.THUNDERBIRD)), [])
+
+    def test_top_paid_all(self):
+        addons = list(Addon.objects.listed(amo.FIREFOX)[:3])
+        for addon in addons:
+            addon.update(status=amo.STATUS_LITE)
+        self.make_paid(addons)
+        eq_(list(Addon.objects.top_paid(amo.FIREFOX, listed=False)),
+            sorted(addons, key=lambda x: x.weekly_downloads, reverse=True))
+        eq_(list(Addon.objects.top_paid(amo.THUNDERBIRD, listed=False)), [])
+
+    def test_top_paid_in_app_all(self):
+        addons = list(Addon.objects.listed(amo.FIREFOX)[:3])
+        for addon in addons:
+            addon.update(status=amo.STATUS_LITE)
+        self.make_paid(addons, amo.ADDON_PREMIUM_INAPP)
+        eq_(list(Addon.objects.top_paid(amo.FIREFOX, listed=False)),
+            sorted(addons, key=lambda x: x.weekly_downloads, reverse=True))
+        eq_(list(Addon.objects.top_paid(amo.THUNDERBIRD, listed=False)), [])
+
     def test_new_featured(self):
         f = Addon.objects.featured(amo.FIREFOX)
-        eq_(f.count(), 6)
-        eq_(sorted(f.values_list('id', flat=True)),
-            [1001, 1003, 2464, 3481, 7661, 15679])
-        f = Addon.objects.featured(amo.SUNBIRD)
+        eq_(f.count(), 3)
+        eq_(sorted(x.id for x in f),
+            [2464, 7661, 15679])
+        f = Addon.objects.featured(amo.THUNDERBIRD)
         assert not f.exists()
 
 
-class TestAddonModels(test_utils.TestCase):
+class TestNewAddonVsWebapp(amo.tests.TestCase):
+
+    def test_addon_from_kwargs(self):
+        a = Addon(type=amo.ADDON_EXTENSION)
+        assert isinstance(a, Addon)
+
+    def test_webapp_from_kwargs(self):
+        w = Addon(type=amo.ADDON_WEBAPP)
+        assert isinstance(w, Webapp)
+
+    def test_addon_from_db(self):
+        a = Addon.objects.create(type=amo.ADDON_EXTENSION)
+        assert isinstance(a, Addon)
+        assert isinstance(Addon.objects.get(id=a.id), Addon)
+
+    def test_webapp_from_db(self):
+        a = Addon.objects.create(type=amo.ADDON_WEBAPP)
+        assert isinstance(a, Webapp)
+        assert isinstance(Addon.objects.get(id=a.id), Webapp)
+
+
+class TestAddonModels(amo.tests.TestCase):
     fixtures = ['base/apps',
+                'base/appversion',
                 'base/collections',
                 'base/featured',
+                'base/platforms',
                 'base/users',
                 'base/addon_5299_gcal',
                 'base/addon_3615',
@@ -152,10 +249,6 @@ class TestAddonModels(test_utils.TestCase):
 
     def setUp(self):
         TranslationSequence.objects.create(id=99243)
-        # Addon._feature keeps an in-process cache we need to clear.
-        if hasattr(Addon, '_feature'):
-            del Addon._feature
-
         # TODO(andym): use Mock appropriately here.
         self.old_version = amo.FIREFOX.latest_version
         amo.FIREFOX.latest_version = '3.6.15'
@@ -202,32 +295,74 @@ class TestAddonModels(test_utils.TestCase):
 
         v2 = Version.objects.create(addon=a, version='2.0beta')
         File.objects.create(version=v2, status=amo.STATUS_BETA)
+        v2.save()
         eq_(a.latest_version.id, v1.id)  # Still should be f1
+
+    def test_latest_version_fallback(self):
+        a = Addon.objects.get(pk=3615)
+        version = a.latest_version
+
+        a._latest_version = None
+        eq_(a.latest_version, version)
+        eq_(a._latest_version, version)
+
+    @patch('addons.models.Addon.update_version')
+    def test_current_version_unsaved(self, update_version):
+        a = Addon()
+        eq_(a.current_version, None)
+        assert not update_version.called
+
+    @patch('addons.models.Addon.update_version')
+    def test_latest_version_unsaved(self, update_version):
+        a = Addon()
+        eq_(a.latest_version, None)
+        assert not update_version.called
 
     def test_current_beta_version(self):
         a = Addon.objects.get(pk=5299)
         eq_(a.current_beta_version.id, 50000)
 
-    @patch.object(settings, 'NEW_FEATURES', False)
-    def test_current_version_mixed_statuses(self):
-        """Mixed file statuses are evil (bug 558237)."""
-        a = Addon.objects.get(pk=3895)
-        # Last version has pending files, so second to last version is
-        # considered "current".
-        eq_(a.current_version.id, 78829)
+    def _create_new_version(self, addon, status):
+        av = addon.current_version.apps.all()[0]
 
-        # Fix file statuses on last version.
-        v = Version.objects.get(pk=98217)
-        v.files.update(status=amo.STATUS_PUBLIC)
+        v = Version.objects.create(addon=addon, version='99')
+        File.objects.create(status=status, version=v)
 
-        # Wipe caches.
-        cache.clear()
-        a.update_version()
+        ApplicationsVersions.objects.create(application_id=amo.FIREFOX.id,
+                                            version=v, min=av.min, max=av.max)
+        return v
 
-        # Make sure the updated version is now considered current.
-        eq_(a.current_version.id, v.id)
+    def test_compatible_version(self):
+        a = Addon.objects.get(pk=3615)
+        eq_(a.status, amo.STATUS_PUBLIC)
 
-    def test_delete(self):
+        v = self._create_new_version(addon=a, status=amo.STATUS_PUBLIC)
+
+        eq_(a.compatible_version(amo.FIREFOX.id), v)
+
+    def test_compatible_version_status(self):
+        """
+        Tests that `compatible_version()` won't return a lited version for a
+        fully-reviewed add-on.
+        """
+
+        a = Addon.objects.get(pk=3615)
+        eq_(a.status, amo.STATUS_PUBLIC)
+
+        v = self._create_new_version(addon=a, status=amo.STATUS_LITE)
+
+        assert a.current_version != v
+        eq_(a.compatible_version(amo.FIREFOX.id), a.current_version)
+
+    def test_transformer(self):
+        addon = Addon.objects.get(pk=3615)
+        # If the transformer works then we won't have any more queries.
+        with self.assertNumQueries(0):
+            addon._current_version
+            addon._backup_version
+            addon.latest_version
+
+    def _delete(self):
         """Test deleting add-ons."""
         a = Addon.objects.get(pk=3615)
         a.name = u'é'
@@ -235,11 +370,63 @@ class TestAddonModels(test_utils.TestCase):
         eq_(len(mail.outbox), 1)
         assert BlacklistedGuid.objects.filter(guid=a.guid)
 
-    def test_delete_url(self):
+    def test_delete(self):
+        deleted_count = Addon.with_deleted.count()
+        self._delete()
+        eq_(deleted_count, Addon.with_deleted.count())
+        addon = Addon.with_deleted.get(pk=3615)
+        eq_(addon.status, amo.STATUS_DELETED)
+        eq_(addon.slug, None)
+        eq_(addon.current_version, None)
+        eq_(addon.app_slug, None)
+
+    def _delete_url(self):
         """Test deleting addon has URL in the email."""
         a = Addon.objects.get(pk=4594)
+        url = a.get_url_path()
         a.delete('bye')
-        assert absolutify(a.get_url_path()) in mail.outbox[0].body
+        assert absolutify(url) in mail.outbox[0].body
+
+    def test_delete_url(self):
+        count = Addon.with_deleted.count()
+        self._delete_url()
+        eq_(count, Addon.with_deleted.count())
+
+    def test_delete_reason(self):
+        """Test deleting with a reason gives the reason in the mail."""
+        reason = u'trêason'
+        a = Addon.objects.get(pk=3615)
+        a.name = u'é'
+        eq_(len(mail.outbox), 0)
+        a.delete(msg='bye', reason=reason)
+        eq_(len(mail.outbox), 1)
+        assert reason in mail.outbox[0].body
+
+    def test_delete_status_gone_wild(self):
+        """
+        Test deleting add-ons where the higheststatus is zero, but there's a
+        non-zero status.
+        """
+        count = Addon.objects.count()
+        a = Addon.objects.get(pk=3615)
+        a.status = amo.STATUS_UNREVIEWED
+        a.highest_status = 0
+        a.delete('bye')
+        eq_(len(mail.outbox), 1)
+        assert BlacklistedGuid.objects.filter(guid=a.guid)
+        eq_(count, Addon.with_deleted.count())
+
+    def test_delete_incomplete(self):
+        """Test deleting incomplete add-ons."""
+        count = Addon.with_deleted.count()
+        a = Addon.objects.get(pk=3615)
+        a.status = 0
+        a.highest_status = 0
+        a.save()
+        a.delete(None)
+        eq_(len(mail.outbox), 0)
+        assert not BlacklistedGuid.objects.filter(guid=a.guid)
+        eq_(Addon.with_deleted.count(), count - 1)
 
     def test_delete_searchengine(self):
         """
@@ -249,28 +436,6 @@ class TestAddonModels(test_utils.TestCase):
         a = Addon.objects.get(pk=4594)
         a.delete('bye')
         eq_(len(mail.outbox), 1)
-
-    def test_delete_status_gone_wild(self):
-        """
-        Test deleting add-ons where the higheststatus is zero, but there's a
-        non-zero status.
-        """
-        a = Addon.objects.get(pk=3615)
-        a.status = amo.STATUS_UNREVIEWED
-        a.highest_status = 0
-        a.delete('bye')
-        eq_(len(mail.outbox), 1)
-        assert BlacklistedGuid.objects.filter(guid=a.guid)
-
-    def test_delete_incomplete(self):
-        """Test deleting incomplete add-ons."""
-        a = Addon.objects.get(pk=3615)
-        a.status = 0
-        a.highest_status = 0
-        a.save()
-        a.delete(None)
-        eq_(len(mail.outbox), 0)
-        assert not BlacklistedGuid.objects.filter(guid=a.guid)
 
     def test_incompatible_latest_apps(self):
         a = Addon.objects.get(pk=3615)
@@ -304,12 +469,12 @@ class TestAddonModels(test_utils.TestCase):
         3. Test for default non-THEME icon.
         """
         a = Addon.objects.get(pk=3615)
-        expected = (settings.ADDON_ICON_URL % (3615, 32, 0)).rstrip('/0')
+        expected = (settings.ADDON_ICON_URL % (3, 3615, 32, 0)).rstrip('/0')
         assert a.icon_url.startswith(expected)
         a = Addon.objects.get(pk=6704)
         a.icon_type = None
         assert a.icon_url.endswith('/icons/default-theme.png'), (
-                "No match for %s" % a.icon_url)
+            'No match for %s' % a.icon_url)
         a = Addon.objects.get(pk=3615)
         a.icon_type = None
 
@@ -333,7 +498,7 @@ class TestAddonModels(test_utils.TestCase):
         a.thumbnail_url.index('/previews/thumbs/20/20397.png?modified=')
         a = Addon.objects.get(pk=5299)
         assert a.thumbnail_url.endswith('/icons/no-preview.png'), (
-                "No match for %s" % a.thumbnail_url)
+            'No match for %s' % a.thumbnail_url)
 
     def test_is_unreviewed(self):
         """Test if add-on is unreviewed or not"""
@@ -348,64 +513,49 @@ class TestAddonModels(test_utils.TestCase):
         a.status = amo.STATUS_PENDING
         assert a.is_unreviewed(), 'pending add-on: is_unreviewed=True'
 
-    def test_is_selfhosted(self):
-        """Test if an add-on is listed or hosted"""
-        # hosted
+    def test_is_public(self):
+        # Public add-on.
         a = Addon.objects.get(pk=3615)
-        assert not a.is_selfhosted(), 'hosted add-on => !is_selfhosted()'
+        assert a.is_public(), 'public add-on should not be is_pulic()'
 
-        # listed
-        a.status = amo.STATUS_LISTED
-        assert a.is_selfhosted(), 'listed add-on => is_selfhosted()'
+        # Public, disabled add-on.
+        a.disabled_by_user = True
+        assert not a.is_public(), (
+            'public, disabled add-on should not be is_public()')
+
+        # Lite add-on.
+        a.status = amo.STATUS_LITE
+        a.disabled_by_user = False
+        assert not a.is_public(), 'lite add-on should not be is_public()'
+
+        # Unreviewed add-on.
+        a.status = amo.STATUS_UNREVIEWED
+        assert not a.is_public(), 'unreviewed add-on should not be is_public()'
+
+        # Unreviewed, disabled add-on.
+        a.status = amo.STATUS_UNREVIEWED
+        a.disabled_by_user = True
+        assert not a.is_public(), (
+            'unreviewed, disabled add-on should not be is_public()')
+
+    def test_is_no_restart(self):
+        a = Addon.objects.get(pk=3615)
+        f = a.current_version.all_files[0]
+        eq_(f.no_restart, False)
+        eq_(a.is_no_restart(), False)
+
+        f.update(no_restart=True)
+        eq_(Addon.objects.get(pk=3615).is_no_restart(), True)
+
+        a.versions.all().delete()
+        a._current_version = None
+        eq_(a.is_no_restart(), False)
 
     def test_is_featured(self):
         """Test if an add-on is globally featured"""
         a = Addon.objects.get(pk=1003)
         assert a.is_featured(amo.FIREFOX, 'en-US'), (
             'globally featured add-on not recognized')
-
-    @patch.object(settings, 'NEW_FEATURES', False)
-    def test_is_category_featured(self):
-        """Test if an add-on is category featured."""
-        Feature.objects.filter(addon=1001).delete()
-        a = Addon.objects.get(pk=1001)
-        assert not a.is_featured(amo.FIREFOX, 'en-US'), (
-            "Expected add-on should not be in 'en-US' locale")
-
-        assert a.is_category_featured(amo.FIREFOX), (
-            'Expected add-on to be category-featured for the default locale')
-        assert not a.is_category_featured(amo.FIREFOX, 'fr'), (
-            "Expected add-on to not be in 'fr' locale")
-
-        AddonCategory.objects.filter(addon=a).delete()
-        cache.clear()
-        a = Addon.objects.get(pk=1001)
-        assert not a.is_category_featured(amo.FIREFOX), (
-            'Expected add-on to not be category-featured')
-
-    @patch.object(settings, 'NEW_FEATURES', True)
-    def test_new_is_category_featured(self):
-        """Test if an add-on is category featured."""
-        a = Addon.objects.get(pk=1001)
-        assert a.is_category_featured(amo.FIREFOX), (
-            'Expected add-on to have no locale')
-        assert not a.is_category_featured(amo.FIREFOX, 'fr'), (
-            "Expected add-on to not be in 'fr' locale")
-
-        fc = FeaturedCollection.objects.filter(collection__addons=1001)[0]
-        c = CollectionAddon.objects.filter(addon=a,
-                                           collection=fc.collection)[0]
-        c.delete()
-        assert not a.is_featured(amo.FIREFOX, 'en-US'), (
-            "Expected add-on to be in 'en-US' locale")
-        assert a.is_category_featured(amo.FIREFOX), (
-            'Expected add-on to be category-featured for the default locale')
-
-        AddonCategory.objects.filter(addon=a).delete()
-        cache.clear()
-        a = Addon.objects.get(pk=1001)
-        assert not a.is_category_featured(amo.FIREFOX), (
-            'Expected add-on to not be category-featured')
 
     def test_has_full_profile(self):
         """Test if an add-on's developer profile is complete (public)."""
@@ -749,6 +899,12 @@ class TestAddonModels(test_utils.TestCase):
 
         eq_(self.newlines_helper(before), after)
 
+    def test_app_numeric_slug(self):
+        cat = Category.objects.get(id=22)
+        cat.slug = 123
+        with self.assertRaises(ValidationError):
+            cat.full_clean()
+
     def test_app_categories(self):
         addon = lambda: Addon.objects.get(pk=3615)
 
@@ -779,6 +935,23 @@ class TestAddonModels(test_utils.TestCase):
         c24.save()  # Clear the app_categories cache.
         app_cats += [(amo.THUNDERBIRD, [c])]
         eq_(addon().app_categories, app_cats)
+
+    def test_app_categories_sunbird(self):
+        get_addon = lambda: Addon.objects.get(pk=3615)
+        addon = get_addon()
+
+        # This add-on is already associated with three Firefox categories.
+        cats = sorted(addon.categories.all(), key=lambda x: x.name)
+        eq_(addon.app_categories, [(amo.FIREFOX, cats)])
+
+        # Associate this add-on with a Sunbird category.
+        a = Application.objects.create(id=amo.SUNBIRD.id)
+        c2 = Category.objects.create(application=a, type=amo.ADDON_EXTENSION,
+                                     name='Sunny D')
+        AddonCategory.objects.create(addon=addon, category=c2)
+
+        # Sunbird category should be excluded.
+        eq_(get_addon().app_categories, [(amo.FIREFOX, cats)])
 
     def test_review_replies(self):
         """
@@ -917,6 +1090,14 @@ class TestAddonModels(test_utils.TestCase):
         eq_(addon.status, amo.STATUS_DISABLED)
         assert addon.is_disabled
 
+    def test_no_change_deleted(self):
+        addon = Addon.objects.create(type=1)
+        version = Version.objects.create(addon=addon)
+        addon.update(status=amo.STATUS_DELETED)
+        version.save()
+        eq_(addon.status, amo.STATUS_DELETED)
+        assert addon.is_deleted
+
     def test_can_alter_in_prelim(self):
         addon, version = self.setup_files(amo.STATUS_LITE)
         addon.update(status=amo.STATUS_LITE)
@@ -938,6 +1119,11 @@ class TestAddonModels(test_utils.TestCase):
     def test_can_request_review_no_files(self):
         addon = Addon.objects.get(pk=3615)
         addon.versions.all()[0].files.all().delete()
+        eq_(addon.can_request_review(), ())
+
+    def test_can_request_review_rejected(self):
+        addon = Addon.objects.get(pk=3615)
+        addon.latest_version.files.update(status=amo.STATUS_OBSOLETE)
         eq_(addon.can_request_review(), ())
 
     def check(self, status, exp, kw={}):
@@ -964,6 +1150,9 @@ class TestAddonModels(test_utils.TestCase):
 
     def test_can_request_review_disabled(self):
         self.check(amo.STATUS_DISABLED, ())
+
+    def test_can_request_review_deleted(self):
+        self.check(amo.STATUS_DELETED, ())
 
     def test_can_request_review_lite(self):
         self.check(amo.STATUS_LITE, (amo.STATUS_PUBLIC,))
@@ -1066,7 +1255,7 @@ class TestAddonModels(test_utils.TestCase):
 
     def test_beta_version_does_not_inherit_nomination(self):
         a = Addon.objects.get(id=3615)
-        a.update(status=amo.STATUS_LISTED)
+        a.update(status=amo.STATUS_NULL)
         v = Version.objects.create(addon=a, version='1.0')
         v.nomination = None
         v.save()
@@ -1086,7 +1275,7 @@ class TestAddonModels(test_utils.TestCase):
     def test_reviwed_addon_does_not_inherit_nomination(self):
         a = Addon.objects.get(id=3615)
         ver = 10
-        for st in (amo.STATUS_PUBLIC, amo.STATUS_BETA, amo.STATUS_LISTED):
+        for st in (amo.STATUS_PUBLIC, amo.STATUS_BETA, amo.STATUS_NULL):
             a.update(status=st)
             v = Version.objects.create(addon=a, version=str(ver))
             eq_(v.nomination, None)
@@ -1111,9 +1300,76 @@ class TestAddonModels(test_utils.TestCase):
         names = [c.name for c in cats]
         assert addon.get_category(amo.FIREFOX.id).name in names
 
+    def test_binary_property(self):
+        addon = Addon.objects.get(id=3615)
+        file = addon.current_version.files.all()[0]
+        file.update(binary=True)
+        eq_(addon.binary, True)
 
-class TestAddonModelsFeatured(test_utils.TestCase):
-    fixtures = ['addons/featured', 'bandwagon/featured_collections',
+    def test_binary_components_property(self):
+        addon = Addon.objects.get(id=3615)
+        file = addon.current_version.files.all()[0]
+        file.update(binary_components=True)
+        eq_(addon.binary_components, True)
+
+
+class TestAddonDelete(amo.tests.TestCase):
+
+    def test_cascades(self):
+        addon = Addon.objects.create(type=amo.ADDON_EXTENSION)
+
+        AddonCategory.objects.create(addon=addon,
+            category=Category.objects.create(type=amo.ADDON_EXTENSION))
+        AddonDependency.objects.create(addon=addon,
+            dependent_addon=addon)
+        AddonDeviceType.objects.create(addon=addon,
+            device_type=DEVICE_TYPES.keys()[0])
+        AddonRecommendation.objects.create(addon=addon,
+            other_addon=addon, score=0)
+        AddonUpsell.objects.create(free=addon, premium=addon)
+        AddonUser.objects.create(addon=addon,
+            user=UserProfile.objects.create())
+        AppSupport.objects.create(addon=addon,
+            app=Application.objects.create())
+        CompatOverride.objects.create(addon=addon)
+        FrozenAddon.objects.create(addon=addon)
+        Persona.objects.create(addon=addon, persona_id=0)
+        Preview.objects.create(addon=addon)
+
+        AddonLog.objects.create(addon=addon,
+            activity_log=ActivityLog.objects.create(action=0))
+        RssKey.objects.create(addon=addon)
+        SubmitStep.objects.create(addon=addon, step=0)
+
+        AddonPremium.objects.create(addon=addon)
+        AddonPaymentData.objects.create(addon=addon)
+
+        # This should not throw any FK errors if all the cascades work.
+        addon.delete()
+
+
+class TestAddonGetURLPath(amo.tests.TestCase):
+
+    def test_get_url_path(self):
+        if not settings.MARKETPLACE:
+            addon = Addon(slug='woo')
+            eq_(addon.get_url_path(), '/en-US/firefox/addon/woo/')
+
+    def test_get_url_path_more(self):
+        if not settings.MARKETPLACE:
+            addon = Addon(slug='yeah')
+            eq_(addon.get_url_path(more=True),
+                '/en-US/firefox/addon/yeah/more')
+
+    def test_get_url_path_theme(self):
+        if settings.MARKETPLACE:
+            addon = Addon(slug='boi', type=amo.ADDON_PERSONA)
+            eq_(addon.get_url_path(), '/en-US/theme/boi/')
+
+
+class TestAddonModelsFeatured(amo.tests.TestCase):
+    fixtures = ['base/apps', 'base/appversion', 'base/users',
+                'addons/featured', 'bandwagon/featured_collections',
                 'base/addon_3615', 'base/collections', 'base/featured']
 
     def setUp(self):
@@ -1126,20 +1382,16 @@ class TestAddonModelsFeatured(test_utils.TestCase):
         eq_(sorted(f), [1001, 1003, 2464, 3481, 7661, 15679])
         f = Addon.featured_random(amo.FIREFOX, 'fr')
         eq_(sorted(f), [1001, 1003, 2464, 7661, 15679])
-        f = Addon.featured_random(amo.SUNBIRD, 'en-US')
+        f = Addon.featured_random(amo.THUNDERBIRD, 'en-US')
         eq_(f, [])
 
-    @patch.object(settings, 'NEW_FEATURES', False)
     def test_featured_random(self):
         self._test_featured_random()
 
-    @patch.object(settings, 'NEW_FEATURES', True)
-    def test_new_featured_random(self):
-        self._test_featured_random()
 
-
-class TestBackupVersion(test_utils.TestCase):
-    fixtures = ['addons/update']
+class TestBackupVersion(amo.tests.TestCase):
+    fixtures = ['addons/update', 'base/apps', 'base/appversion',
+                'base/platforms']
 
     def setUp(self):
         self.version_1_2_0 = 105387
@@ -1191,8 +1443,22 @@ class TestBackupVersion(test_utils.TestCase):
         version.save()
         assert Addon.objects.get(pk=1865).backup_version
 
+    def test_update_version_theme(self):
+        # Test versions do not get deleted when calling with theme.
+        self.addon.update(type=amo.ADDON_PERSONA)
+        assert not self.addon.update_version()
+        assert self.addon._current_version
 
-class TestCategoryModel(test_utils.TestCase):
+        # Test latest version copied to current version if no current version.
+        self.addon.update(_current_version=None,
+                          _latest_version=Version.objects.create(
+                              addon=self.addon, version='0'),
+                          _signal=False)
+        assert self.addon.update_version()
+        assert self.addon._current_version == self.addon._latest_version
+
+
+class TestCategoryModel(amo.tests.TestCase):
 
     def test_category_url(self):
         """Every type must have a url path for its categories."""
@@ -1202,21 +1468,104 @@ class TestCategoryModel(test_utils.TestCase):
             cat = Category(type=AddonType(id=t), slug='omg')
             assert cat.get_url_path()
 
+    @patch('mkt.webapps.tasks.index_webapps')
+    def test_reindex_on_change(self, index_mock):
+        c = Category.objects.create(type=amo.ADDON_PERSONA, slug='keyboardcat')
+        c.update(slug='ceilingcat')
+        assert not index_mock.called
+        index_mock.reset_mock()
 
-class TestPersonaModel(test_utils.TestCase):
+        c = Category.objects.create(type=amo.ADDON_WEBAPP, slug='keyboardcat')
+        app = amo.tests.app_factory()
+        AddonCategory.objects.create(addon=app, category=c)
+        c.update(slug='nyancat')
+        assert index_mock.called
+        eq_(index_mock.call_args[0][0], [app.id])
+
+
+class TestPersonaModel(amo.tests.TestCase):
+    fixtures = ['addons/persona']
+
+    def setUp(self):
+        self.addon = Addon.objects.get(id=15663)
+        self.persona = self.addon.persona
+        self.persona.header = 'header.png'
+        self.persona.footer = 'footer.png'
+        self.persona.save()
+        modified = int(time.mktime(self.persona.addon.modified.timetuple()))
+        self.p = lambda fn: '/15663/%s?%s' % (fn, modified)
 
     def test_image_urls(self):
-        mypersona = Persona(id=1234, persona_id=9876)
-        assert mypersona.thumb_url.endswith('/7/6/9876/preview.jpg')
-        assert mypersona.preview_url.endswith('/7/6/9876/preview_large.jpg')
+        # AMO-uploaded themes have `persona_id=0`.
+        self.persona.persona_id = 0
+        self.persona.save()
+        ok_(self.persona.thumb_url.endswith(self.p('preview.png')),
+            self.persona.thumb_url)
+        ok_(self.persona.icon_url.endswith(self.p('icon.png')),
+            self.persona.icon_url)
+        ok_(self.persona.preview_url.endswith(self.p('preview.png')),
+            self.persona.preview_url)
+        ok_(self.persona.header_url.endswith(self.p('header.png')),
+            self.persona.header_url)
+        ok_(self.persona.footer_url.endswith(self.p('footer.png')),
+            self.persona.footer_url)
+
+    def test_old_image_urls(self):
+        ok_(self.persona.thumb_url.endswith(self.p('preview.jpg')),
+            self.persona.thumb_url)
+        ok_(self.persona.icon_url.endswith(self.p('preview_small.jpg')),
+            self.persona.icon_url)
+        ok_(self.persona.preview_url.endswith(self.p('preview_large.jpg')),
+            self.persona.preview_url)
+        ok_(self.persona.header_url.endswith(self.p('header.png')),
+            self.persona.header_url)
+        ok_(self.persona.footer_url.endswith(self.p('footer.png')),
+            self.persona.footer_url)
 
     def test_update_url(self):
-        p = Persona(id=1234, persona_id=9876)
-        assert p.update_url.endswith('9876')
+        with self.settings(LANGUAGE_CODE='fr', LANGUAGE_URL_MAP={}):
+            url_ = self.persona.update_url
+            ok_(url_.endswith('/fr/themes/update-check/15663'), url_)
+
+    def test_json_data(self):
+        self.persona.addon.all_categories = [Category(name='Yolo Art')]
+
+        VAMO = 'https://vamo/%(locale)s/themes/update-check/%(id)d'
+
+        with self.settings(LANGUAGE_CODE='fr',
+                           LANGUAGE_URL_MAP={},
+                           LOCAL_MIRROR_URL='https://staticsh.it/_files',
+                           NEW_PERSONAS_UPDATE_URL=VAMO,
+                           SITE_URL='https://omgsh.it'):
+            data = self.persona.theme_data
+
+            id_ = str(self.persona.addon.id)
+
+            eq_(data['id'], id_)
+            eq_(data['name'], unicode(self.persona.addon.name))
+            eq_(data['accentcolor'], '#8d8d97')
+            eq_(data['textcolor'], '#ffffff')
+            eq_(data['category'], 'Yolo Art')
+            eq_(data['author'], 'persona_author')
+            eq_(data['description'], unicode(self.addon.description))
+
+            assert data['headerURL'].startswith(
+                '%s/%s/header.png?' % (settings.LOCAL_MIRROR_URL, id_))
+            assert data['footerURL'].startswith(
+                '%s/%s/footer.png?' % (settings.LOCAL_MIRROR_URL, id_))
+            assert data['previewURL'].startswith(
+                '%s/%s/preview.jpg?' % (settings.LOCAL_MIRROR_URL, id_))
+            assert data['iconURL'].startswith(
+                '%s/%s/preview_small.jpg?' % (settings.LOCAL_MIRROR_URL, id_))
+
+            eq_(data['detailURL'],
+                'https://omgsh.it%s' % self.persona.addon.get_url_path())
+            eq_(data['updateURL'],
+                'https://vamo/fr/themes/update-check/' + id_)
+            eq_(data['version'], '1.0')
 
 
-class TestPreviewModel(test_utils.TestCase):
-
+class TestPreviewModel(amo.tests.TestCase):
     fixtures = ['base/previews']
 
     def test_as_dict(self):
@@ -1224,8 +1573,22 @@ class TestPreviewModel(test_utils.TestCase):
         reality = sorted(Preview.objects.all()[0].as_dict().keys())
         eq_(expect, reality)
 
+    def test_filename(self):
+        preview = Preview.objects.get(pk=24)
+        eq_(preview.file_extension, 'png')
+        preview.update(filetype='')
+        eq_(preview.file_extension, 'png')
+        preview.update(filetype='video/webm')
+        eq_(preview.file_extension, 'webm')
 
-class TestAddonRecommendations(test_utils.TestCase):
+    def test_filename_in_url(self):
+        preview = Preview.objects.get(pk=24)
+        preview.update(filetype='video/webm')
+        assert 'png' in preview.thumbnail_path
+        assert 'webm' in preview.image_path
+
+
+class TestAddonRecommendations(amo.tests.TestCase):
     fixtures = ['base/addon-recs']
 
     def test_scores(self):
@@ -1237,8 +1600,12 @@ class TestAddonRecommendations(test_utils.TestCase):
                 eq_(scores[addon][rec.other_addon_id], rec.score)
 
 
-class TestAddonDependencies(test_utils.TestCase):
-    fixtures = ['base/addon_5299_gcal',
+class TestAddonDependencies(amo.tests.TestCase):
+    fixtures = ['base/apps',
+                'base/appversion',
+                'base/platforms',
+                'base/users',
+                'base/addon_5299_gcal',
                 'base/addon_3615',
                 'base/addon_3723_listed',
                 'base/addon_6704_grapple',
@@ -1246,36 +1613,53 @@ class TestAddonDependencies(test_utils.TestCase):
 
     def test_dependencies(self):
         ids = [3615, 3723, 4664, 6704]
-        a = Addon.objects.get(id=5299)
+        addon = Addon.objects.get(id=5299)
 
         for dependent_id in ids:
-            AddonDependency(addon=a,
+            AddonDependency(addon=addon,
                 dependent_addon=Addon.objects.get(id=dependent_id)).save()
 
-        eq_(sorted([a.id for a in a.dependencies.all()]), sorted(ids))
+        eq_(sorted([a.id for a in addon.dependencies.all()]), sorted(ids))
+        eq_(list(a.dependencies.all()), a.all_dependencies)
+
+    def test_unique_dependencies(self):
+        a = Addon.objects.get(id=5299)
+        b = Addon.objects.get(id=3615)
+        AddonDependency.objects.create(addon=a, dependent_addon=b)
+        try:
+            AddonDependency.objects.create(addon=a, dependent_addon=b)
+        except IntegrityError:
+            pass
+        eq_(list(a.dependencies.values_list('id', flat=True)), [3615])
 
 
-class TestListedAddonTwoVersions(test_utils.TestCase):
+class TestListedAddonTwoVersions(amo.tests.TestCase):
     fixtures = ['addons/listed-two-versions']
 
     def test_listed_two_versions(self):
         Addon.objects.get(id=2795)  # bug 563967
 
 
-class TestFlushURLs(test_utils.TestCase):
-    fixtures = ['base/addon_5579',
+class TestFlushURLs(amo.tests.TestCase):
+    fixtures = ['base/apps',
+                'base/appversion',
+                'base/platforms',
+                'base/users',
+                'base/addon_5579',
                 'base/previews',
                 'base/addon_4664_twitterbar',
                 'addons/persona']
 
     def setUp(self):
         settings.ADDON_ICON_URL = (
-            '%s/%s/%s/images/addon_icon/%%d-%%d.png?modified=%%s' % (
-            settings.STATIC_URL, settings.LANGUAGE_CODE, settings.DEFAULT_APP))
-        settings.PREVIEW_THUMBNAIL_URL = (settings.STATIC_URL +
-            '/img/uploads/previews/thumbs/%s/%d.png?modified=%d')
-        settings.PREVIEW_FULL_URL = (settings.STATIC_URL +
-            '/img/uploads/previews/full/%s/%d.png?modified=%d')
+            settings.STATIC_URL +
+            'img/uploads/addon_icons/%s/%s-%s.png?modified=%s')
+        settings.PREVIEW_THUMBNAIL_URL = (
+            settings.STATIC_URL +
+            'img/uploads/previews/thumbs/%s/%d.png?modified=%d')
+        settings.PREVIEW_FULL_URL = (
+            settings.STATIC_URL +
+            'img/uploads/previews/full/%s/%d.%s?modified=%d')
         _connect()
 
     def tearDown(self):
@@ -1314,6 +1698,11 @@ class TestAddonFromUpload(UploadTest):
         self.platform = Platform.objects.create(id=amo.PLATFORM_MAC.id)
         for version in ('3.0', '3.6.*'):
             AppVersion.objects.create(application_id=1, version=version)
+        self.addCleanup(translation.deactivate)
+
+    def manifest(self, basename):
+        return os.path.join(settings.ROOT, 'apps', 'devhub', 'tests',
+                            'addons', basename)
 
     def test_blacklisted_guid(self):
         BlacklistedGuid.objects.create(guid='guid@xpi')
@@ -1333,6 +1722,26 @@ class TestAddonFromUpload(UploadTest):
         eq_(addon.summary, 'xpi description')
         eq_(addon.description, None)
         eq_(addon.slug, 'xpi-name')
+
+    def test_manifest_url(self):
+        upload = self.get_upload(abspath=self.manifest('mozball.webapp'))
+        addon = Addon.from_upload(upload, [self.platform])
+        assert addon.is_webapp()
+        eq_(addon.manifest_url, upload.name)
+
+    def test_app_domain(self):
+        upload = self.get_upload(abspath=self.manifest('mozball.webapp'))
+        upload.name = 'http://mozilla.com/my/rad/app.webapp'  # manifest URL
+        addon = Addon.from_upload(upload, [self.platform])
+        eq_(addon.app_domain, 'http://mozilla.com')
+
+    def test_non_english_app(self):
+        upload = self.get_upload(abspath=self.manifest('non-english.webapp'))
+        upload.name = 'http://mozilla.com/my/rad/app.webapp'  # manifest URL
+        addon = Addon.from_upload(upload, [self.platform])
+        eq_(addon.default_locale, 'it')
+        eq_(unicode(addon.name), 'ItalianMozBall')
+        eq_(addon.name.locale, 'it')
 
     def test_xpi_version(self):
         addon = Addon.from_upload(self.get_upload('extension.xpi'),
@@ -1382,17 +1791,51 @@ class TestAddonFromUpload(UploadTest):
                                   [self.platform])
         eq_(addon.default_locale, 'en-US')
 
-        translation.activate('es-ES')
+        translation.activate('es')
         addon = Addon.from_upload(self.get_upload('search.xml'),
                                   [self.platform])
-        eq_(addon.default_locale, 'es-ES')
-        translation.deactivate()
+        eq_(addon.default_locale, 'es')
+
+    def test_webapp_default_locale_override(self):
+        with nested(tempfile.NamedTemporaryFile('w', suffix='.webapp'),
+                    open(self.manifest('mozball.webapp'))) as (tmp, mf):
+            mf = json.load(mf)
+            mf['default_locale'] = 'es'
+            tmp.write(json.dumps(mf))
+            tmp.flush()
+            upload = self.get_upload(abspath=tmp.name)
+        addon = Addon.from_upload(upload, [self.platform])
+        eq_(addon.default_locale, 'es')
+
+    def test_webapp_default_locale_unsupported(self):
+        with nested(tempfile.NamedTemporaryFile('w', suffix='.webapp'),
+                    open(self.manifest('mozball.webapp'))) as (tmp, mf):
+            mf = json.load(mf)
+            mf['default_locale'] = 'gb'
+            tmp.write(json.dumps(mf))
+            tmp.flush()
+            upload = self.get_upload(abspath=tmp.name)
+        addon = Addon.from_upload(upload, [self.platform])
+        eq_(addon.default_locale, 'en-US')
+
+    def test_browsing_locale_does_not_override(self):
+        with translation.override('fr'):
+            # Upload app with en-US as default.
+            upload = self.get_upload(abspath=self.manifest('mozball.webapp'))
+            addon = Addon.from_upload(upload, [self.platform])
+            eq_(addon.default_locale, 'en-US')  # not fr
+
+    @raises(forms.ValidationError)
+    def test_malformed_locales(self):
+        manifest = self.manifest('malformed-locales.webapp')
+        upload = self.get_upload(abspath=manifest)
+        Addon.from_upload(upload, [self.platform])
 
 
 REDIRECT_URL = 'http://outgoing.mozilla.org/v1/'
 
 
-class TestCharity(test_utils.TestCase):
+class TestCharity(amo.tests.TestCase):
     fixtures = ['base/charity.json']
 
     @patch.object(settings, 'REDIRECT_URL', REDIRECT_URL)
@@ -1407,7 +1850,7 @@ class TestCharity(test_utils.TestCase):
         assert not foundation.outgoing_url.startswith(REDIRECT_URL)
 
 
-class TestFrozenAddons(test_utils.TestCase):
+class TestFrozenAddons(amo.tests.TestCase):
 
     def test_immediate_freeze(self):
         # Adding a FrozenAddon should immediately drop the addon's hotness.
@@ -1416,7 +1859,7 @@ class TestFrozenAddons(test_utils.TestCase):
         eq_(Addon.objects.get(id=a.id).hotness, 0)
 
 
-class TestRemoveLocale(test_utils.TestCase):
+class TestRemoveLocale(amo.tests.TestCase):
 
     def test_remove(self):
         a = Addon.objects.create(type=1)
@@ -1439,7 +1882,95 @@ class TestRemoveLocale(test_utils.TestCase):
                                .values_list('locale', flat=True))
 
 
-class TestAddonWatchDisabled(test_utils.TestCase):
+class TestUpdateNames(amo.tests.TestCase):
+
+    def setUp(self):
+        self.addon = Addon.objects.create(type=amo.ADDON_EXTENSION)
+        self.addon.name = self.names = {'en-US': 'woo'}
+        self.addon.save()
+
+    def get_name(self, app, locale='en-US'):
+        return Translation.objects.no_cache().get(id=app.name_id,
+                                                  locale=locale)
+
+    def check_names(self, names):
+        """`names` in {locale: name} format."""
+        for locale, localized_string in names.iteritems():
+            eq_(self.get_name(self.addon, locale).localized_string,
+                localized_string)
+
+    def test_new_name(self):
+        names = dict(self.names, **{'de': u'frü'})
+        self.addon.update_names(names)
+        self.addon.save()
+        self.check_names(names)
+
+    def test_new_names(self):
+        names = dict(self.names, **{'de': u'frü', 'es': u'eso'})
+        self.addon.update_names(names)
+        self.addon.save()
+        self.check_names(names)
+
+    def test_remove_name_missing(self):
+        names = dict(self.names, **{'de': u'frü', 'es': u'eso'})
+        self.addon.update_names(names)
+        self.addon.save()
+        self.check_names(names)
+        # Now update without de to remove it.
+        del names['de']
+        self.addon.update_names(names)
+        self.addon.save()
+        names['de'] = None
+        self.check_names(names)
+
+    def test_remove_name_with_none(self):
+        names = dict(self.names, **{'de': u'frü', 'es': u'eso'})
+        self.addon.update_names(names)
+        self.addon.save()
+        self.check_names(names)
+        # Now update without de to remove it.
+        names['de'] = None
+        self.addon.update_names(names)
+        self.addon.save()
+        self.check_names(names)
+
+    def test_add_and_remove(self):
+        names = dict(self.names, **{'de': u'frü', 'es': u'eso'})
+        self.addon.update_names(names)
+        self.addon.save()
+        self.check_names(names)
+        # Now add a new locale and remove an existing one.
+        names['de'] = None
+        names['fr'] = u'oui'
+        self.addon.update_names(names)
+        self.addon.save()
+        self.check_names(names)
+
+    def test_default_locale_change(self):
+        names = dict(self.names, **{'de': u'frü', 'es': u'eso'})
+        self.addon.default_locale = 'de'
+        self.addon.update_names(names)
+        self.addon.save()
+        self.check_names(names)
+        addon = self.addon.reload()
+        eq_(addon.default_locale, 'de')
+
+    def test_default_locale_change_remove_old(self):
+        names = dict(self.names, **{'de': u'frü', 'es': u'eso', 'en-US': None})
+        self.addon.default_locale = 'de'
+        self.addon.update_names(names)
+        self.addon.save()
+        self.check_names(names)
+        eq_(self.addon.reload().default_locale, 'de')
+
+    def test_default_locale_removal_not_deleted(self):
+        names = {'en-US': None}
+        self.addon.update_names(names)
+        self.addon.save()
+        self.check_names(self.names)
+
+
+class TestAddonWatchDisabled(amo.tests.TestCase):
 
     def setUp(self):
         self.addon = Addon(type=amo.ADDON_THEME, disabled_by_user=False,
@@ -1482,23 +2013,16 @@ class TestAddonWatchDisabled(test_utils.TestCase):
 
 
 class TestSearchSignals(amo.tests.ESTestCase):
-    es = True
-
-    @classmethod
-    def add_addons(cls):
-        pass
-
-    @classmethod
-    def reindex(cls):
-        pass
+    test_es = True
 
     def setUp(self):
         super(TestSearchSignals, self).setUp()
-        addons.search.setup_mapping()
+        setup_mapping()
         self.addCleanup(self.cleanup)
 
     def cleanup(self):
-        self.es.delete_index(settings.ES_INDEX)
+        for index in settings.ES_INDEXES.values():
+            self.es.delete_index_if_exists(index)
 
     def test_no_addons(self):
         eq_(Addon.search().count(), 0)
@@ -1530,3 +2054,372 @@ class TestSearchSignals(amo.tests.ESTestCase):
         addon.delete('woo')
         self.refresh()
         eq_(Addon.search().count(), 0)
+
+
+class TestLanguagePack(LanguagePackBase):
+
+    def setUp(self):
+        super(TestLanguagePack, self).setUp()
+        self.platform = Platform.objects.create(id=amo.PLATFORM_ANDROID.id)
+
+    def test_extract(self):
+        File.objects.create(platform=self.platform, version=self.version,
+                            filename=self.xpi_path('langpack-localepicker'))
+        assert 'title=Select a language' in self.addon.get_localepicker()
+
+    def test_extract_no_file(self):
+        File.objects.create(platform=self.platform, version=self.version,
+                            filename=self.xpi_path('langpack'))
+        eq_(self.addon.get_localepicker(), '')
+
+    def test_extract_no_files(self):
+        eq_(self.addon.get_localepicker(), '')
+
+    def test_extract_not_language_pack(self):
+        self.addon.update(type=amo.ADDON_LPAPP)
+        eq_(self.addon.get_localepicker(), '')
+
+    def test_extract_not_platform_all(self):
+        self.mac = Platform.objects.create(id=amo.PLATFORM_MAC.id)
+        File.objects.create(platform=self.mac, version=self.version,
+                            filename=self.xpi_path('langpack'))
+        eq_(self.addon.get_localepicker(), '')
+
+
+class TestMarketplace(amo.tests.TestCase):
+
+    def setUp(self):
+        self.addon = Addon(type=amo.ADDON_EXTENSION)
+
+    def test_is_premium(self):
+        assert not self.addon.is_premium()
+        self.addon.premium_type = amo.ADDON_PREMIUM
+        assert self.addon.is_premium()
+
+    def test_is_premium_inapp(self):
+        assert not self.addon.is_premium()
+        self.addon.premium_type = amo.ADDON_PREMIUM_INAPP
+        assert self.addon.is_premium()
+
+    def test_is_premium_free(self):
+        assert not self.addon.is_premium()
+        self.addon.premium_type = amo.ADDON_FREE_INAPP
+        assert not self.addon.is_premium()
+
+    def test_can_be_premium_upsell(self):
+        self.addon.premium_type = amo.ADDON_PREMIUM
+        self.addon.save()
+        free = Addon.objects.create(type=amo.ADDON_EXTENSION)
+
+        AddonUpsell.objects.create(free=free, premium=self.addon)
+        assert not free.can_become_premium()
+
+    def test_can_be_premium_status(self):
+        for status in amo.STATUS_CHOICES.keys():
+            self.addon.status = status
+            if status in amo.PREMIUM_STATUSES:
+                assert self.addon.can_become_premium()
+            else:
+                assert not self.addon.can_become_premium()
+
+    def test_webapp_can_become_premium(self):
+        self.addon.type = amo.ADDON_WEBAPP
+        for status in amo.STATUS_CHOICES.keys():
+            self.addon.status = status
+            assert self.addon.can_become_premium(), status
+
+    def test_can_be_premium_type(self):
+        for type in amo.ADDON_TYPES.keys():
+            self.addon.update(type=type)
+            if type in [amo.ADDON_EXTENSION, amo.ADDON_WEBAPP,
+                        amo.ADDON_LPAPP, amo.ADDON_DICT, amo.ADDON_THEME]:
+                assert self.addon.can_become_premium()
+            else:
+                assert not self.addon.can_become_premium()
+
+    def test_can_not_be_purchased(self):
+        assert not self.addon.can_be_purchased()
+
+    def test_can_still_not_be_purchased(self):
+        self.addon.premium_type = amo.ADDON_PREMIUM
+        assert not self.addon.can_be_purchased()
+
+    def test_can_be_purchased(self):
+        for status in amo.REVIEWED_STATUSES:
+            self.addon.premium_type = amo.ADDON_PREMIUM
+            self.addon.status = status
+            assert self.addon.can_be_purchased()
+
+
+class TestAddonUpsell(amo.tests.TestCase):
+
+    def setUp(self):
+        self.one = Addon.objects.create(type=amo.ADDON_EXTENSION, name='free')
+        self.two = Addon.objects.create(type=amo.ADDON_EXTENSION,
+                                        name='premium')
+        self.upsell = AddonUpsell.objects.create(free=self.one,
+                                                 premium=self.two)
+
+    def test_create_upsell(self):
+        eq_(self.one.upsell.free, self.one)
+        eq_(self.one.upsell.premium, self.two)
+        eq_(self.two.upsell, None)
+
+    def test_delete(self):
+        self.upsell = AddonUpsell.objects.create(free=self.two,
+                                                 premium=self.one)
+        # Note: delete ignores if status 0.
+        self.one.update(status=amo.STATUS_PUBLIC)
+        self.one.delete()
+        eq_(AddonUpsell.objects.count(), 0)
+
+
+class TestAddonPurchase(amo.tests.TestCase):
+    fixtures = ['base/users']
+
+    def setUp(self):
+        self.user = UserProfile.objects.get(pk=999)
+        self.addon = Addon.objects.create(type=amo.ADDON_EXTENSION,
+                                          premium_type=amo.ADDON_PREMIUM,
+                                          name='premium')
+
+    def test_no_premium(self):
+        # If you've purchased something, the fact that its now free
+        # doesn't change the fact that you purchased it.
+        self.addon.addonpurchase_set.create(user=self.user)
+        self.addon.update(premium_type=amo.ADDON_FREE)
+        assert self.addon.has_purchased(self.user)
+
+    def test_has_purchased(self):
+        self.addon.addonpurchase_set.create(user=self.user)
+        assert self.addon.has_purchased(self.user)
+
+    def test_not_purchased(self):
+        assert not self.addon.has_purchased(self.user)
+
+    def test_anonymous(self):
+        assert not self.addon.has_purchased(None)
+        assert not self.addon.has_purchased(AnonymousUser)
+
+    def test_is_refunded(self):
+        self.addon.addonpurchase_set.create(user=self.user,
+                                            type=amo.CONTRIB_REFUND)
+        assert self.addon.is_refunded(self.user)
+
+    def test_is_chargeback(self):
+        self.addon.addonpurchase_set.create(user=self.user,
+                                            type=amo.CONTRIB_CHARGEBACK)
+        assert self.addon.is_chargeback(self.user)
+
+    def test_purchase_state(self):
+        purchase = self.addon.addonpurchase_set.create(user=self.user)
+        for state in [amo.CONTRIB_PURCHASE, amo.CONTRIB_REFUND,
+                      amo.CONTRIB_CHARGEBACK]:
+            purchase.update(type=state)
+            eq_(state, self.addon.get_purchase_type(self.user))
+
+
+class TestCompatOverride(amo.tests.TestCase):
+
+    def setUp(self):
+        self.app = Application.objects.create(id=1)
+
+        one = CompatOverride.objects.create(guid='one')
+        CompatOverrideRange.objects.create(compat=one, app=self.app)
+
+        two = CompatOverride.objects.create(guid='two')
+        CompatOverrideRange.objects.create(compat=two, app=self.app,
+                                           min_version='1', max_version='2')
+        CompatOverrideRange.objects.create(compat=two, app=self.app,
+                                           min_version='1', max_version='2',
+                                           min_app_version='3',
+                                           max_app_version='4')
+
+    def check(self, obj, **kw):
+        """Check that key/value pairs in kw match attributes of obj."""
+        for key, expected in kw.items():
+            actual = getattr(obj, key)
+            eq_(actual, expected, '[%s] %r != %r' % (key, actual, expected))
+
+    def test_is_hosted(self):
+        c = CompatOverride.objects.create(guid='a')
+        assert not c.is_hosted()
+
+        Addon.objects.create(type=1, guid='b')
+        c = CompatOverride.objects.create(guid='b')
+        assert c.is_hosted()
+
+    def test_override_type(self):
+        one = CompatOverride.objects.get(guid='one')
+
+        # The default is incompatible.
+        c = CompatOverrideRange.objects.create(compat=one, app_id=1)
+        eq_(c.override_type(), 'incompatible')
+
+        c = CompatOverrideRange.objects.create(compat=one, app_id=1, type=0)
+        eq_(c.override_type(), 'compatible')
+
+    def test_guid_match(self):
+        # We hook up the add-on automatically if we see a matching guid.
+        addon = Addon.objects.create(id=1, guid='oh yeah', type=1)
+        c = CompatOverride.objects.create(guid=addon.guid)
+        eq_(c.addon_id, addon.id)
+
+        c = CompatOverride.objects.create(guid='something else')
+        assert c.addon is None
+
+    def test_transformer(self):
+        compats = list(CompatOverride.objects
+                       .transform(CompatOverride.transformer))
+        ranges = list(CompatOverrideRange.objects.all())
+        # If the transformer works then we won't have any more queries.
+        with self.assertNumQueries(0):
+            for c in compats:
+                eq_(c.compat_ranges,
+                    [r for r in ranges if r.compat_id == c.id])
+
+    def test_collapsed_ranges(self):
+        # Test that we get back the right structures from collapsed_ranges().
+        c = CompatOverride.objects.get(guid='one')
+        r = c.collapsed_ranges()
+
+        eq_(len(r), 1)
+        compat_range = r[0]
+        self.check(compat_range, type='incompatible', min='0', max='*')
+
+        eq_(len(compat_range.apps), 1)
+        self.check(compat_range.apps[0], app=amo.FIREFOX, min='0', max='*')
+
+    def test_collapsed_ranges_multiple_versions(self):
+        c = CompatOverride.objects.get(guid='one')
+        CompatOverrideRange.objects.create(compat=c, app_id=1,
+                                           min_version='1', max_version='2',
+                                           min_app_version='3',
+                                           max_app_version='3.*')
+        r = c.collapsed_ranges()
+
+        eq_(len(r), 2)
+
+        self.check(r[0], type='incompatible', min='0', max='*')
+        eq_(len(r[0].apps), 1)
+        self.check(r[0].apps[0], app=amo.FIREFOX, min='0', max='*')
+
+        self.check(r[1], type='incompatible', min='1', max='2')
+        eq_(len(r[1].apps), 1)
+        self.check(r[1].apps[0], app=amo.FIREFOX, min='3', max='3.*')
+
+    def test_collapsed_ranges_different_types(self):
+        # If the override ranges have different types they should be separate
+        # entries.
+        c = CompatOverride.objects.get(guid='one')
+        CompatOverrideRange.objects.create(compat=c, app_id=1, type=0,
+                                           min_app_version='3',
+                                           max_app_version='3.*')
+        r = c.collapsed_ranges()
+
+        eq_(len(r), 2)
+
+        self.check(r[0], type='compatible', min='0', max='*')
+        eq_(len(r[0].apps), 1)
+        self.check(r[0].apps[0], app=amo.FIREFOX, min='3', max='3.*')
+
+        self.check(r[1], type='incompatible', min='0', max='*')
+        eq_(len(r[1].apps), 1)
+        self.check(r[1].apps[0], app=amo.FIREFOX, min='0', max='*')
+
+    def test_collapsed_ranges_multiple_apps(self):
+        c = CompatOverride.objects.get(guid='two')
+        r = c.collapsed_ranges()
+
+        eq_(len(r), 1)
+        compat_range = r[0]
+        self.check(compat_range, type='incompatible', min='1', max='2')
+
+        eq_(len(compat_range.apps), 2)
+        self.check(compat_range.apps[0], app=amo.FIREFOX, min='0', max='*')
+        self.check(compat_range.apps[1], app=amo.FIREFOX, min='3', max='4')
+
+    def test_collapsed_ranges_multiple_versions_and_apps(self):
+        c = CompatOverride.objects.get(guid='two')
+        CompatOverrideRange.objects.create(min_version='5', max_version='6',
+                                           compat=c, app_id=1)
+        r = c.collapsed_ranges()
+
+        eq_(len(r), 2)
+        self.check(r[0], type='incompatible', min='1', max='2')
+
+        eq_(len(r[0].apps), 2)
+        self.check(r[0].apps[0], app=amo.FIREFOX, min='0', max='*')
+        self.check(r[0].apps[1], app=amo.FIREFOX, min='3', max='4')
+
+        self.check(r[1], type='incompatible', min='5', max='6')
+        eq_(len(r[1].apps), 1)
+        self.check(r[1].apps[0], app=amo.FIREFOX, min='0', max='*')
+
+
+class TestIncompatibleVersions(amo.tests.TestCase):
+
+    def setUp(self):
+        self.app = Application.objects.create(id=amo.FIREFOX.id)
+        self.addon = Addon.objects.create(guid='r@b', type=amo.ADDON_EXTENSION)
+
+    def test_signals_min(self):
+        eq_(IncompatibleVersions.objects.count(), 0)
+
+        c = CompatOverride.objects.create(guid='r@b')
+        CompatOverrideRange.objects.create(compat=c, app=self.app,
+                                           min_version='0',
+                                           max_version='1.0')
+
+        # Test the max version matched.
+        version1 = Version.objects.create(id=2, addon=self.addon,
+                                          version='1.0')
+        eq_(IncompatibleVersions.objects.filter(version=version1).count(), 1)
+        eq_(IncompatibleVersions.objects.count(), 1)
+
+        # Test the lower range.
+        version2 = Version.objects.create(id=1, addon=self.addon,
+                                          version='0.5')
+        eq_(IncompatibleVersions.objects.filter(version=version2).count(), 1)
+        eq_(IncompatibleVersions.objects.count(), 2)
+
+        # Test delete signals.
+        version1.delete()
+        eq_(IncompatibleVersions.objects.count(), 1)
+
+        version2.delete()
+        eq_(IncompatibleVersions.objects.count(), 0)
+
+    def test_signals_max(self):
+        eq_(IncompatibleVersions.objects.count(), 0)
+
+        c = CompatOverride.objects.create(guid='r@b')
+        CompatOverrideRange.objects.create(compat=c, app=self.app,
+                                           min_version='1.0',
+                                           max_version='*')
+
+        # Test the min_version matched.
+        version1 = Version.objects.create(addon=self.addon, version='1.0')
+        eq_(IncompatibleVersions.objects.filter(version=version1).count(), 1)
+        eq_(IncompatibleVersions.objects.count(), 1)
+
+        # Test the upper range.
+        version2 = Version.objects.create(addon=self.addon, version='99.0')
+        eq_(IncompatibleVersions.objects.filter(version=version2).count(), 1)
+        eq_(IncompatibleVersions.objects.count(), 2)
+
+        # Test delete signals.
+        version1.delete()
+        eq_(IncompatibleVersions.objects.count(), 1)
+
+        version2.delete()
+        eq_(IncompatibleVersions.objects.count(), 0)
+
+
+class TestQueue(amo.tests.TestCase):
+
+    def test_in_queue(self):
+        addon = Addon.objects.create(guid='f', type=amo.ADDON_EXTENSION)
+        assert not addon.in_escalation_queue()
+        EscalationQueue.objects.create(addon=addon)
+        assert addon.in_escalation_queue()

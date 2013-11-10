@@ -1,26 +1,28 @@
 import collections
-from datetime import datetime
 import hashlib
 import os
+import re
 import time
 import uuid
+from datetime import datetime
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db import models, connection, transaction
-from django.db.models import Q
+from django.db import connection, models, transaction
 
 import caching.base as caching
 
 import amo
 import amo.models
 import sharing.utils as sharing
-from amo.utils import sorted_groupby
-from amo.urlresolvers import reverse
+from access import acl
 from addons.models import Addon, AddonRecommendation
+from amo.helpers import absolutify
+from amo.urlresolvers import reverse
+from amo.utils import sorted_groupby
 from applications.models import Application
 from stats.models import CollectionShareCountTotal
-from translations.fields import TranslatedField, LinkifiedField
+from translations.fields import LinkifiedField, save_signal, TranslatedField
 from users.models import UserProfile
 from versions import compare
 
@@ -63,9 +65,9 @@ class CollectionManager(amo.models.ManagerBase):
 
     def publishable_by(self, user):
         """Collections that are publishable by a user."""
-        owned_by = Q(author=user.id)
-        publishable_by = Q(users=user.id)
-        return self.filter(owned_by | publishable_by)
+        owned_by = list(self.filter(author=user.id))
+        publishable_by = list(self.filter(users=user.id))
+        return set(owned_by + publishable_by)
 
 
 class CollectionBase:
@@ -81,19 +83,20 @@ class CollectionBase:
         return self.get_recs_from_ids(addons, app, version)
 
     @classmethod
-    def get_recs_from_ids(cls, addons, app, version):
+    def get_recs_from_ids(cls, addons, app, version, compat_mode='strict'):
         vint = compare.version_int(version)
         recs = RecommendedCollection.build_recs(addons)
         qs = (Addon.objects.public()
               .filter(id__in=recs, appsupport__app=app.id,
-                      appsupport__min__lte=vint, appsupport__max__gte=vint))
-        return recs, qs[:Collection.RECOMMENDATION_LIMIT]
+                      appsupport__min__lte=vint))
+        if compat_mode == 'strict':
+            qs = qs.filter(appsupport__max__gte=vint)
+        return recs, qs
 
 
 class Collection(CollectionBase, amo.models.ModelBase):
 
     TYPE_CHOICES = amo.COLLECTION_CHOICES.items()
-    RECOMMENDATION_LIMIT = 15  # Maximum number of add-ons to recommend.
 
     uuid = models.CharField(max_length=36, blank=True, unique=True)
     name = TranslatedField(require_locale=False)
@@ -124,7 +127,7 @@ class Collection(CollectionBase, amo.models.ModelBase):
     downvotes = models.PositiveIntegerField(default=0)
     rating = models.FloatField(default=0)
     all_personas = models.BooleanField(default=False,
-        help_text='Does this collection only contain personas?')
+        help_text='Does this collection only contain Themes?')
 
     addons = models.ManyToManyField(Addon, through='CollectionAddon',
                                     related_name='collections')
@@ -193,6 +196,9 @@ class Collection(CollectionBase, amo.models.ModelBase):
         return reverse('collections.detail',
                         args=[self.author_username, self.slug])
 
+    def get_abs_url(self):
+        return absolutify(self.get_url_path())
+
     def get_img_dir(self):
         return os.path.join(settings.COLLECTIONS_ICON_PATH,
                             str(self.id / 1000))
@@ -229,6 +235,10 @@ class Collection(CollectionBase, amo.models.ModelBase):
         return reverse('collections.detail.rss',
                        args=[self.author_username, self.slug])
 
+    def stats_url(self):
+        return reverse('collections.stats',
+                       args=[self.author_username, self.slug])
+
     @property
     def author_username(self):
         return self.author.username if self.author else 'anonymous'
@@ -246,7 +256,10 @@ class Collection(CollectionBase, amo.models.ModelBase):
     def icon_url(self):
         modified = int(time.mktime(self.modified.timetuple()))
         if self.icontype:
-            return settings.COLLECTION_ICON_URL % (self.id, modified)
+            # [1] is the whole ID, [2] is the directory
+            split_id = re.match(r'((\d*?)\d{1,3})$', str(self.id))
+            return settings.COLLECTION_ICON_URL % (
+                    split_id.group(2) or 0, self.id, modified)
         elif self.type == amo.COLLECTION_FAVORITES:
             return settings.MEDIA_URL + 'img/icons/heart.png'
         else:
@@ -295,7 +308,7 @@ class Collection(CollectionBase, amo.models.ModelBase):
         for addon, comment in comments.iteritems():
             c = (CollectionAddon.objects.using('default')
                  .filter(collection=self.id, addon=addon))
-            if c:
+            if c.exists():
                 c[0].comments = comment
                 c[0].save(force_update=True)
 
@@ -320,6 +333,12 @@ class Collection(CollectionBase, amo.models.ModelBase):
 
     def owned_by(self, user):
         return (user.id == self.author_id)
+
+    def can_view_stats(self, request):
+        if request and request.amo_user:
+            return (self.publishable_by(request.amo_user) or
+                    acl.action_allowed(request, 'CollectionStats', 'View'))
+        return False
 
     @caching.cached_method
     def publishable_by(self, user):
@@ -353,9 +372,20 @@ class Collection(CollectionBase, amo.models.ModelBase):
             return
         tasks.unindex_collections.delay([instance.id])
 
+    def check_ownership(self, request, require_owner, require_author,
+                        ignore_disabled, admin):
+        """
+        Used by acl.check_ownership to see if request.user has permissions for
+        the collection.
+        """
+        from access import acl
+        return acl.check_collection_ownership(request, self, require_owner)
+
 
 models.signals.post_save.connect(Collection.post_save, sender=Collection,
                                  dispatch_uid='coll.post_save')
+models.signals.pre_save.connect(save_signal, sender=Collection,
+                                dispatch_uid='coll_translations')
 models.signals.post_delete.connect(Collection.post_delete, sender=Collection,
                                    dispatch_uid='coll.post_delete')
 
@@ -377,13 +407,8 @@ class CollectionAddon(amo.models.ModelBase):
         unique_together = (('addon', 'collection'),)
 
 
-class CollectionAddonRecommendation(models.Model):
-    collection = models.ForeignKey(Collection, null=True)
-    addon = models.ForeignKey(Addon, null=True)
-    score = models.FloatField(blank=True)
-
-    class Meta:
-        db_table = 'collection_addon_recommendations'
+models.signals.pre_save.connect(save_signal, sender=CollectionAddon,
+                                dispatch_uid='coll_addon_translations')
 
 
 class CollectionFeature(amo.models.ModelBase):
@@ -392,6 +417,9 @@ class CollectionFeature(amo.models.ModelBase):
 
     class Meta(amo.models.ModelBase.Meta):
         db_table = 'collection_features'
+
+models.signals.pre_save.connect(save_signal, sender=CollectionFeature,
+                                dispatch_uid='collectionfeature_translations')
 
 
 class CollectionPromo(amo.models.ModelBase):
@@ -547,50 +575,10 @@ class RecommendedCollection(Collection):
         return [addon for addon, score in addons if addon not in addon_ids]
 
 
-class FeaturedCollectionManager(amo.models.ManagerBase):
-
-    def featured(self, app=None, lang=None):
-        qs = self
-        if app:
-            qs = qs.filter(application__id=app.id)
-        if lang:
-            qs = qs.filter(Q(locale=lang) | Q(locale__isnull=True))
-        return qs
-
-    def by_locale(self, app=None, lang=None):
-        """Returns locales, ids for all add-ons from filtered collections."""
-        qs = self.featured(app, lang)
-        return list(qs.values('locale', 'collection__addons').distinct())
-
-    def addon_ids(self, app=None, lang=None):
-        """Returns ids for all add-ons from filtered collections."""
-        qs = self.featured(app, lang)
-        return list(qs.values_list('collection__addons', flat=True).distinct())
-
-    def addons(self, app=None, lang=None):
-        """Returns add-ons from filtered collections."""
-        return Addon.objects.filter(id__in=self.addon_ids(app, lang))
-
-    def creatured_ids(self, category=None, lang=None):
-        qs = self
-        if category:
-            qs = qs.filter(collection__addons__category=category)
-        else:
-            qs = qs.filter(collection__addons__category__isnull=False)
-        if lang:
-            qs = qs.filter(Q(locale=lang) | Q(locale__isnull=True))
-        return list(qs.values_list('collection__addons',
-                                   'collection__addons__category',
-                                   'collection__addons__category__application',
-                                   'locale').distinct())
-
-
 class FeaturedCollection(amo.models.ModelBase):
     application = models.ForeignKey(Application)
     collection = models.ForeignKey(Collection)
     locale = models.CharField(max_length=10, null=True)
-
-    objects = FeaturedCollectionManager()
 
     class Meta:
         db_table = 'featured_collections'
@@ -598,3 +586,14 @@ class FeaturedCollection(amo.models.ModelBase):
     def __unicode__(self):
         return u'%s (%s: %s)' % (self.collection, self.application,
                                  self.locale)
+
+
+class MonthlyPick(amo.models.ModelBase):
+    addon = models.ForeignKey(Addon)
+    blurb = models.TextField()
+    image = models.URLField()
+    locale = models.CharField(max_length=10, unique=True, null=True,
+                              blank=True)
+
+    class Meta:
+        db_table = 'monthly_pick'

@@ -1,11 +1,21 @@
 # -*- coding: utf-8 -*-
 import re
 
-from nose.tools import eq_
+from django.contrib.auth.models import AnonymousUser
 
+from nose.tools import eq_
+from pyquery import PyQuery as pq
+import waffle
+
+from addons.models import Addon
+from addons.tests.test_views import TestPersonas
+import amo
+import amo.tests
 from amo.urlresolvers import reverse
-from users.helpers import emaillink, user_link, users_list
-from users.models import UserProfile
+from market.models import PreApprovalUser
+from users.helpers import (addon_users_list, emaillink, user_data, user_link,
+                           users_list)
+from users.models import UserProfile, RequestUser
 
 
 def test_emaillink():
@@ -34,8 +44,7 @@ def test_emaillink():
 
 def test_user_link():
     u = UserProfile(username='jconnor', display_name='John Connor', pk=1)
-    eq_(user_link(u), '<a href="%s">John Connor</a>' %
-        reverse('users.profile', args=[1]))
+    eq_(user_link(u), '<a href="%s">John Connor</a>' % u.get_url_path())
 
     # handle None gracefully
     eq_(user_link(None), '')
@@ -44,9 +53,8 @@ def test_user_link():
 def test_user_link_xss():
     u = UserProfile(username='jconnor',
                     display_name='<script>alert(1)</script>', pk=1)
-    url = reverse('users.profile', args=[1])
-    html =  "&lt;script&gt;alert(1)&lt;/script&gt;"
-    eq_(user_link(u), '<a href="%s">%s</a>' % (url, html))
+    html = "&lt;script&gt;alert(1)&lt;/script&gt;"
+    eq_(user_link(u), '<a href="%s">%s</a>' % (u.get_url_path(), html))
 
 
 def test_users_list():
@@ -70,7 +78,58 @@ def test_short_users_list():
 
 def test_user_link_unicode():
     """make sure helper won't choke on unicode input"""
-    u = UserProfile(username=u'jmüller', display_name=u'Jürgen Müller',
-                    pk=1)
-    eq_(user_link(u), u'<a href="%s">Jürgen Müller</a>' %
-        reverse('users.profile', args=[1]))
+    u = UserProfile(username=u'jmüller', display_name=u'Jürgen Müller', pk=1)
+    eq_(user_link(u), u'<a href="%s">Jürgen Müller</a>' % u.get_url_path())
+
+    u = UserProfile(username='\xe5\xaf\x92\xe6\x98\x9f', pk=1)
+    eq_(user_link(u),
+        u'<a href="%s">%s</a>' % (u.get_url_path(), u.username))
+
+
+class TestAddonUsersList(TestPersonas, amo.tests.TestCase):
+
+    def setUp(self):
+        self.addon = Addon.objects.get(id=15663)
+        self.persona = self.addon.persona
+        waffle.models.Switch.objects.create(
+            name='personas-migration-completed', active=True)
+        self.create_addon_user(self.addon)
+
+    def test_by(self):
+        """Test that the by... bit works."""
+        content = addon_users_list({'amo': amo}, self.addon)
+        eq_(pq(content).text(), 'by %s' % self.addon.authors.all()[0].name)
+
+
+def test_user_data():
+    u = user_data(RequestUser(username='foo', pk=1))
+    eq_(u['anonymous'], False)
+    eq_(u['pre_auth'], False)
+
+
+class TestUserData(amo.tests.TestCase):
+
+    def test_user_data_approved(self):
+        up = UserProfile.objects.create(email='aq@a.com', username='foo')
+        PreApprovalUser.objects.create(user=up, paypal_key='asd')
+        eq_(user_data(RequestUser.objects.get(pk=up.pk)),
+            {'anonymous': False, 'pre_auth': True, 'currency': 'USD',
+             'email': 'aq@a.com'})
+
+    def test_no_user_data(self):
+        eq_(user_data(None),
+            {'anonymous': True, 'pre_auth': False, 'currency': 'USD',
+             'email': ''})
+
+    def test_anonymous_user_data(self):
+        eq_(user_data(AnonymousUser()),
+            {'anonymous': True, 'pre_auth': False, 'currency': 'USD',
+             'email': ''})
+
+    def test_preapproval_user_data(self):
+        up = UserProfile.objects.create(email='aq@a.com', username='foo')
+        PreApprovalUser.objects.create(user=up, paypal_key='asd',
+                                       currency='EUR')
+        eq_(user_data(RequestUser.objects.get(pk=up.pk)),
+            {'anonymous': False, 'pre_auth': True, 'currency': 'EUR',
+             'email': 'aq@a.com'})

@@ -1,22 +1,58 @@
+import json
 import os
 import re
+import urllib2
 
 from django import forms
 from django.conf import settings
+from django.forms import ModelForm
 from django.forms.models import modelformset_factory
 from django.template import Context, Template, TemplateSyntaxError
 
+import commonware.log
 import happyforms
 from piston.models import Consumer
+from product_details import product_details
 from tower import ugettext_lazy as _lazy
 from quieter_formset.formset import BaseModelFormSet
 
 import amo
-import product_details
+from addons.models import Addon
 from amo.urlresolvers import reverse
 from applications.models import Application, AppVersion
-from bandwagon.models import Collection, FeaturedCollection
-from zadmin.models import ValidationJob
+from bandwagon.models import Collection, FeaturedCollection, MonthlyPick
+from compat.forms import CompatForm as BaseCompatForm
+from files.models import File
+from zadmin.models import SiteEvent, ValidationJob
+
+LOGGER_NAME = 'z.zadmin'
+log = commonware.log.getLogger(LOGGER_NAME)
+
+
+class DevMailerForm(happyforms.Form):
+    _choices = [('eula',
+                 'Developers who have set up EULAs for active add-ons'),
+                ('sdk', 'Developers of active SDK add-ons'),
+                ('apps', 'Developers of active apps (not add-ons)'),
+                ('free_apps_region_enabled',
+                 'Developers of free apps and new region enabled'),
+                ('free_apps_region_disabled',
+                 'Developers of free apps with new regions disabled'),
+                ('payments',
+                 'Developers of non-deleted apps (not add-ons) with payments'),
+                ('payments_region_enabled',
+                 'Developers of apps with payments and new regions enabled'),
+                ('payments_region_disabled',
+                 'Developers of apps with payments and new regions disabled'),
+                ('desktop_apps',
+                 'Developers of non-deleted apps supported on desktop'),
+                ('all_extensions', 'All extension developers')]
+    recipients = forms.ChoiceField(choices=_choices, required=True)
+    subject = forms.CharField(widget=forms.TextInput(attrs=dict(size='100')),
+                              required=True)
+    preview_only = forms.BooleanField(initial=True, required=False,
+                                      label=u'Log emails instead of sending')
+    message = forms.CharField(widget=forms.Textarea, required=True)
 
 
 class BulkValidationForm(happyforms.ModelForm):
@@ -162,6 +198,154 @@ FeaturedCollectionFormSet = modelformset_factory(FeaturedCollection,
 
 
 class OAuthConsumerForm(happyforms.ModelForm):
+
     class Meta:
         model = Consumer
         fields = ['name', 'description', 'status']
+
+
+class MonthlyPickForm(happyforms.ModelForm):
+    image = forms.CharField(required=False)
+    blurb = forms.CharField(max_length=200,
+                            widget=forms.Textarea(attrs={'cols': 20,
+                                                         'rows': 2}))
+
+    class Meta:
+        model = MonthlyPick
+        widgets = {
+            'addon': forms.TextInput(),
+        }
+        fields = ('addon', 'image', 'blurb', 'locale')
+
+
+MonthlyPickFormSet = modelformset_factory(MonthlyPick, form=MonthlyPickForm,
+                                          can_delete=True, extra=0)
+
+
+class AddonStatusForm(ModelForm):
+    class Meta:
+        model = Addon
+        fields = ('status', 'highest_status', 'outstanding')
+
+
+class FileStatusForm(ModelForm):
+    class Meta:
+        model = File
+        fields = ('status',)
+
+
+FileFormSet = modelformset_factory(File, form=FileStatusForm,
+                                   formset=BaseModelFormSet, extra=0)
+
+
+class JetpackUpgradeForm(happyforms.Form):
+    minver = forms.CharField()
+    maxver = forms.CharField()
+
+    def __init__(self, *args, **kw):
+        super(JetpackUpgradeForm, self).__init__(*args, **kw)
+        fields = self.fields
+        url = settings.BUILDER_VERSIONS_URL
+        try:
+            page = urllib2.urlopen(url)
+            choices = [('', '')] + [(v, v) for v in json.loads(page.read())]
+            fields['minver'] = fields['maxver'] = forms.ChoiceField()
+            fields['minver'].choices = fields['maxver'].choices = choices
+        except urllib2.URLError, e:
+            log.error('Could not open %r: %s' % (url, e))
+        except ValueError, e:
+            log.error('Could not parse %r: %s' % (url, e))
+        if not ('minver' in self.data or 'maxver' in self.data):
+            fields['minver'].required = fields['maxver'].required = False
+
+    def clean(self):
+        if not self.errors:
+            minver = self.cleaned_data.get('minver')
+            maxver = self.cleaned_data.get('maxver')
+            if minver and maxver and minver >= maxver:
+                raise forms.ValidationError('Invalid version range.')
+        return self.cleaned_data
+
+
+class SiteEventForm(ModelForm):
+    class Meta:
+        model = SiteEvent
+        fields = ('start', 'end', 'event_type', 'description',
+                  'more_info_url')
+
+
+class YesImSure(happyforms.Form):
+    yes = forms.BooleanField(required=True, label="Yes, I'm sure")
+
+
+class CompatForm(BaseCompatForm):
+    _minimum_choices = [(x, x) for x in xrange(100, -10, -10)]
+    minimum = forms.TypedChoiceField(choices=_minimum_choices, coerce=int,
+                                     required=False)
+    _ratio_choices = [('%.1f' % (x / 10.0), '%.0f%%' % (x * 10))
+                      for x in xrange(9, -1, -1)]
+    ratio = forms.ChoiceField(choices=_ratio_choices, required=False)
+
+
+class GenerateErrorForm(happyforms.Form):
+    error = forms.ChoiceField(choices=(
+                    ['zerodivisionerror', 'Zero Division Error (will email)'],
+                    ['iorequesterror', 'IORequest Error (no email)'],
+                    ['metlog_statsd', 'Metlog statsd message'],
+                    ['metlog_json', 'Metlog JSON message'],
+                    ['metlog_cef', 'Metlog CEF message'],
+                    ['metlog_sentry', 'Metlog Sentry message'],
+                    ['amo_cef', 'AMO CEF message'],
+                    ))
+
+    def explode(self):
+        error = self.cleaned_data.get('error')
+
+        if error == 'zerodivisionerror':
+            1 / 0
+        elif error == 'iorequesterror':
+            class IOError(Exception):
+                pass
+            raise IOError('request data read error')
+        elif error == 'metlog_cef':
+            environ = {'REMOTE_ADDR': '127.0.0.1', 'HTTP_HOST': '127.0.0.1',
+                            'PATH_INFO': '/', 'REQUEST_METHOD': 'GET',
+                            'HTTP_USER_AGENT': 'MySuperBrowser'}
+
+            config = {'cef.version': '0',
+                           'cef.vendor': 'Mozilla',
+                           'cef.device_version': '3',
+                           'cef.product': 'zamboni',
+                           'cef': True}
+
+            settings.METLOG.cef('xx\nx|xx\rx', 5, environ, config,
+                    username='me', ext1='ok=ok', ext2='ok\\ok',
+                    logger_info='settings.METLOG')
+        elif error == 'metlog_statsd':
+            settings.METLOG.incr(name=LOGGER_NAME)
+        elif error == 'metlog_json':
+            settings.METLOG.metlog(type="metlog_json",
+                    fields={'foo': 'bar', 'secret': 42,
+                            'logger_type': 'settings.METLOG'})
+
+        elif error == 'metlog_sentry':
+            # These are local variables only used
+            # by Sentry's frame hacking magic.
+            # They won't be referenced which may trigger flake8
+            # errors.
+            metlog_conf = settings.METLOG_CONF  # NOQA
+            active_metlog_conf = settings.METLOG._config  # NOQA
+            try:
+                1 / 0
+            except:
+                settings.METLOG.raven('metlog_sentry error triggered')
+        elif error == 'amo_cef':
+            from amo.utils import log_cef
+            env = {'REMOTE_ADDR': '127.0.0.1', 'HTTP_HOST': '127.0.0.1',
+                            'PATH_INFO': '/', 'REQUEST_METHOD': 'GET',
+                            'HTTP_USER_AGENT': 'MySuperBrowser'}
+            log_cef(settings.STATSD_PREFIX, 6, env)
+
+
+class PriceTiersForm(happyforms.Form):
+    prices = forms.FileField()

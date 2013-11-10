@@ -11,8 +11,8 @@
 
 <h3>{{ _('What is this website?') }}</h3>
 <p>{% trans %}addons.mozilla.org, commonly known as "AMO", is Mozilla's official
-site for add-ons to Mozilla software, such as Firefox, Thunderbird, SeaMonkey,
-and Sunbird.  Add-ons let you add new features and change the way your browser
+site for add-ons to Mozilla software, such as Firefox, Thunderbird, and SeaMonkey.
+Add-ons let you add new features and change the way your browser
 or application works.  Take a look around and explore the thousands of ways to
 customize the way you do things online.{% endtrans %}</p>
 
@@ -29,9 +29,6 @@ should only be installed with caution.{% endtrans %}</p>
     <li>{% trans url="http://blog.mozilla.com/addons/" %}Our <a href="{{ url
     }}">Add-ons Blog</a> is regularly updated with information for both add-on
     enthusiasts and developers.{% endtrans %}</li>
-    <li>{% trans url="/developers/community/newsletter" %}You can subscribe to
-    our <a href="{{ url }}"> about:addons newsletter</a>, which highlights the
-    top add-on news every month.{% endtrans %}</li>
     <li>{% trans url="http://twitter.com/mozamo" %}We often post news, tips, and
     tricks to our Twitter account, <a href="{{ url }}">mozamo</a>{% endtrans %}</li>
     <li>{% trans url="https://forums.addons.mozilla.org" %}Our <a href="{{ url

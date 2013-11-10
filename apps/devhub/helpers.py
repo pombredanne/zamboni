@@ -9,9 +9,10 @@ from tower import ugettext as _, ungettext as ngettext
 
 import amo
 from amo.urlresolvers import reverse
-from amo.helpers import breadcrumbs, page_title
+from amo.helpers import breadcrumbs, impala_breadcrumbs, page_title
 from access import acl
 from addons.helpers import new_context
+from compat.models import CompatReport
 
 
 register.function(acl.check_addon_ownership)
@@ -32,7 +33,7 @@ def dev_page_title(context, title=None, addon=None):
     else:
         devhub = _('Developer Hub')
         title = '%s :: %s' % (title, devhub) if title else devhub
-    return page_title(context, title)
+    return page_title(context, title, force_webapps=context.get('webapp'))
 
 
 @register.function
@@ -46,7 +47,8 @@ def docs_page_title(context, title=None):
 
 @register.function
 @jinja2.contextfunction
-def dev_breadcrumbs(context, addon=None, items=None, add_default=False):
+def dev_breadcrumbs(context, addon=None, items=None, add_default=False,
+                    impala=False):
     """
     Wrapper function for ``breadcrumbs``. Prepends 'Developer Hub'
     breadcrumbs.
@@ -58,23 +60,40 @@ def dev_breadcrumbs(context, addon=None, items=None, add_default=False):
         specified then the Add-on will be linked.
     **add_default**
         Prepends trail back to home when True.  Default is False.
+    **impala**
+        Whether to use the impala_breadcrumbs helper. Default is False.
     """
-    crumbs = [(reverse('devhub.index'), _('Developer Hub'))]
+    if context.get('webapp'):
+        crumbs = []
+        title = _('My Apps')
+        link = reverse('devhub.apps')
+    else:
+        crumbs = [(reverse('devhub.index'), _('Developer Hub'))]
+        title = _('My Submissions')
+        link = reverse('devhub.addons')
+
     if not addon and not items:
         # We are at the end of the crumb trail.
-        crumbs.append((None, _('My Add-ons')))
+        crumbs.append((None, title))
     else:
-        crumbs.append((reverse('devhub.addons'), _('My Add-ons')))
+        crumbs.append((link, title))
     if addon:
         if items:
-            url = reverse('devhub.addons.edit', args=[addon.slug])
+            url = addon.get_dev_url()
         else:
             # The Addon is the end of the trail.
             url = None
         crumbs.append((url, addon.name))
     if items:
         crumbs.extend(items)
-    return breadcrumbs(context, crumbs, add_default)
+
+    if len(crumbs) == 1:
+        crumbs = []
+
+    if impala:
+        return impala_breadcrumbs(context, crumbs, add_default)
+    else:
+        return breadcrumbs(context, crumbs, add_default)
 
 
 @register.function
@@ -154,8 +173,10 @@ def status_class(addon):
         amo.STATUS_LITE: 'lite',
         amo.STATUS_LITE_AND_NOMINATED: 'lite-nom',
         amo.STATUS_PURGATORY: 'purgatory',
+        amo.STATUS_DELETED: 'deleted',
+        amo.STATUS_REJECTED: 'rejected',
     }
-    if addon.disabled_by_user:
+    if addon.disabled_by_user and addon.status != amo.STATUS_DISABLED:
         cls = 'disabled'
     else:
         cls = classes.get(addon.status, 'none')
@@ -195,3 +216,9 @@ def display_url(url):
     bytes = urllib.unquote(url)
     c = chardet.detect(bytes)
     return bytes.decode(c['encoding'], 'replace')
+
+
+@register.function
+def get_compat_counts(addon):
+    """Get counts for add-on compatibility reports."""
+    return CompatReport.get_counts(addon.guid)

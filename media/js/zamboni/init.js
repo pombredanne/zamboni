@@ -2,9 +2,10 @@
 var z = {};
 
 $(document).ready(function(){
-
     // Initialize install buttons.
     $('.install').installButton();
+    $(window).trigger('buttons_loaded');
+
     if ($('.backup-button').length) {
         $('.backup-button').showBackupButton();
     }
@@ -29,7 +30,7 @@ $(document).ready(function(){
     if (z.readonly) {
         $('form[method=post]')
             .before(gettext('This feature is temporarily disabled while we perform website maintenance. Please check back a little later.'))
-            .find('input, button, select').attr('disabled', true);
+            .find('input, button, select').attr('disabled', true).addClass('disabled');
     }
 });
 
@@ -91,7 +92,7 @@ jQuery.fn.placeholder = function(new_value) {
         var $this = $(this),
             text = $this.attr('placeholder');
 
-        if ($this.val() == '') {
+        if ($this.val() === '') {
             $this.val(text).addClass('placeholder');
         }
     }).each(function(){
@@ -108,12 +109,15 @@ jQuery.fn.placeholder = function(new_value) {
 
 jQuery.fn.hasattr = function(name) {
     return this.attr(name) !== undefined;
-}
+};
 
 
 var escape_ = function(s){
-    return s.replace('&', '&amp;').replace('>', '&gt;').replace('<', '&lt;')
-            .replace("'", '&#39;').replace('"', '&#34;');
+    if (s === undefined) {
+        return;
+    }
+    return s.replace(/&/g, '&amp;').replace(/>/g, '&gt;').replace(/</g, '&lt;')
+            .replace(/'/g, '&#39;').replace(/"/g, '&#34;');
 };
 
 //TODO(potch): kill underscore dead. until then, fake it on mobile.
@@ -134,13 +138,18 @@ z.app = document.body.getAttribute('data-app');
 z.appName = document.body.getAttribute('data-appname');
 z.appMatchesUserAgent = z.browser[z.app];
 
-z.anonymous = JSON.parse(document.body.getAttribute('data-anonymous'))
+z.anonymous = JSON.parse(document.body.getAttribute('data-anonymous'));
 
 z.media_url = document.body.getAttribute('data-media-url');
 
 z.readonly = JSON.parse(document.body.getAttribute('data-readonly'));
 
+z.hasNightly = false;
 if (z.browser.firefox) {
+    var nightlyVer = document.body.getAttribute('data-nightly-version');
+    if (nightlyVer) {
+        z.hasNightly = (VersionCompare.compareVersions(z.browserVersion, nightlyVer) > -1);
+    }
     var betaVer = document.body.getAttribute('data-min-beta-version');
     z.fxBeta = (VersionCompare.compareVersions(z.browserVersion, betaVer) > -1);
     if (z.fxBeta) {
@@ -153,3 +162,5 @@ if (z.browser.firefox) {
 if (z.badBrowser) {
     $(".get-fx-message").show();
 }
+
+z.apps = $(document.body).hasClass('apps');

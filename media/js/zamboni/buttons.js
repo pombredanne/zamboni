@@ -1,4 +1,5 @@
 (function() {
+
 /* Call this with something like $('.install').installButton(); */
 z.button = {};
 
@@ -12,7 +13,52 @@ z.button.after = {'contrib': function(xpi_url, status) {
 }};
 
 var notavail = '<div class="extra"><span class="notavail">{0}</span></div>',
+    incompat = '<div class="extra"><span class="notavail acr-incompat">{0}</span></div>',
+    noappsupport = '<div class="extra"><span class="notsupported">{0}</span></div>',
     download_re = new RegExp('(/downloads/(?:latest|file)/\\d+)');
+
+// The lowest maxVersion an app has to support to allow default-to-compatible.
+var D2C_MAX_VERSIONS = {
+    firefox: '4.0',
+    mobile: '11.0',
+    seamonkey: '2.1',
+    thunderbird: '5.0'
+};
+
+var webappButton = function() {
+    var $this = $(this),
+        premium = $this.hasClass('premium'),
+        manifestURL = $this.attr('data-manifest-url');
+    if (manifestURL) {
+        $this.find('.button')
+            .removeClass('disabled')
+            .addClass('add')
+            .click(function(e) {
+                e.preventDefault();
+                purchases.record($this, function(receipt) {
+                  purchases.install_app(manifestURL, receipt);
+                });
+            });
+    }
+    if (premium) {
+        return premiumButton.call($this);
+    }
+};
+
+var premiumButton = function() {
+    // Pass in the button wrapper and this will check to see if its been
+    // purchased and alter if appropriate. Will return the purchase state.
+    var $this = $(this),
+        addon = $this.attr('data-addon'),
+        $button = $this.find('.button');
+    if($.inArray(parseInt(addon, 10), addons_purchased) >= 0) {
+        purchases.reset($button);
+        return false;
+    } else {
+        $button.addPaypal();
+        return true;
+    }
+};
 
 /* Called by the jQuery plugin to set up a single button. */
 var installButton = function() {
@@ -21,6 +67,11 @@ var installButton = function() {
     var self = this,
         $this = $(this),
         $button = $this.find('.button');
+
+    if ($this.hasClass('webapp')) {
+         webappButton.call(this);
+         return;
+    }
 
     // Unreviewed and self-hosted buttons point to the add-on detail page for
     // non-js safety.  Flip them to the real xpi url here.
@@ -46,7 +97,13 @@ var installButton = function() {
         icon = $this.attr('data-icon'),
         after = $this.attr('data-after'),
         search = $this.hasattr('data-search'),
+        premium = $this.hasClass('premium'),
         accept_eula = $this.hasClass('accept'),
+        webapp = $this.hasattr('data-manifest-url'),
+        compatible = $this.attr('data-is-compatible') == 'true',
+        compatible_app = $this.attr('data-is-compatible-app') == 'true',
+        has_overrides = $this.hasattr('data-compat-overrides'),
+        versions_url = $this.attr('data-versions'),
         // L10n: {0} is an app name like Firefox.
         _s = accept_eula ? gettext('Accept and Install') : gettext('Add to {0}'),
         addto = format(_s, [z.appName]),
@@ -55,19 +112,69 @@ var installButton = function() {
         params = {addon: addon,
                   msg: z.appMatchesUserAgent ? addto : gettext('Download Now')},
         appSupported = z.appMatchesUserAgent && min && max,
-        olderBrowser = null,
-        newerBrowser = null;
+        $body = $(document.body),
+        $d2c_reasons = $this.closest('.install-shell').find('.d2c-reasons-popup ul'),
+        olderBrowser,
+        newerBrowser;
 
     // If we have os-specific buttons, check that one of them matches the
     // current platform.
     var badPlatform = ($button.find('.os').length &&
                        !$button.hasClass(z.platform));
 
+    // Only show default-to-compatible reasons if the add-on has the minimum
+    // required maxVersion to support it.
+    var is_d2c = false;
+    if (max) {
+        if (z.browser.firefox && VersionCompare.compareVersions(max, D2C_MAX_VERSIONS.firefox) >= 0) {
+            is_d2c = true;
+        } else if (z.browser.mobile && VersionCompare.compareVersions(max, D2C_MAX_VERSIONS.mobile) >= 0) {
+            is_d2c = true;
+        } else if (z.browser.seamonkey && VersionCompare.compareVersions(max, D2C_MAX_VERSIONS.seamonkey) >= 0) {
+            is_d2c = true;
+        } else if (z.browser.thunderbird && VersionCompare.compareVersions(max, D2C_MAX_VERSIONS.thunderbird) >= 0) {
+            is_d2c = true;
+        }
+    }
+
     // min and max only exist if the add-on is compatible with request[APP].
     if (appSupported) {
         // The user *has* an older/newer browser.
         olderBrowser = VersionCompare.compareVersions(z.browserVersion, min) < 0;
         newerBrowser = VersionCompare.compareVersions(z.browserVersion, max) > 0;
+        if (olderBrowser) {
+            // Make sure we show the "Not available for ..." messaging.
+            compatible = false;
+        }
+    }
+
+    // Default to compatible checking.
+    if (is_d2c && compatible) {
+        if (!compatible_app) {
+            $d2c_reasons.append($('<li>', {text: gettext('Add-on has not been updated to support default-to-compatible.')}));
+            compatible = false;
+        }
+        // TODO: Figure out if this needs to handle other apps.
+        if (z.browserVersion != 0 && VersionCompare.compareVersions(z.browserVersion, '10.0') < 0) {
+            $d2c_reasons.append($('<li>', {text: gettext('You need to be using Firefox 10.0 or higher.')}));
+            compatible = false;
+        }
+        // If it's still compatible, check the overrides.
+        if (compatible && has_overrides) {
+            var overrides = JSON.parse($this.attr('data-compat-overrides'));
+            _.each(overrides, function(override) {
+                var _min = override[0],
+                    _max = override[1];
+                if (VersionCompare.compareVersions(z.browserVersion, _min) >= 0 &&
+                    VersionCompare.compareVersions(z.browserVersion, _max) <= 0) {
+                    compatible = false;
+                    $d2c_reasons.append($('<li>', {text: gettext('Mozilla has marked this version as incompatible with your Firefox version.')}));
+                    return;
+                }
+            });
+        }
+    } else {
+        compatible = false;  // We always assumed not compatible before.
     }
 
     // Helper for dealing with lazy-loaded z.button.messages.
@@ -79,8 +186,9 @@ var installButton = function() {
         }
     };
 
-    $this.parent().append('<br>');
-    var addWarning = function(msg) { $this.parent().append(format(notavail, [msg])); };
+    var addWarning = function(msg, type) {
+        $this.parent().append(format(type || notavail, [msg]));
+    };
 
     // Change the button text to "Add to Firefox".
     var addToApp = function() {
@@ -95,7 +203,13 @@ var installButton = function() {
     var clickHijack = function() {
         if (!appSupported && !search || !("InstallTrigger" in window)) return;
 
-        $this.click(function(e) {
+        $this.addClass('clickHijack'); // So we can disable pointer events
+
+        $this.bind('mousedown focus', function(e) {
+            $this.addClass('active');
+        }).bind('mouseup blur', function(e) {
+            $this.removeClass('active');
+        }).click(function(e) {
             // If the click was on a.installer or a child, call the special
             // install method.  We can't bind this directly because we add
             // more .installers dynamically.
@@ -115,6 +229,7 @@ var installButton = function() {
             $this.find('.button[data-hash]').each(function() {
                 hashes[$(this).attr('href')] = $(this).attr('data-hash');
             });
+            // For premium add-ons this will be undefined.
             var hash = hashes[installer.attr('href')];
 
             var f = _.haskey(z.button.after, after)
@@ -168,6 +283,12 @@ var installButton = function() {
             params['old_version'] = z.browserVersion;
             return message(newerBrowser ? 'not_updated' : 'newer_version')();
         });
+        var nocompat = addExtra(function() {
+            return message('not_compatible')();
+        });
+        var nocompat_noreason = addExtra(function() {
+            return message('not_compatible_no_reasons')();
+        });
         var merge = addExtra(function() {
             // Prepend the platform message to the version message.  We only
             // want to move the installer when we're looking at an older
@@ -187,23 +308,65 @@ var installButton = function() {
             $button.first().css('display', 'inherit');
         }
 
-        if (appSupported && (olderBrowser || newerBrowser)) {
-            // L10n: {0} is an app name, {1} is the app version.
-            warn(format(gettext('Not available for {0} {1}'),
-                              [z.appName, z.browserVersion]));
-            $button.closest('div').attr('data-version-supported', false);
-            $button.addClass('concealed');
-            if (!opts.addPopup) return;
+        if (appSupported && !compatible && (olderBrowser || newerBrowser)) {
+            if (is_d2c) {
+                // If it's a bad platform, don't bother also showing the
+                // incompatible reasons.
+                if (!badPlatform) {
+                    // L10n: {0} is an app name, {1} is the app version.
+                    var warn_txt = gettext('Not available for {0} {1}');
+                    if ($d2c_reasons.children().length) {
+                        warn_txt += '<span><a class="d2c-reasons-help" href="#">?</a></span>';
+                    }
+                    warn(format(warn_txt, [z.appName, z.browserVersion]));
+                }
+                $button.closest('div').attr('data-version-supported', false);
+                $button.addClass('concealed');
 
-            if (badPlatform && olderBrowser) {
-                $button.addPopup(merge);
-            } else if (badPlatform && newerBrowser) {
-                $button.addPopup(_.bind(merge, {switchInstaller: true}));
+                var $ishell = $button.closest('.install-shell');
+                if (!compatible && $d2c_reasons.children().length) {
+                    $ishell.find('.d2c-reasons-popup').popup(
+                        $ishell.find('.d2c-reasons-help'), {
+                            callback: function(obj) {
+                                return {pointTo: $(obj.click_target)};
+                            }
+                        }
+                    );
+                }
+
+                if (!opts.addPopup) return;
+
+                if (badPlatform) {
+                    $button.addPopup(pmsg);
+                } else if (!compatible) {
+                    // Show compatibility message.
+                    params['versions_url'] = versions_url;
+                    params['reasons'] = $d2c_reasons.html();
+
+                    $button.addPopup(params['reasons'] ? nocompat : nocompat_noreason);
+                } else {
+                    // Bad version.
+                    $button.addPopup(vmsg);
+                }
+                return true;
             } else {
-                // Bad version.
-                $button.addPopup(vmsg);
+                // L10n: {0} is an app name, {1} is the app version.
+                warn(format(gettext('Not available for {0} {1}'),
+                            [z.appName, z.browserVersion]));
+                $button.closest('div').attr('data-version-supported', false);
+                $button.addClass('concealed');
+                if (!opts.addPopup) return;
+
+                if (badPlatform && olderBrowser) {
+                    $button.addPopup(merge);
+                } else if (badPlatform && newerBrowser) {
+                    $button.addPopup(_.bind(merge, {switchInstaller: true}));
+                } else {
+                    // Bad version.
+                    $button.addPopup(vmsg);
+                }
+                return true;
             }
-            return true;
         } else if (badPlatform && opts.addPopup) {
             // Only bad platform is possible.
             $button.addPopup(pmsg);
@@ -213,28 +376,36 @@ var installButton = function() {
             // Good version, good platform.
             $button.addClass('installer');
             $button.closest('div').attr('data-version-supported', true);
+        } else if (!appSupported) {
+            var tpl = template(gettext('Works with {app} {min} - {max}') +
+                '<span class="more-versions"><a href="{versions_url}">' +
+                gettext('View other versions') + '</a></span>');
+            var context = {'app': z.appName, 'min': min, 'max': max,
+                'versions_url': versions_url};
+            addWarning(tpl(context), noappsupport);
         }
         return false;
     };
 
     // What kind of button are we dealing with?
-    var selfhosted = $this.hasClass('selfhosted'),
-        beta = $this.hasClass('beta');
+    var beta = $this.hasClass('beta');
         unreviewed = $this.hasClass('unreviewed') && !beta,
         persona = $this.hasClass('persona'),
         contrib = $this.hasClass('contrib'),
         search = $this.hasattr('data-search'),
         eula = $this.hasClass('eula');
 
-    if (unreviewed && !(selfhosted || eula || contrib || beta)) {
+    if (unreviewed && !(eula || contrib || beta || webapp)) {
         $button.addPopup(message('unreviewed'));
     }
 
+
     // Drive the install button based on its type.
-    if (selfhosted) {
-        $button.addPopup(message('selfhosted'));
-    } else if (eula || contrib) {
-        versionsAndPlatforms({addPopup: false})
+    if (eula || contrib) {
+        versionsAndPlatforms({addPopup: false});
+    } else if (premium) {
+        premiumButton.call($this);
+        versionsAndPlatforms({addPopup: false});
     } else if (persona) {
         $button.removeClass('download').addClass('add').find('span').text(addto);
         if ($.hasPersonas()) {
@@ -272,6 +443,10 @@ var installButton = function() {
 };
 
 
+var data_purchases = $('body').attr('data-purchases') || "",
+    addons_purchased = $.map(data_purchases.split(','),
+                             function(v) { return parseInt(v, 10) });
+
 jQuery.fn.installButton = function() {
     return this.each(installButton);
 };
@@ -299,6 +474,36 @@ jQuery.fn.showBackupButton = function() {
             }
         }
     });
+}
+
+jQuery.fn.addPaypal = function(html, allowClick) {
+    function checkForAddon(el) {
+        var $this = $(el);
+        // Focus on the username field if it exists.
+        $('#id_username', $this).focus();
+        if ($('#addon_info').exists()) {
+            purchases.reset(purchases.find_button($this.closest('body')), $this);
+            purchases.trigger($this);
+        }
+    }
+    return this.click(_pd(function() {
+        var $install = $(this).closest('.install'),
+            url = $install.attr('data-start-purchase');
+
+        if (url) {
+            modalFromURL(url, {'callback': function() {
+                var $modal = $(this);
+                checkForAddon(this);
+
+                $('.browserid-login', this).bind('login-complete', function(){
+                    $(this).addClass('loading-submit');
+                    $('.ajax-submit', $modal).load(url, function() {
+                        checkForAddon(this);
+                    });
+                });
+            }, 'data': {'realurl': $install.find('a.premium').attr('data-realurl')}});
+        };
+    }));
 }
 
 // Create a popup box when the element is clicked.  html can be a function.
@@ -341,6 +546,7 @@ jQuery.fn.addPopup = function(html, allowClick) {
                 }
                 $this.trigger('newPopup', [_html]);
                 $this.after(_html);
+                $body.trigger('newStatic');
 
                 // Callback to destroy the popup on the first click outside the popup.
                 var cb = function(e) {
@@ -352,6 +558,7 @@ jQuery.fn.addPopup = function(html, allowClick) {
                     }
                     _html.remove();
                     $body.unbind('click newPopup', cb);
+                    $body.trigger('closeStatic');
                 }
                 // Trampoline the binding so it isn't triggered by the current click.
                 setTimeout(function(){ $body.bind('click newPopup', cb); }, 0);
